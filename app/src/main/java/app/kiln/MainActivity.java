@@ -1983,7 +1983,7 @@ public class MainActivity extends Activity {
             }
         }));
         s.content(box);
-        if (!edit && !ext.isEmpty()) s.space(6).content(always);
+        if (!edit && !ext.isEmpty()) s.pinned(always);          // stays in view while the app list scrolls
         s.button("Cancel", Ui.TEXT, null).show();
     }
 

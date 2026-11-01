@@ -146,6 +146,15 @@ final class Sheet {
         return this;
     }
 
+    /** Adds a view below the scrolling part, always in sight above the buttons. */
+    Sheet pinned(View v) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dp(act, 6);
+        card.addView(v, lp);
+        return this;
+    }
+
     Sheet space(int dp) {
         body.addView(new View(act), new LinearLayout.LayoutParams(1, Ui.dp(act, dp)));
         return this;

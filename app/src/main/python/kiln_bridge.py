@@ -22,6 +22,7 @@ def _no_prompt(confirm=False):
     raise kiln.KilnError("enter a password")
 
 
+_orig_get_password = kiln.get_password     # reads KILN_PASSWORD; the self-test relies on it
 kiln.get_password = _no_prompt           # an app has no terminal to ask on
 
 _Progress = kiln.Progress
@@ -67,14 +68,26 @@ def accel_note():
     return "" if kiln._A is not None else (kiln.ACCEL_NOTE or "C helper not loaded")
 
 
-def run(args, password, sink, hook=None):
-    """Run one kiln command. Returns 0 on success, non-zero on failure."""
+JOBS = 1                               # worker processes for pack (1 = safest inside an app)
+TOOLS = ("selftest", "bench", "wavcheck")
+
+
+def set_jobs(n):
+    global JOBS
+    JOBS = max(1, min(8, int(n)))
+
+
+def run(args, password, sink, hook=None, mod=None):
+    """Run one kiln command. Returns 0 on success, non-zero on failure.
+    mod: another kiln script (the fallback) to run instead of the main one."""
+    if mod is not None and mod is not kiln:
+        return _run_mod(args, password, sink, hook, mod)
     args = args.split("\x1f") if isinstance(args, str) else [str(a) for a in args]
-    if not args or args[0] not in ("pack", "unpack", "list", "test"):
+    if not args or args[0] not in ("pack", "unpack", "list", "test") + TOOLS:
         sink.line("error: unsupported command")   # also keeps kiln's interactive shell out
         return 2
     if args[0] == "pack":
-        args[1:1] = ["-j", "1"]          # no worker processes: forking inside an app is unsafe
+        args[1:1] = ["-j", str(JOBS)]    # 1 by default: forking inside an app can be unsafe
     pw = password or None
 
     def get_password(confirm=False):
@@ -91,7 +104,7 @@ def run(args, password, sink, hook=None):
         out = _Lines(sink)
         sys.argv = ["kiln"] + args
         sys.stdout = sys.stderr = out
-        kiln.get_password = get_password
+        kiln.get_password = _orig_get_password if args[0] in TOOLS else get_password
         kiln.start_mp3_ahead = lambda *a, **k: None
         _hook = hook
         kiln.Progress = _HookedProgress if hook else _Progress
@@ -116,4 +129,93 @@ def run(args, password, sink, hook=None):
             kiln.stop_mp3_ahead()
             (sys.argv, sys.stdout, sys.stderr,
              kiln.get_password, kiln.start_mp3_ahead) = saved
+        return code
+
+
+def call(fn, sink, hook=None):
+    """Run any Python function with kiln's output captured and cancellation/progress wired up.
+    Returns (code, result). Used by the editing layer, which drives kiln's Shell directly."""
+    with _lock:
+        global _hook
+        saved = (sys.stdout, sys.stderr, kiln.get_password, kiln.start_mp3_ahead)
+        out = _Lines(sink)
+        sys.stdout = sys.stderr = out
+        kiln.get_password = _no_prompt
+        kiln.start_mp3_ahead = lambda *a, **k: None
+        _hook = hook
+        kiln.Progress = _HookedProgress if hook else _Progress
+        code, res = 0, None
+        try:
+            kiln.require_accel()
+            res = fn()
+        except Cancelled:
+            code = 130
+        except kiln.KilnError as e:
+            code = 1
+            print(f"error: {e}")
+        except BaseException as e:
+            code = 1
+            print(f"error: {e}")
+        finally:
+            out.flush()
+            _hook = None
+            kiln.Progress = _Progress
+            kiln.stop_mp3_ahead()
+            sys.stdout, sys.stderr, kiln.get_password, kiln.start_mp3_ahead = saved
+        return code, res
+
+
+def _run_mod(args, password, sink, hook, mod):
+    """The same as run(), for the fallback script (extract/test/list only)."""
+    args = args.split("\x1f") if isinstance(args, str) else [str(a) for a in args]
+    if not args or args[0] not in ("unpack", "list", "test"):
+        sink.line("error: this command isn't available for archives opened with the fallback script")
+        return 2
+    pw = password or None
+
+    def get_password(confirm=False):
+        if not pw:
+            raise mod.KilnError("enter a password")
+        return pw
+
+    class _HP(mod.Progress):
+        def add(self, n):
+            super().add(n)
+            if hook is not None:
+                hook(self.done, self.total)
+
+    with _lock:
+        saved = (sys.argv, sys.stdout, sys.stderr)
+        old = {k: getattr(mod, k, None) for k in ("get_password", "Progress", "start_mp3_ahead")}
+        out = _Lines(sink)
+        sys.argv = ["kiln"] + args
+        sys.stdout = sys.stderr = out
+        mod.get_password = get_password
+        if hasattr(mod, "start_mp3_ahead"):
+            mod.start_mp3_ahead = lambda *a, **k: None
+        if hook and hasattr(mod, "Progress"):
+            mod.Progress = _HP
+        code = 0
+        try:
+            if hasattr(mod, "require_accel"):
+                mod.require_accel()
+            mod.main()
+        except Cancelled:
+            code = 130
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                code = 1 if not isinstance(e.code, int) else e.code
+                if isinstance(e.code, str):
+                    print(e.code)
+        except BaseException as e:
+            code = 1
+            print(f"error: {e}")
+        finally:
+            out.flush()
+            sys.argv, sys.stdout, sys.stderr = saved
+            for k, v in old.items():
+                if v is not None:
+                    setattr(mod, k, v)
+            if hasattr(mod, "stop_mp3_ahead"):
+                mod.stop_mp3_ahead()
         return code

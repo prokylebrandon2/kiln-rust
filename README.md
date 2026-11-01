@@ -64,3 +64,19 @@ and custom/fallback scripts.
 - Bookmarks: tap the folder name in the header for a drop-down with Internal storage and your saved folders.
 - Animation speed in Settings (Off / Fast / Normal / Relaxed); the default is a little quicker than before. Pull-down and Refresh replay the row animation.
 - "Wrong password" is now "Incorrect password".
+
+## 3.11 (second half, checkpoint 1): editing inside archives
+
+- Open an archive and use the bottom bar: **Add** (files or folders from the phone, a new folder, or a new text file), and on selected items **Copy, Move, Delete**; menu has **Rename**.
+- Edit a file's text from inside an archive ("Edit as text in Kiln"), or "Edit with..." in another app (asks to update the archive when you return).
+- Nothing is written until **Save**. A bar shows "Unsaved changes" with Save / Discard, and leaving with changes asks Save / Discard / Keep editing.
+- Works for plain archives, encrypted archives and random-name sets (kiln's own staged-edit engine; saving swaps through a temporary file).
+- Extract and Check are blocked while there are unsaved changes (they read the saved archive).
+- Still to come (checkpoint 2): Settings for main/fallback scripts and Tools, flash drives, Termux home.
+
+## 3.12 (second half, checkpoint 2)
+
+- **Settings > Scripts:** a custom *main script* (replaces built-in v14 at the next start; checked when chosen and falls back to v14 if it fails to load; v14 can always be switched back to) and one *fallback script* used automatically for archives the main script can't read (browse, extract and check only; no editing). The fallback needs an `open_archive` function like v14's for browsing.
+- **Settings > Tools:** Self-test, Benchmark and WAV info, with the output shown in a results box.
+- **Settings > Advanced:** parallel jobs for packing (1 default; 2 and 4 are experimental).
+- **Bookmarks:** mounted flash drives / SD cards are listed while plugged in (they disappear when unplugged); "Termux home" is there too, with an explanation when Android blocks it.

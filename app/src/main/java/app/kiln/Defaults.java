@@ -32,6 +32,11 @@ final class Defaults {
     static void setUpRow(Context c, boolean v) { p(c).edit().putBoolean("up_row", v).apply(); }
     static void setPreviews(Context c, boolean v) { p(c).edit().putBoolean("previews", v).apply(); }
 
+    // ---- parallel jobs for packing (1 is safest inside an app)
+
+    static int jobs(Context c) { return Math.max(1, Math.min(8, p(c).getInt("jobs", 1))); }
+    static void setJobs(Context c, int v) { p(c).edit().putInt("jobs", v).apply(); }
+
     // ---- animation speed: 0 Off, 1 Fast, 2 Normal (default, a touch quicker than before), 3 Relaxed
 
     static final String[] ANIM_NAMES = {"Off", "Fast", "Normal", "Relaxed"};

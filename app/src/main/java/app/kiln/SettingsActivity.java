@@ -1,6 +1,21 @@
 package app.kiln;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
+import android.widget.Toast;
+
+import com.chaquo.python.PyObject;
+import com.chaquo.python.Python;
+
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -16,6 +31,10 @@ import java.util.Map;
 /** Settings: a few switches and the list of "always open with" choices. */
 public class SettingsActivity extends Activity {
     private LinearLayout content;
+    private JSONObject scripts = new JSONObject();
+    private interface Picked { void got(File f, String name); }
+    private Picked picked;
+    private static final int PICK = 71;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -145,6 +164,42 @@ public class SettingsActivity extends Activity {
                     sh.button("Cancel", Ui.TEXT, null).show();
                 });
 
+        heading("SCRIPTS");
+        LinearLayout sr = card();
+        String mainName = scripts.optString("main", "");
+        String fbName = scripts.optString("fallback", "");
+        choiceRow(sr, "Main script", mainName.isEmpty() ? "Built-in v14" : mainName,
+                "Used for everything. Applies the next time Kiln starts.", () -> scriptSheet("main", mainName));
+        choiceRow(sr, "Fallback script", fbName.isEmpty() ? "None" : fbName,
+                "Opens archives the main script can't read (browse, extract and check only).",
+                () -> scriptSheet("fallback", fbName));
+
+        heading("TOOLS");
+        LinearLayout tl = card();
+        choiceRow(tl, "Self-test", "Run", "Checks packing, extracting and encryption on this phone.",
+                () -> runTool("selftest", null, "Self-test"));
+        choiceRow(tl, "Benchmark a file", "Choose...", "Compares Kiln with zlib, bz2 and lzma.",
+                () -> pickFile((f, n) -> runTool("bench", f.getPath(), "Benchmark")));
+        choiceRow(tl, "WAV info", "Choose...", "Shows whether a .wav is float or integer audio.",
+                () -> pickFile((f, n) -> runTool("wavcheck", f.getPath(), "WAV info")));
+
+        heading("ADVANCED");
+        LinearLayout ad = card();
+        choiceRow(ad, "Parallel jobs", String.valueOf(Defaults.jobs(this)),
+                "Worker processes when packing. 1 is safest; more is experimental and can crash the app.",
+                () -> {
+                    Sheet sh = new Sheet(this, "Parallel jobs");
+                    int[] opts = {1, 2, 4};
+                    for (final int o : opts) {
+                        sh.radio(String.valueOf(o), o == 1 ? "Default" : "Experimental", o == Defaults.jobs(this), () -> {
+                            Defaults.setJobs(this, o);
+                            py("set_jobs", "kiln_app", o);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
         heading("OPEN FILES WITH");
         LinearLayout d = card();
         Map<String, String> defs = Defaults.all(this);
@@ -178,6 +233,161 @@ public class SettingsActivity extends Activity {
                 render();
             }), rp);
         }
+    }
+
+    // ---------------------------------------------------------------- scripts, tools, file picking
+
+    private String py(String fn, String module, Object... args) {
+        try {
+            if (!Python.isStarted()) return "{\"ok\":false,\"message\":\"Kiln is still starting\"}";
+            PyObject m = Python.getInstance().getModule(module);
+            return m.callAttr(fn, args).toString();
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"message\":" + JSONObject.quote(String.valueOf(t.getMessage())) + "}";
+        }
+    }
+
+    private void loadScripts() {
+        new Thread(() -> {
+            try {
+                final JSONObject o = new JSONObject(py("status", "kiln_scripts", getFilesDir().getPath()));
+                runOnUiThread(() -> {
+                    scripts = o;
+                    render();
+                });
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    private void pickFile(Picked cb) {
+        picked = cb;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, PICK);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != PICK || res != RESULT_OK || data == null || data.getData() == null || picked == null) return;
+        final Uri uri = data.getData();
+        final Picked cb = picked;
+        picked = null;
+        final Sheet busy = new Sheet(this, "Reading file...").cancelable(false);
+        busy.show();
+        new Thread(() -> {
+            File out = null;
+            String err = null;
+            String name = "file";
+            try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME},
+                    null, null, null)) {
+                if (c != null && c.moveToFirst()) name = c.getString(0);
+            } catch (Exception ignored) {
+            }
+            name = name.replace('/', '_');
+            try {
+                File dir = new File(getCacheDir(), "pick");
+                dir.mkdirs();
+                out = new File(dir, name);
+                try (InputStream in = getContentResolver().openInputStream(uri);
+                     OutputStream os = new FileOutputStream(out)) {
+                    if (in == null) throw new java.io.IOException("can't read that file");
+                    byte[] buf = new byte[1 << 16];
+                    int k;
+                    while ((k = in.read(buf)) > 0) os.write(buf, 0, k);
+                }
+            } catch (Exception e) {
+                err = String.valueOf(e.getMessage());
+            }
+            final File f = out;
+            final String n = name, e = err;
+            runOnUiThread(() -> {
+                busy.dismiss();
+                if (e != null) new Sheet(this, "Couldn't read the file").text(e).button("OK", Ui.FILLED, null).show();
+                else cb.got(f, n);
+            });
+        }).start();
+    }
+
+    private void scriptSheet(final String role, String current) {
+        final boolean isMain = role.equals("main");
+        Sheet sh = new Sheet(this, isMain ? "Main script" : "Fallback script");
+        sh.text(isMain
+                ? "Kiln's built-in v14 can't be removed. A replacement must provide every function the "
+                + "app uses; it's checked when you choose it, and the app returns to v14 if it fails to load."
+                : "Used only for archives the main script can't open. It can browse, extract and check "
+                + "them, but not edit them.");
+        sh.option(R.drawable.ic_open, "Choose a .py file...", false, () -> pickFile((f, n) -> installScript(role, f, n)));
+        if (!current.isEmpty()) {
+            sh.option(R.drawable.ic_close, isMain ? "Switch back to built-in v14" : "Remove the fallback", false, () -> {
+                py("remove", "kiln_scripts", getFilesDir().getPath(), role);
+                loadScripts();
+                if (isMain) restartNote();
+            });
+        }
+        sh.button("Cancel", Ui.TEXT, null).show();
+    }
+
+    private void installScript(final String role, final File f, final String name) {
+        final Sheet busy = new Sheet(this, "Checking script...").cancelable(false);
+        busy.show();
+        new Thread(() -> {
+            final String r = py("install", "kiln_scripts", getFilesDir().getPath(), role, f.getPath(), name);
+            f.delete();
+            runOnUiThread(() -> {
+                busy.dismiss();
+                try {
+                    JSONObject o = new JSONObject(r);
+                    if (o.optBoolean("ok")) {
+                        Toast.makeText(this, "Using " + name + " (v" + o.optString("version") + ")",
+                                Toast.LENGTH_SHORT).show();
+                        loadScripts();
+                        if (role.equals("main")) restartNote();
+                    } else {
+                        new Sheet(this, "Can't use this script").text(o.optString("message"))
+                                .button("OK", Ui.FILLED, null).show();
+                    }
+                } catch (Exception e) {
+                    new Sheet(this, "Can't use this script").text(r).button("OK", Ui.FILLED, null).show();
+                }
+            });
+        }).start();
+    }
+
+    private void restartNote() {
+        new Sheet(this, "Restart Kiln").text("The main script changes the next time Kiln starts. "
+                + "Close Kiln from the recent apps list and open it again.")
+                .button("OK", Ui.FILLED, null).show();
+    }
+
+    private void runTool(final String tool, final String arg, final String title) {
+        final Sheet busy = new Sheet(this, title).text("Running... this can take a minute.").cancelable(false);
+        busy.show();
+        new Thread(() -> {
+            String r = py("tool", "kiln_app", tool, arg == null ? "" : arg, null);
+            String text;
+            try {
+                text = new JSONObject(r).optString("text", r);
+            } catch (Exception e) {
+                text = r;
+            }
+            final String shown = text;
+            runOnUiThread(() -> {
+                busy.dismiss();
+                TextView tv = Ui.label(this, shown, 12, false, false);
+                tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tv.setTextIsSelectable(true);
+                new Sheet(this, title).content(tv).button("Close", Ui.FILLED, null).show();
+            });
+        }).start();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        loadScripts();
     }
 
     @Override

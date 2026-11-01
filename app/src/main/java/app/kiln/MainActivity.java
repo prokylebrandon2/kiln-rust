@@ -98,7 +98,7 @@ public class MainActivity extends Activity {
     interface OnName { String got(String name); }
 
     static final class Item { String name, kind; long size, mtime; int count; boolean enc; }
-    static final class Ent { String p; long s, m; }
+    static final class Ent { String p, k = ""; long s, m; }
     static final class Row {
         String key, title, sub, right, ext = "", path;
         int icon;
@@ -114,6 +114,8 @@ public class MainActivity extends Activity {
         long packed;
         String prefix = "";
         File home;                           // where extract defaults to (null = beside the file)
+        String sid;                          // staged-edit session (null until the first edit)
+        boolean dirty;                       // there are unsaved changes
         final List<Ent> ents = new ArrayList<>();
     }
 
@@ -121,7 +123,7 @@ public class MainActivity extends Activity {
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
-            M_OPTIONS = 16;
+            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -139,6 +141,16 @@ public class MainActivity extends Activity {
     private final List<File> clip = new ArrayList<>();
     private boolean clipMove;
     private volatile PyObject app;           // kiln_app module; null until Python is up
+    private volatile PyObject edit;          // kiln_edit module (staged edits inside archives)
+    private final List<String> arcClip = new ArrayList<>();   // items held for paste inside an archive
+    private boolean arcClipMove;
+    private Arc pickArc;                     // archive waiting while the file browser picks files to add
+    private File pickReturn;
+    private String pickDest = "";
+    private File editFile;                   // a copy of an archive file handed to an editor
+    private String editMember;
+    private long editStamp;
+    private boolean editExternal;
     private volatile boolean svcOn = false;
     private SharedPreferences prefs;
     private int sortKey = S_NAME;
@@ -252,6 +264,7 @@ public class MainActivity extends Activity {
         previewsOn = pv;
         if (changed && adapter != null) adapter.notifyDataSetChanged();
         refreshPermission();
+        checkEditedFile();
         if (needRefresh && arc == null && loadedOnce) {
             needRefresh = false;
             loadDir(cwd, true);
@@ -267,7 +280,7 @@ public class MainActivity extends Activity {
             closeSearch();
         } else if (arc != null) {
             if (arc.prefix.isEmpty()) {
-                closeArchive();
+                guardLeave(this::closeArchive);
             } else {
                 String p = arc.prefix.substring(0, arc.prefix.length() - 1);
                 int i = p.lastIndexOf('/');
@@ -275,7 +288,9 @@ public class MainActivity extends Activity {
                 buildArcRows();
             }
         } else if (!cwd.equals(root) && cwd.getParentFile() != null) {
-            loadDir(cwd.getParentFile());
+            loadDir(isTopLevel(cwd) ? root : cwd.getParentFile());
+        } else if (pickArc != null) {
+            endPick(false);
         } else {
             super.onBackPressed();
         }
@@ -759,10 +774,10 @@ public class MainActivity extends Activity {
             sub.setText("");
         } else if (arc != null) {
             setLeft(R.drawable.ic_up, true);
-            title.setText(arc.file.getName());
-            sub.setText(arc.prefix.isEmpty()
+            title.setText(arc.file.getName() + (arc.dirty ? " *" : ""));
+            sub.setText((arc.prefix.isEmpty()
                     ? plural(arc.ents.size(), "file", "files") + (arc.encrypted ? " \u00b7 encrypted" : "")
-                    : "/" + arc.prefix);
+                    : "/" + arc.prefix) + (arc.dirty ? " \u00b7 unsaved changes" : ""));
         } else {
             boolean atRoot = cwd.equals(root);
             if (atRoot) {
@@ -772,7 +787,8 @@ public class MainActivity extends Activity {
                 setLeft(R.drawable.ic_up, true);
             }
             leftWasHome = atRoot;
-            title.setText(atRoot ? "Kiln" : cwd.getName());
+            title.setText(pickArc != null ? "Add to " + pickArc.file.getName()
+                    : atRoot ? "Kiln" : cwd.getName());
             sub.setText(cwd.getPath());
         }
         banner.setVisibility(plainSet && arc == null ? View.VISIBLE : View.GONE);
@@ -807,15 +823,25 @@ public class MainActivity extends Activity {
         boolean selecting = !sel.isEmpty();
         boolean show = true;
         int accent = Ui.accent(this), danger = getColor(R.color.k_danger);
-        if (arc != null) {
-            if (selecting) {
-                tiles(tile(R.drawable.ic_extract, "Extract", accent, this::extractSelected),
-                        tile(R.drawable.ic_check, "Select all", accent, () -> onMenu(M_SELECT_ALL)));
+        if (pickArc != null) {
+            pickBar(selecting, accent);
+        } else if (arc != null) {
+            if (!arcClip.isEmpty()) {
+                arcPasteBar(accent);
             } else {
-                tiles(tile(R.drawable.ic_extract, "Extract all", accent,
-                                () -> extractDialog(new ArrayList<String>())),
-                        tile(R.drawable.ic_check, "Check", Ui.text(this), this::runTest),
-                        tile(R.drawable.ic_archive, "Info", Ui.text(this), this::infoDialog));
+                if (arc.dirty) bottomBar.addView(saveRow());
+                if (selecting) {
+                    tiles(tile(R.drawable.ic_extract, "Extract", accent, this::extractSelected),
+                            tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> arcSetClip(false)),
+                            tile(R.drawable.ic_move, "Move", Ui.text(this), () -> arcSetClip(true)),
+                            tile(R.drawable.ic_delete, "Delete", danger, this::arcDelete));
+                } else {
+                    tiles(tile(R.drawable.ic_extract, "Extract all", accent,
+                                    () -> extractDialog(new ArrayList<String>())),
+                            tile(R.drawable.ic_add, "Add", accent, this::arcNewSheet),
+                            tile(R.drawable.ic_check, "Check", Ui.text(this), this::runTest),
+                            tile(R.drawable.ic_archive, "Info", Ui.text(this), this::infoDialog));
+                }
             }
         } else if (selecting) {
             tiles(tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> setClip(false)),
@@ -852,8 +878,8 @@ public class MainActivity extends Activity {
             show = false;
         }
         showBar(show);
-        fabWanted = arc == null && !selecting && clip.isEmpty() && app != null && hasStorage()
-                && !searching;
+        fabWanted = arc == null && pickArc == null && arcClip.isEmpty() && !selecting && clip.isEmpty()
+                && app != null && hasStorage() && !searching;
         showFab(fabWanted && !fabScrollHidden);
     }
 
@@ -974,9 +1000,11 @@ public class MainActivity extends Activity {
         boolean selecting = !sel.isEmpty();
         if (arc != null) {
             if (selecting) {
+                if (sel.size() == 1) { l.add("Rename"); id.add(M_RENAME); }
                 l.add("Select all"); id.add(M_SELECT_ALL);
                 l.add("Clear selection"); id.add(M_CLEAR);
             } else {
+                if (arc.dirty) { l.add("Save changes"); id.add(M_SAVE); l.add("Discard changes"); id.add(M_DISCARD); }
                 l.add("Extract all..."); id.add(M_EXTRACT_ALL);
                 l.add("Check integrity"); id.add(M_TEST);
                 l.add("Select all"); id.add(M_SELECT_ALL);
@@ -1048,13 +1076,22 @@ public class MainActivity extends Activity {
                 break;
             }
             case M_PLAIN: {
+                if (arc != null && arc.dirty) {
+                    guardLeave(() -> onMenu(M_PLAIN));
+                    break;
+                }
                 File dir = arc != null ? arc.file : new File(cwd, selectedSet().name);
+                closeSession(arc);
                 arc = null;
                 sel.clear();
                 loadDir(dir);
                 break;
             }
-            case M_RENAME: renameSheet(); break;
+            case M_SAVE: saveArchive(null); break;
+            case M_DISCARD: discardArchive(null); break;
+            case M_RENAME:
+                if (arc != null) arcRename(); else renameSheet();
+                break;
             case M_TEST: runTest(); break;
             case M_INFO: infoDialog(); break;
             case M_DECRYPT: decryptInPlace(); break;
@@ -1383,6 +1420,10 @@ public class MainActivity extends Activity {
         card.setPadding(dp(6), dp(6), dp(6), dp(6));
         card.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 18));
         card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false));
+        for (File[] v : removableVolumes()) {                     // USB drives and SD cards: listed while plugged in
+            card.addView(markRow(R.drawable.ic_archive, v[1].getName(), v[0].getPath(), false));
+        }
+        card.addView(actionRow(R.drawable.ic_folder, "Termux home", this::openTermuxHome));
         for (String bp : saved) {
             File f = new File(bp);
             card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true));
@@ -1428,6 +1469,48 @@ public class MainActivity extends Activity {
             wrap.animate().alpha(1f).scaleY(1f).setDuration(Defaults.anim(this, 170))
                     .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
         }
+    }
+
+    /** Mounted removable volumes (flash drives, SD cards): {directory, label-as-File}. */
+    private List<File[]> removableVolumes() {
+        List<File[]> out = new ArrayList<>();
+        try {
+            android.os.storage.StorageManager sm =
+                    (android.os.storage.StorageManager) getSystemService(STORAGE_SERVICE);
+            for (android.os.storage.StorageVolume v : sm.getStorageVolumes()) {
+                File d = v.getDirectory();
+                if (d == null || v.isPrimary() || !v.isRemovable()) continue;
+                if (!android.os.Environment.MEDIA_MOUNTED.equals(v.getState())) continue;
+                String label = v.getDescription(this);
+                out.add(new File[]{d, new File(label == null || label.isEmpty() ? d.getName() : label)});
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /** True for folders that act as a top of the tree: Back from here goes to Internal storage. */
+    private boolean isTopLevel(File d) {
+        if (d.equals(termuxHome())) return true;
+        for (File[] v : removableVolumes()) if (v[0].equals(d)) return true;
+        return false;
+    }
+
+    private static File termuxHome() { return new File("/data/data/com.termux/files/home"); }
+
+    private void openTermuxHome() {
+        if (marks != null) marks.dismiss();
+        File h = termuxHome();
+        if (h.isDirectory() && h.canRead()) {
+            goTo(h.getPath());
+            return;
+        }
+        message("Termux home isn't readable",
+                "Android keeps each app's private files away from other apps, so Kiln can't open "
+                + "Termux's home folder directly (only a rooted phone allows it).\n\n"
+                + "Two ways around it:\n\u2022 In Termux run  termux-setup-storage  and keep what you want "
+                + "to use here in ~/storage/shared (it appears in Internal storage).\n"
+                + "\u2022 Copy files out with  cp -r ~/folder ~/storage/shared/  and open them from here.");
     }
 
     private View iconTile(int icon) {
@@ -1496,13 +1579,17 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private void goTo(String path) {
+    private void goTo(final String path) {
         File f = new File(path);
         if (!f.isDirectory()) {
             toast("That folder isn't there any more");
             return;
         }
-        if (f.equals(cwd)) return;
+        if (arc != null && arc.dirty) {
+            guardLeave(() -> goTo(path));
+            return;
+        }
+        if (f.equals(cwd) && arc == null) return;
         loadDir(f);
     }
 
@@ -1514,10 +1601,12 @@ public class MainActivity extends Activity {
                 if (!Python.isStarted()) Python.start(new AndroidPlatform(MainActivity.this));
                 Python py = Python.getInstance();
                 String helper = getApplicationInfo().nativeLibraryDir + "/libkiln_accel.so";
-                String note = py.getModule("kiln_boot").callAttr("init", helper).toString();
+                String note = py.getModule("kiln_boot").callAttr("init", helper, getFilesDir().getPath()).toString();
                 app = py.getModule("kiln_app");
+                edit = py.getModule("kiln_edit");
+                app.callAttr("set_jobs", Defaults.jobs(MainActivity.this));
                 ui.post(() -> {
-                    if (!note.isEmpty()) toast("Slow mode: " + note);
+                    if (!note.isEmpty()) Toast.makeText(MainActivity.this, note, Toast.LENGTH_LONG).show();
                     refreshPermission();
                     renderBars();
                     if (pendingIntent != null) {
@@ -1556,6 +1645,10 @@ public class MainActivity extends Activity {
     private void loadDir(File dir) { loadDir(dir, false); }
 
     private void loadDir(File dir, boolean keepSelection) {
+        if (arc != null) {
+            closeSession(arc);
+            arcClip.clear();
+        }
         boolean moved = arc != null || !dir.equals(cwd);
         if (moved && arc == null) rememberScroll();           // so Back returns to the same spot
         boolean goingUp = moved && (arc != null ? dir.equals(cwd) : dir.equals(cwd.getParentFile()));   // Back, or leaving an archive
@@ -1815,6 +1908,10 @@ public class MainActivity extends Activity {
             return;
         }
         Item it = r.item;
+        if (pickArc != null && !it.kind.equals("dir")) {      // picking files to add: tap selects
+            toggle(r.key);
+            return;
+        }
         switch (it.kind) {
             case "dir": loadDir(new File(cwd, it.name)); break;
             case "archive":
@@ -2106,6 +2203,8 @@ public class MainActivity extends Activity {
         }
         closeSearchQuiet();
         rememberScroll();                                     // so closing the archive returns to this spot
+        closeSession(arc);
+        arcClip.clear();
         arc = a;
         plainSet = false;
         sel.clear();
@@ -2116,9 +2215,13 @@ public class MainActivity extends Activity {
     private File incomingFile, incomingHome;
 
     /** A .kln handed to us by another app (ZArchiver, a browser, a share...). */
-    private void openIncoming(Intent intent) {
+    private void openIncoming(final Intent intent) {
         final Uri uri = intent.getData();
         if (uri == null) return;
+        if (arc != null && arc.dirty) {
+            guardLeave(() -> openIncoming(intent));
+            return;
+        }
         if ("file".equals(uri.getScheme()) && uri.getPath() != null && new File(uri.getPath()).isFile()) {
             File f = new File(uri.getPath());
             incomingFile = f;
@@ -2161,6 +2264,8 @@ public class MainActivity extends Activity {
     }
 
     private void closeArchive() {
+        closeSession(arc);
+        arcClip.clear();
         sel.clear();
         loadDir(cwd);                                         // loadDir sees the open archive and leaves it
     }
@@ -2214,7 +2319,8 @@ public class MainActivity extends Activity {
             r.size = Math.max(e.s, 0);
             r.time = e.m;
             r.ext = Fmt.ext(r.title);
-            r.sub = e.m > 0 ? Fmt.date(e.m) : "";
+            r.sub = "+".equals(e.k) ? "New" + (e.m > 0 ? " \u00b7 " + Fmt.date(e.m) : "")
+                    : "~".equals(e.k) ? "Renamed" : e.m > 0 ? Fmt.date(e.m) : "";
             r.right = Fmt.size(e.s);
             rows.add(r);
         }
@@ -2223,6 +2329,416 @@ public class MainActivity extends Activity {
         empty.setText(emptyText());
         if (searching && !query.isEmpty()) filterLocal();
         redraw();
+    }
+
+
+    // ------------------------------------------------------------------ editing inside an archive
+    // Changes are staged in a kiln_edit session (nothing is written until Save).
+
+    private JSONObject ecall(String fn, Object... args) throws Exception {
+        PyObject m = edit;
+        if (m == null) throw new IllegalStateException("Python is still starting");
+        return new JSONObject(m.callAttr(fn, args).toString());
+    }
+
+    private void closeSession(Arc a) {
+        if (a == null || a.sid == null) return;
+        final String sid = a.sid;
+        a.sid = null;
+        a.dirty = false;
+        new Thread(() -> {
+            try {
+                ecall("close", sid);
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    /** Starts the staged-edit session the first time something is changed. */
+    private void withSession(final Runnable then) {
+        final Arc a = arc;
+        if (a == null) return;
+        if (a.sid != null) {
+            then.run();
+            return;
+        }
+        runOp("Preparing...", false, p -> ecall("begin", a.file.getPath(), a.password), r -> {
+            if (!r.optBoolean("ok")) {
+                message("Can't edit this archive", r.optString("message", r.optString("error")));
+                return;
+            }
+            if (arc != a) {                                   // left the archive while it was loading
+                try {
+                    ecall("close", r.optString("sid"));
+                } catch (Exception ignored) {
+                }
+                return;
+            }
+            a.sid = r.optString("sid");
+            applyEdit(r);
+            then.run();
+        });
+    }
+
+    /** Takes the archive's current staged contents from a kiln_edit result. */
+    private void applyEdit(JSONObject r) {
+        if (arc == null) return;
+        JSONArray arr = r.optJSONArray("entries");
+        if (arr != null) {
+            arc.ents.clear();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                Ent e = new Ent();
+                e.p = o.optString("p");
+                e.s = o.optLong("s");
+                e.m = o.optLong("m");
+                e.k = o.optString("k");
+                arc.ents.add(e);
+            }
+        }
+        arc.dirty = r.optBoolean("dirty", arc.dirty);
+        sel.clear();
+        buildArcRows();
+    }
+
+    private void editOp(String heading, final Job job) {
+        runOp(heading, false, job, r -> {
+            if (r.optBoolean("ok")) applyEdit(r);
+            else message("Couldn't do that", r.optString("message", r.optString("error")));
+        });
+    }
+
+    private static String trimSlash(String s) {
+        return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
+    }
+
+    private View saveRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(4), dp(4), dp(0));
+        TextView t = Ui.label(this, "Unsaved changes", 14, true, false);
+        row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(Ui.button(this, "Discard", Ui.TEXT, v -> discardArchive(null)));
+        Button save = Ui.button(this, "Save", Ui.FILLED, v -> saveArchive(null));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(6);
+        row.addView(save, lp);
+        return row;
+    }
+
+    private void saveArchive(final Runnable after) {
+        final Arc a = arc;
+        if (a == null || a.sid == null) {
+            if (after != null) after.run();
+            return;
+        }
+        runOp("Saving...", true, p -> ecall("save", a.sid, p), r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+            } else if (r.optBoolean("ok")) {
+                needRefresh = true;
+                snaps.clear();                                // the file on disk changed
+                if (arc == a) applyEdit(r);
+                else a.dirty = false;
+                toast("Saved");
+                if (after != null) after.run();
+            } else {
+                message("Couldn't save", r.optString("message", r.optString("error")));
+            }
+        });
+    }
+
+    private void discardArchive(final Runnable after) {
+        final Arc a = arc;
+        if (a == null || a.sid == null) {
+            if (after != null) after.run();
+            return;
+        }
+        confirm("Discard changes?", "Everything you changed since the last save is thrown away.",
+                "Discard", Ui.DANGER, () -> {
+                    arcClip.clear();
+                    bg(p -> ecall("discard", a.sid), r -> {
+                        if (r.optBoolean("ok")) {
+                            if (arc == a) applyEdit(r);
+                            else a.dirty = false;
+                            if (after != null) after.run();
+                        } else {
+                            message("Couldn't discard", r.optString("message", r.optString("error")));
+                        }
+                    });
+                });
+    }
+
+    /** Runs `then` now, or after asking what to do with unsaved changes. */
+    private void guardLeave(final Runnable then) {
+        if (arc == null || !arc.dirty) {
+            then.run();
+            return;
+        }
+        new Sheet(this, "Unsaved changes")
+                .text("This archive has changes that haven't been saved.")
+                .button("Keep editing", Ui.OUTLINE, null)
+                .button("Discard", Ui.DANGER, () -> {
+                    final Arc a = arc;
+                    closeSession(a);
+                    if (a != null) a.dirty = false;
+                    then.run();
+                    return true;
+                })
+                .button("Save", Ui.FILLED, () -> {
+                    saveArchive(then);
+                    return true;
+                }).show();
+    }
+
+    private void arcDelete() {
+        final List<String> keys = new ArrayList<>(sel);
+        if (keys.isEmpty()) return;
+        final int n = countFor(keys);
+        confirm("Delete " + plural(n, "file", "files") + "?",
+                "They are removed from the archive when you save. Discard brings them back.",
+                "Delete", Ui.DANGER, () -> withSession(() -> {
+                    final Arc a = arc;
+                    editOp("Deleting...", p -> ecall("remove", a.sid, membersJson(keys)));
+                }));
+    }
+
+    private void arcRename() {
+        if (sel.size() != 1) return;
+        final String key = sel.iterator().next();
+        final boolean dir = key.endsWith("/");
+        final String full = trimSlash(key);
+        final String old = full.substring(full.lastIndexOf('/') + 1);
+        final String parent = full.contains("/") ? full.substring(0, full.lastIndexOf('/')) : "";
+        nameSheet("Rename", old, "Rename", n -> {
+            if (n.equals(old)) return null;
+            withSession(() -> {
+                final Arc a = arc;
+                final List<String> keys = new ArrayList<>();
+                keys.add(key);
+                arcTransfer(a, keys, parent, true, "ask", n);
+            });
+            return null;
+        });
+    }
+
+    private void arcSetClip(boolean move) {
+        arcClip.clear();
+        arcClip.addAll(sel);
+        arcClipMove = move;
+        sel.clear();
+        redraw();
+    }
+
+    private View arcPasteBar(int accent) {
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(12), dp(8), dp(12), dp(2));
+        info.addView(Ui.label(this, (arcClipMove ? "Moving " : "Copying ")
+                + plural(arcClip.size(), "item", "items"), 15, true, false));
+        String where = arc.prefix.isEmpty() ? arc.file.getName()
+                : arc.prefix.substring(0, arc.prefix.length() - 1);
+        info.addView(Ui.label(this, "Into " + where, 12, false, true));
+        bottomBar.addView(info);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(2), dp(4), dp(4), dp(2));
+        row.addView(tile(R.drawable.ic_new_folder, "New folder", accent, this::arcNewFolder),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        row.addView(Ui.button(this, "Cancel", Ui.TEXT, v -> {
+            arcClip.clear();
+            redraw();
+        }));
+        Button go = Ui.button(this, arcClipMove ? "Move here" : "Paste here", Ui.FILLED,
+                v -> arcPaste());
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        gp.leftMargin = dp(6);
+        row.addView(go, gp);
+        bottomBar.addView(row);
+        return row;
+    }
+
+    private void arcPaste() {
+        final List<String> keys = new ArrayList<>(arcClip);
+        final boolean mv = arcClipMove;
+        withSession(() -> arcTransfer(arc, keys, trimSlash(arc.prefix), mv, "ask", null));
+    }
+
+    private void arcTransfer(final Arc a, final List<String> keys, final String dest,
+                             final boolean mv, final String policy, final String renameTo) {
+        runOp(mv ? "Moving..." : "Copying...", false,
+                p -> ecall("transfer", a.sid, membersJson(keys), dest, mv, policy, renameTo),
+                r -> {
+                    if (r.optBoolean("ok")) {
+                        arcClip.clear();
+                        applyEdit(r);
+                        return;
+                    }
+                    JSONArray c = r.optJSONArray("conflicts");
+                    if (c == null || c.length() == 0) {
+                        message("Couldn't " + (mv ? "move" : "copy"),
+                                r.optString("message", r.optString("error")));
+                        return;
+                    }
+                    StringBuilder names = new StringBuilder();
+                    for (int i = 0; i < c.length() && i < 5; i++) {
+                        names.append("\u2022 ").append(c.optString(i)).append('\n');
+                    }
+                    int total = r.optInt("n_conflicts", c.length());
+                    if (total > 5) names.append("and ").append(total - 5).append(" more\n");
+                    new Sheet(this, plural(total, "item already exists", "items already exist"))
+                            .text(names.toString().trim())
+                            .option("Replace", false, () -> arcTransfer(a, keys, dest, mv, "replace", renameTo))
+                            .option("Skip existing", false, () -> arcTransfer(a, keys, dest, mv, "skip", renameTo))
+                            .option("Keep both", false, () -> arcTransfer(a, keys, dest, mv, "keep", renameTo))
+                            .button("Cancel", Ui.TEXT, null).show();
+                });
+    }
+
+    /** Archives store files only: a new folder is just a place to put things (gone if left empty). */
+    private void arcNewFolder() {
+        nameSheet("New folder", "", "Create", n -> {
+            arc.prefix = arc.prefix + n + "/";
+            buildArcRows();
+            return null;
+        });
+    }
+
+    private void arcNewSheet() {
+        new Sheet(this, "Add")
+                .option(R.drawable.ic_add, "Files or folders from phone", false, this::startPick)
+                .option(R.drawable.ic_new_folder, "New folder", false, this::arcNewFolder)
+                .option(R.drawable.ic_new_file, "Text file", false, () ->
+                        nameSheet("New text file", "untitled.txt", "Create", n -> {
+                            for (Ent e : arc.ents) {
+                                if (e.p.equals(arc.prefix + n)) return "That name is taken";
+                            }
+                            final String member = arc.prefix + n;
+                            withSession(() -> {
+                                final Arc a = arc;
+                                runOp("Creating...", false, p -> ecall("new_text", a.sid, member), r -> {
+                                    if (!r.optBoolean("ok")) {
+                                        message("Couldn't create it", r.optString("message"));
+                                        return;
+                                    }
+                                    applyEdit(r);
+                                    editInKiln(member);
+                                });
+                            });
+                            return null;
+                        }))
+                .button("Cancel", Ui.TEXT, null).show();
+    }
+
+    // ---- picking phone files to add
+
+    private void startPick() {
+        withSession(() -> {
+            pickArc = arc;
+            pickReturn = cwd;
+            pickDest = trimSlash(arc.prefix);
+            arc = null;
+            sel.clear();
+            loadDir(cwd);
+            toast("Long-press to select folders; tap files");
+        });
+    }
+
+    private void pickBar(boolean selecting, int accent) {
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(12), dp(8), dp(12), dp(2));
+        info.addView(Ui.label(this, "Adding to " + pickArc.file.getName()
+                + (pickDest.isEmpty() ? "" : "/" + pickDest), 15, true, false));
+        info.addView(Ui.label(this, selecting ? plural(sel.size(), "item", "items") + " selected"
+                : "Tap files, long-press folders", 12, false, true));
+        bottomBar.addView(info);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(2), dp(4), dp(4), dp(2));
+        row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        row.addView(Ui.button(this, "Cancel", Ui.TEXT, v -> endPick(false)));
+        Button go = Ui.button(this, "Add", Ui.FILLED, v -> endPick(true));
+        go.setEnabled(selecting);
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        gp.leftMargin = dp(6);
+        row.addView(go, gp);
+        bottomBar.addView(row);
+    }
+
+    private void endPick(boolean doAdd) {
+        final Arc a = pickArc;
+        if (a == null) return;
+        final List<File> files = doAdd ? selectedFiles() : new ArrayList<File>();
+        final String dest = pickDest;
+        pickArc = null;
+        sel.clear();
+        cwd = pickReturn != null ? pickReturn : cwd;
+        arc = a;
+        buildArcRows();
+        if (!files.isEmpty()) {
+            editOp("Adding...", p -> ecall("add", a.sid, pathsJson(files), dest));
+        }
+    }
+
+    // ---- editing a file's contents
+
+    private void editInKiln(final String member) {
+        stageForEdit(member, false);
+    }
+
+    private void editExternalFile(final String member) {
+        stageForEdit(member, true);
+    }
+
+    private void stageForEdit(final String member, final boolean external) {
+        withSession(() -> {
+            final Arc a = arc;
+            final File cache = new File(getCacheDir(), "edit");
+            cache.mkdirs();
+            runOp("Preparing...", false, p -> ecall("file_for", a.sid, member, cache.getPath()), r -> {
+                if (!r.optBoolean("ok")) {
+                    message("Couldn't open", r.optString("message", r.optString("error")));
+                    return;
+                }
+                File f = new File(r.optString("file"));
+                editFile = f;
+                editMember = member;
+                editStamp = f.lastModified() * 31 + f.length();
+                editExternal = external;
+                if (external) appChooser(f, true);
+                else openText(f, true);
+            });
+        });
+    }
+
+    /** Back from an editor: stage the edited copy into the archive if it changed. */
+    private void checkEditedFile() {
+        final File f = editFile;
+        if (f == null || arc == null || arc.sid == null) return;
+        if (!f.exists()) {
+            editFile = null;
+            return;
+        }
+        long now = f.lastModified() * 31 + f.length();
+        if (now == editStamp) return;
+        editFile = null;
+        final String member = editMember;
+        final Arc a = arc;
+        final Runnable stage = () -> editOp("Updating...", p -> ecall("set_file", a.sid, member, f.getPath()));
+        if (editExternal) {
+            confirm("Update the archive?", "\"" + member.substring(member.lastIndexOf('/') + 1)
+                    + "\" was changed. Put the new version in the archive? (You still need to Save.)",
+                    "Update", Ui.FILLED, stage);
+        } else {
+            stage.run();
+        }
     }
 
     // ------------------------------------------------------------------ progress and jobs
@@ -2500,8 +3016,11 @@ public class MainActivity extends Activity {
         boolean image = kind == 2 && r.ent.s <= IMAGE_PREVIEW_MAX;
         if (text || image) s.option(kind == 0 ? "View as text in Kiln" : "View in Kiln", false,
                 () -> previewFile(r.ent.p, 0));
+        if (text) s.option(R.drawable.ic_edit, "Edit as text in Kiln", false,
+                () -> editInKiln(r.ent.p));
         s.option("Open with...", false, () -> previewFile(r.ent.p, 1));
-        s.option("Extract...", false, () -> {
+        s.option("Edit with...", false, () -> editExternalFile(r.ent.p));
+        if (!arc.dirty) s.option("Extract...", false, () -> {
             List<String> k = new ArrayList<>();
             k.add(r.key);
             extractDialog(k);
@@ -2515,7 +3034,8 @@ public class MainActivity extends Activity {
         final File cache = new File(getCacheDir(), "preview");
         cache.mkdirs();
         runOp("Preparing...", false,
-                p -> call("preview", a.file.getPath(), a.password, member, cache.getPath()),
+                p -> a.sid != null ? ecall("file_for", a.sid, member, cache.getPath())
+                        : call("preview", a.file.getPath(), a.password, member, cache.getPath()),
                 r -> {
                     if (!r.optBoolean("ok")) {
                         message("Couldn't open", r.optString("message"));
@@ -2533,6 +3053,10 @@ public class MainActivity extends Activity {
     }
 
     private void extractDialog(final List<String> keys) {
+        if (arc != null && arc.dirty) {
+            message("Unsaved changes", "Save or discard your changes first, then extract.");
+            return;
+        }
         final Arc a = arc;
         File defDest = new File(a.home != null ? a.home : a.file.getParentFile(),
                 a.isSet ? a.file.getName() + "_files" : Fmt.stripExt(a.file.getName()));
@@ -2586,6 +3110,10 @@ public class MainActivity extends Activity {
     }
 
     private void runTest() {
+        if (arc != null && arc.dirty) {
+            message("Unsaved changes", "Save your changes first; Check works on the saved archive.");
+            return;
+        }
         final Arc a = arc;
         runOp("Checking...", true, p -> call("test", a.file.getPath(), a.password, p), r -> {
             if (r.optBoolean("ok")) {

@@ -106,7 +106,9 @@ public class MainActivity extends Activity {
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
-            + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql ";
+            + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
+            + "bash zsh fish bat cmd ps1 pl php swift dart jsx tsx vue cs scala mk cmake env "
+            + "gitignore service desktop lock diff patch tex ";
     private static final String IMAGE_EXT = " png jpg jpeg gif webp bmp ";
 
     // ------------------------------------------------------------------ state
@@ -863,6 +865,7 @@ public class MainActivity extends Activity {
             s.option("Edit in Kiln", false, () -> openText(f, true));
         } else if (kind == 0 && small && it.size > 0) {
             s.option("View as text in Kiln", false, () -> openText(f, false));
+            s.option("Edit as text in Kiln", false, () -> openText(f, true));
         }
         s.option("Open with...", false, () -> openExternal(f, false));
         s.option("Edit with...", false, () -> openExternal(f, true));

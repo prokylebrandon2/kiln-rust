@@ -35,6 +35,8 @@ helper, so it does not need Termux, and it reads and writes the same archives.
 
 ## Version 3.0 (build 1 of 2)
 
+Dialogs are centered; "Edit in Kiln" is offered for any small text-like file.
+
 - New flat look that follows the system light/dark setting; no animations; bottom-sheet dialogs.
 - Sort by name, size, date or type (ascending/descending, remembered). Sizes on every row.
 - Works on any file: copy, move (with Replace / Skip / Keep both), delete, rename, new folder / text file.

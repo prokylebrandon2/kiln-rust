@@ -16,7 +16,7 @@ import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
 
-/** A modal that slides in from nothing: a rounded panel at the bottom of the screen. */
+/** A modal: a rounded panel centered on the screen (it moves up by itself when the keyboard opens). */
 final class Sheet {
     /** Return true to close the sheet, false to keep it open (for example after a bad input). */
     interface Click { boolean run(); }
@@ -35,11 +35,11 @@ final class Sheet {
         root = new LinearLayout(a);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = Ui.dp(a, 20);
-        root.setPadding(pad, pad, pad, Ui.dp(a, 14));
+        root.setPadding(pad, pad, pad, pad);
         float r = Ui.dp(a, 20);
         GradientDrawable g = new GradientDrawable();
         g.setColor(Ui.surface(a));
-        g.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        g.setCornerRadius(r);
         root.setBackground(g);
         if (title != null && !title.isEmpty()) {
             TextView t = Ui.label(a, title, 19, true, false);
@@ -156,8 +156,10 @@ final class Sheet {
         dialog.setContentView(root);
         Window w = dialog.getWindow();
         w.setBackgroundDrawable(new ColorDrawable(0));
-        w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        w.setGravity(Gravity.BOTTOM);
+        int screenW = act.getResources().getDisplayMetrics().widthPixels;
+        int width = Math.min(screenW - Ui.dp(act, 40), Ui.dp(act, 460));
+        w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        w.setGravity(Gravity.CENTER);
         w.setWindowAnimations(0);
         w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         w.setDimAmount(0.45f);

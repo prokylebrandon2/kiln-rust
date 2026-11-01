@@ -157,13 +157,13 @@ final class Ui {
 
     static int gravityEnd() { return Gravity.END; }
 
-    /** A ScrollView that never grows past 60% of the screen, so sheets stay reachable. */
+    /** A ScrollView that never grows past 50% of the screen, so sheets stay reachable. */
     static final class MaxScroll extends ScrollView {
         MaxScroll(Context c) { super(c); }
 
         @Override
         protected void onMeasure(int w, int h) {
-            int max = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+            int max = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
             super.onMeasure(w, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST));
         }
     }

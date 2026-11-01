@@ -65,12 +65,6 @@ public class ImageActivity extends Activity {
         w.setStatusBarColor(Color.TRANSPARENT);
         w.setNavigationBarColor(Color.TRANSPARENT);
         w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.BLACK));
-        WindowInsetsController c = w.getInsetsController();
-        if (c != null) {
-            c.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
-            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        }
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -127,6 +121,12 @@ public class ImageActivity extends Activity {
             return ins;
         });
         setContentView(root);
+        WindowInsetsController c = getWindow().getInsetsController();   // needs the content set first
+        if (c != null) {
+            c.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        }
 
         load();
     }

@@ -1558,7 +1558,7 @@ public class MainActivity extends Activity {
     private void loadDir(File dir, boolean keepSelection) {
         boolean moved = arc != null || !dir.equals(cwd);
         if (moved && arc == null) rememberScroll();           // so Back returns to the same spot
-        boolean goingUp = moved && arc == null && dir.equals(cwd.getParentFile());
+        boolean goingUp = moved && (arc != null ? dir.equals(cwd) : dir.equals(cwd.getParentFile()));   // Back, or leaving an archive
         if (searching && moved) closeSearchQuiet();
         // A folder seen before is shown at once from memory and rescanned quietly behind it,
         // so going Back never waits for the scan. Otherwise the rows already on screen stay
@@ -1673,37 +1673,46 @@ public class MainActivity extends Activity {
 
     private void applyScan(JSONObject r) {
         swipe.setRefreshing(false);
-        rows.clear();
-        items.clear();
-        plainSet = r.optBoolean("is_set");
+        boolean isSet = r.optBoolean("is_set");
         if (!r.optBoolean("ok")) {
+            rows.clear();
+            items.clear();
+            plainSet = isSet;
             shownSig = null;
             empty.setText(r.optString("error", "Couldn't read this folder"));
             redraw();
             return;
         }
-        parseItems(r, rows, items);
-        sel.retainAll(keysOf(rows));
-        sortRows();
-        captureSource();
-        empty.setText(emptyText());
+        List<Row> nr = new ArrayList<>();
+        List<Item> ni = new ArrayList<>();
+        parseItems(r, nr, ni);
+        String sig = sigOf(ni, isSet);
         boolean newDir = !cwd.getPath().equals(lastDir);
         lastDir = cwd.getPath();
         boolean replay = newDir || forceAnim;                  // a new folder, or Refresh: slide the rows in
         forceAnim = false;
-        String sig = sigOf(items, plainSet);
-        boolean same = !replay && sig.equals(shownSig) && !(searching && !query.isEmpty());
+        boolean same = !replay && sig.equals(shownSig) && arc == null
+                && !(searching && !query.isEmpty());
         shownSig = sig;
         Snap sn = snaps.get(snapKey(cwd));
         if (sn == null) {
             sn = new Snap();
             snaps.put(snapKey(cwd), sn);
         }
-        sn.rows = new ArrayList<>(srcRows);
-        sn.items = new ArrayList<>(srcItems);
-        sn.plainSet = plainSet;
+        sn.rows = new ArrayList<>(nr);
+        sn.items = new ArrayList<>(ni);
+        sn.plainSet = isSet;
         sn.sig = sig;
-        if (same) return;                                      // nothing changed: leave the list alone
+        if (same) return;                                      // nothing changed: the list isn't touched
+        plainSet = isSet;
+        rows.clear();
+        rows.addAll(nr);
+        items.clear();
+        items.addAll(ni);
+        sel.retainAll(keysOf(rows));
+        sortRows();
+        captureSource();
+        empty.setText(emptyText());
         if (searching && !query.isEmpty()) {
             filterLocal();
             startDeepSoon(0);
@@ -2096,6 +2105,7 @@ public class MainActivity extends Activity {
             a.ents.add(e);
         }
         closeSearchQuiet();
+        rememberScroll();                                     // so closing the archive returns to this spot
         arc = a;
         plainSet = false;
         sel.clear();
@@ -2151,14 +2161,14 @@ public class MainActivity extends Activity {
     }
 
     private void closeArchive() {
-        arc = null;
         sel.clear();
-        loadDir(cwd);
+        loadDir(cwd);                                         // loadDir sees the open archive and leaves it
     }
 
     private void buildArcRows() {
         dirPending = false;                                   // an archive view replaces any folder load
         upFrozen = null;
+        shownSig = null;                                      // these rows are not a folder listing
         loadGen++;
         rows.clear();
         String prefix = arc.prefix;

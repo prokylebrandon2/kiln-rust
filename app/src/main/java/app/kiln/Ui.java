@@ -70,12 +70,38 @@ final class Ui {
         v.setOnTouchListener((view, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) {
-                view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start();
+                view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(Defaults.anim(view.getContext(), 90)).start();
             } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                view.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+                view.animate().scaleX(1f).scaleY(1f).setDuration(Defaults.anim(view.getContext(), 160)).start();
             }
             return false;
         });
+    }
+
+    /** Rows sliding in one after another. Null when animations are off. */
+    static android.view.animation.LayoutAnimationController rowAnim(Context c) {
+        if (!Defaults.animOn(c)) return null;
+        android.view.animation.AnimationSet set = new android.view.animation.AnimationSet(true);
+        set.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
+        android.view.animation.TranslateAnimation t = new android.view.animation.TranslateAnimation(
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0.14f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0f);
+        t.setDuration(Defaults.anim(c, 240));
+        android.view.animation.AlphaAnimation a = new android.view.animation.AlphaAnimation(0f, 1f);
+        a.setDuration(Defaults.anim(c, 200));
+        set.addAnimation(t);
+        set.addAnimation(a);
+        android.view.animation.LayoutAnimationController lc =
+                new android.view.animation.LayoutAnimationController(set, 0.12f);
+        lc.setOrder(android.view.animation.LayoutAnimationController.ORDER_NORMAL);
+        return lc;
+    }
+
+    /** Opens another screen with Kiln's slide, or none when animations are off. */
+    static void noSlideIfOff(android.app.Activity a) {
+        if (!Defaults.animOn(a)) a.overridePendingTransition(0, 0);
     }
 
     private static int dim(int color) {

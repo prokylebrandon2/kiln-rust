@@ -83,6 +83,83 @@ def scan(path, show_all, show_hidden=False):
               is_set=os.path.isfile(os.path.join(path, kiln.INDEX_NAME)))
 
 
+# ---------------------------------------------------------------- search
+
+_search_gen = [0]
+SEARCH_LIMIT = 1000
+
+
+def search_cancel():
+    """Stops any search that is still walking folders."""
+    _search_gen[0] += 1
+
+
+def search(path, query, show_all, show_hidden=False):
+    """Every file and folder below `path` whose name contains all the words in `query`
+    (case-insensitive). Names come back relative to `path`, so the app can treat them like
+    entries of the folder itself. A newer search (or search_cancel) stops this one."""
+    _search_gen[0] += 1
+    mine = _search_gen[0]
+    terms = [t for t in query.casefold().split() if t]
+    if not terms:
+        return _j(ok=True, path=path, items=[], truncated=False)
+    items = []
+    truncated = False
+    stack = [""]
+    base = path
+    while stack:
+        if _search_gen[0] != mine:
+            return _j(ok=False, cancelled=True)
+        rel = stack.pop()
+        here = os.path.join(base, rel) if rel else base
+        try:
+            it = os.scandir(here)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                name = e.name
+                if name.startswith(".") and not show_hidden:
+                    continue
+                try:
+                    is_dir = e.is_dir(follow_symlinks=False)
+                    low = name.casefold()
+                    hit = all(t in low for t in terms)
+                    relname = rel + "/" + name if rel else name
+                    if is_dir:
+                        if hit:
+                            st = e.stat()
+                            is_set = os.path.isfile(os.path.join(e.path, kiln.INDEX_NAME))
+                            try:
+                                count = len(os.listdir(e.path))
+                            except OSError:
+                                count = 0
+                            items.append({"n": relname, "k": "set" if is_set else "dir", "s": 0,
+                                          "m": int(st.st_mtime), "c": count})
+                        stack.append(relname)
+                    elif hit and e.is_file():
+                        st = e.stat()
+                        kind, enc = "file", False
+                        if st.st_size >= _MIN_ARCHIVE:
+                            sn = _sniff(e.path)
+                            if sn:
+                                kind, enc = sn
+                        if kind == "file" and not show_all:
+                            continue
+                        items.append({"n": relname, "k": kind, "s": st.st_size,
+                                      "m": int(st.st_mtime), "e": enc})
+                except OSError:
+                    continue
+                if len(items) >= SEARCH_LIMIT:
+                    truncated = True
+                    break
+        if truncated:
+            break
+    if _search_gen[0] != mine:
+        return _j(ok=False, cancelled=True)
+    return _j(ok=True, path=path, items=items, truncated=truncated)
+
+
 # ---------------------------------------------------------------- opening
 
 def open_archive(path, password):

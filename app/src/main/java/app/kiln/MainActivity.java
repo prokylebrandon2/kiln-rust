@@ -8,9 +8,9 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.provider.OpenableColumns;
-import android.view.animation.AnimationUtils;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.content.res.ColorStateList;
@@ -25,6 +25,13 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.widget.AbsListView;
+import android.widget.PopupWindow;
 import android.webkit.MimeTypeMap;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
@@ -160,6 +167,20 @@ public class MainActivity extends Activity {
     private boolean barShown, fabShown;
     private RowAdapter adapter;
 
+    // search
+    private ImageButton searchBtn;
+    private LinearLayout searchRow, titleBox;
+    private EditText searchField;
+    private Button deepChip;
+    private boolean searching, deepOn, forceAnim, fabWanted, fabScrollHidden;
+    private String query = "";
+    private int searchGen, lastFirst, lastTop, imePad;
+    private Runnable pendingSearch;
+    private boolean deepRunning;
+    private final List<Row> srcRows = new ArrayList<>();      // the folder (or archive level) itself
+    private final List<Item> srcItems = new ArrayList<>();
+    private PopupWindow marks;
+
     // ------------------------------------------------------------------ lifecycle
 
     @Override
@@ -211,6 +232,8 @@ public class MainActivity extends Activity {
         if (!sel.isEmpty()) {
             sel.clear();
             redraw();
+        } else if (searching) {
+            closeSearch();
         } else if (arc != null) {
             if (arc.prefix.isEmpty()) {
                 closeArchive();
@@ -327,12 +350,56 @@ public class MainActivity extends Activity {
         sub.setEllipsize(TextUtils.TruncateAt.START);
         titles.addView(title);
         titles.addView(sub);
+        titles.setPadding(dp(8), dp(3), dp(8), dp(3));
+        titles.setBackground(Ui.pressable(this, 0, 0, 12));
+        titles.setOnClickListener(v -> showBookmarks());
+        titleBox = titles;
+        title.setCompoundDrawablePadding(dp(2));
+        title.setCompoundDrawableTintList(ColorStateList.valueOf(Ui.text2(this)));
         bar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        searchBtn = Ui.iconButton(this, R.drawable.ic_search, v -> {
+            if (searching) closeSearch();
+            else openSearch();
+        });
+        bar.addView(searchBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
         sortBtn = Ui.iconButton(this, R.drawable.ic_sort, v -> sortSheet());
         bar.addView(sortBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
         more = Ui.iconButton(this, R.drawable.ic_more, v -> showMenu());
         bar.addView(more, new LinearLayout.LayoutParams(dp(48), dp(48)));
         page.addView(bar);
+
+        searchRow = new LinearLayout(this);
+        searchRow.setOrientation(LinearLayout.HORIZONTAL);
+        searchRow.setGravity(Gravity.CENTER_VERTICAL);
+        searchRow.setPadding(dp(12), 0, dp(12), dp(8));
+        searchRow.setVisibility(View.GONE);
+        searchField = Ui.field(this, "Search", false);
+        searchField.setImeOptions(EditorInfo.IME_ACTION_SEARCH | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        searchField.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0);
+        searchField.setCompoundDrawablePadding(dp(10));
+        searchField.setCompoundDrawableTintList(ColorStateList.valueOf(Ui.text2(this)));
+        searchField.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence c, int a, int b, int d) {}
+            @Override public void onTextChanged(CharSequence c, int a, int b, int d) {}
+            @Override public void afterTextChanged(Editable e) { onQueryChanged(e.toString()); }
+        });
+        searchField.setOnEditorActionListener((v, a, e) -> {
+            hideKeyboard();
+            return true;
+        });
+        searchRow.addView(searchField, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        deepChip = Ui.button(this, "Subfolders", Ui.TONAL, v -> {
+            deepOn = !deepOn;
+            Defaults.setDeepSearch(this, deepOn);
+            renderSearchRow();
+            onQueryChanged(searchField.getText().toString());
+        });
+        deepChip.setMinimumHeight(dp(44));
+        LinearLayout.LayoutParams dc = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        dc.leftMargin = dp(8);
+        searchRow.addView(deepChip, dc);
+        page.addView(searchRow);
 
         View line = new View(this);
         line.setBackgroundColor(Ui.line(this));
@@ -349,10 +416,34 @@ public class MainActivity extends Activity {
         list.setDivider(null);
         list.setSelector(android.R.color.transparent);
         list.setClipToPadding(false);
-        list.setPadding(0, 0, 0, dp(96));                 // the last rows scroll clear of the bars
-        list.setLayoutAnimation(AnimationUtils.loadLayoutAnimation(this, R.anim.k_row_layout));
+        list.setPadding(0, 0, 0, dp(10));                 // grows only while a bar or the keyboard is up
+        list.setLayoutAnimation(Ui.rowAnim(this));
         adapter = new RowAdapter();
         list.setAdapter(adapter);
+        list.setOnScrollListener(new AbsListView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(AbsListView v, int state) {
+                if (state == SCROLL_STATE_TOUCH_SCROLL && searching) hideKeyboard();
+            }
+
+            @Override
+            public void onScroll(AbsListView v, int first, int visible, int total) {
+                View c = v.getChildAt(0);
+                if (c == null) return;
+                int top = c.getTop();
+                if (first == 0 && top >= 0) {
+                    setFabScrollHidden(false);                 // back at the top: always show it
+                } else if (first != lastFirst) {
+                    setFabScrollHidden(first > lastFirst);
+                } else if (Math.abs(top - lastTop) >= dp(6)) {
+                    setFabScrollHidden(top < lastTop);         // content moving up = scrolling down
+                } else {
+                    return;
+                }
+                lastFirst = first;
+                lastTop = top;
+            }
+        });
         list.setOnItemClickListener((av, v, pos, id) -> onRowClick(pos));
         list.setOnItemLongClickListener((av, v, pos, id) -> {
             int i = pos - off();
@@ -394,6 +485,7 @@ public class MainActivity extends Activity {
                 Gravity.BOTTOM);
         bp2.setMargins(dp(12), 0, dp(12), dp(12));
         body.addView(bottomBar, bp2);
+        bottomBar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> padList());
 
         LinearLayout perm = new LinearLayout(this);
         perm.setOrientation(LinearLayout.VERTICAL);
@@ -417,12 +509,42 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(page);
+        page.setOnApplyWindowInsetsListener((v, ins) -> {
+            int ime = ins.getInsets(WindowInsets.Type.ime()).bottom;
+            list.post(() -> {
+                int pad = 0;
+                if (ime > 0 && list.getHeight() > 0) {
+                    int[] loc = new int[2];
+                    list.getLocationInWindow(loc);
+                    int kbTop = list.getRootView().getHeight() - ime;
+                    pad = Math.max(0, loc[1] + list.getHeight() - kbTop);
+                }
+                if (pad != imePad) {
+                    imePad = pad;
+                    padList();
+                }
+            });
+            return v.onApplyWindowInsets(ins);
+        });
         renderHeader();
+    }
+
+    /** Bottom space under the list: a little normally, more while a bar or the keyboard covers it. */
+    private void padList() {
+        int bottom = (barShown ? bottomBar.getHeight() + dp(24) : dp(10)) + imePad;
+        if (list.getPaddingBottom() != bottom) list.setPadding(0, 0, 0, bottom);
+    }
+
+    private void setFabScrollHidden(boolean hide) {
+        if (fabScrollHidden == hide) return;
+        fabScrollHidden = hide;
+        showFab(fabWanted && !fabScrollHidden);
     }
 
     /** The ".." row shows when there's somewhere to go up to. */
     private boolean upShown() {
-        return upRowOn && (arc != null || !cwd.equals(root)) && hasStorage();
+        return upRowOn && (arc != null || !cwd.equals(root)) && hasStorage()
+                && !(searching && !query.isEmpty());
     }
 
     private int off() { return upShown() ? 1 : 0; }
@@ -486,7 +608,7 @@ public class MainActivity extends Activity {
             if (selected != wasSelected) {                    // a little pop when selection flips
                 icon.setScaleX(0.7f);
                 icon.setScaleY(0.7f);
-                icon.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
+                icon.animate().scaleX(1f).scaleY(1f).setDuration(Defaults.anim(getContext(), 180)).start();
             }
             wasSelected = selected;
             name.setText(r.title);
@@ -541,6 +663,7 @@ public class MainActivity extends Activity {
 
     /** Same as redraw(), and the rows slide in. Used when a different folder is shown. */
     private void redrawAnimated() {
+        list.setLayoutAnimation(Ui.rowAnim(this));
         list.scheduleLayoutAnimation();
         redraw();
     }
@@ -562,6 +685,7 @@ public class MainActivity extends Activity {
             buildArcRows();                                 // an open archive doesn't change
             swipe.setRefreshing(false);
         } else {
+            forceAnim = true;                               // the rows slide in again
             loadDir(cwd, true);
         }
     }
@@ -570,6 +694,11 @@ public class MainActivity extends Activity {
         boolean selecting = !sel.isEmpty();
         left.setVisibility(View.VISIBLE);
         sortBtn.setVisibility(selecting ? View.GONE : View.VISIBLE);
+        searchBtn.setVisibility(selecting ? View.GONE : View.VISIBLE);
+        searchBtn.setImageResource(searching ? R.drawable.ic_close : R.drawable.ic_search);
+        boolean marksOk = !selecting && arc == null && hasStorage();
+        titleBox.setClickable(marksOk);
+        title.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, marksOk ? R.drawable.ic_down : 0, 0);
         if (selecting) {
             left.setImageResource(R.drawable.ic_close);
             title.setText(sel.size() + " selected");
@@ -643,8 +772,9 @@ public class MainActivity extends Activity {
             show = false;
         }
         showBar(show);
-        boolean fabOn = arc == null && !selecting && clip.isEmpty() && app != null && hasStorage();
-        showFab(fabOn);
+        fabWanted = arc == null && !selecting && clip.isEmpty() && app != null && hasStorage()
+                && !searching;
+        showFab(fabWanted && !fabScrollHidden);
     }
 
     /** Icon over a small label; the whole tile lights up when touched. */
@@ -685,16 +815,17 @@ public class MainActivity extends Activity {
             bottomBar.setVisibility(View.VISIBLE);
             bottomBar.setAlpha(0f);
             bottomBar.setTranslationY(dp(70));
-            bottomBar.animate().alpha(1f).translationY(0).setDuration(240)
+            bottomBar.animate().alpha(1f).translationY(0).setDuration(Defaults.anim(this, 240))
                     .setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f)).start();
         } else if (!on && barShown) {
             bottomBar.animate().cancel();
-            bottomBar.animate().alpha(0f).translationY(dp(70)).setDuration(160)
+            bottomBar.animate().alpha(0f).translationY(dp(70)).setDuration(Defaults.anim(this, 160))
                     .withEndAction(() -> {
                         if (!barShown) bottomBar.setVisibility(View.GONE);
                     }).start();
         }
         barShown = on;
+        padList();
     }
 
     private void showFab(boolean on) {
@@ -704,11 +835,11 @@ public class MainActivity extends Activity {
             fab.setAlpha(0f);
             fab.setScaleX(0.6f);
             fab.setScaleY(0.6f);
-            fab.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200)
+            fab.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Defaults.anim(this, 200))
                     .setInterpolator(new android.view.animation.OvershootInterpolator(1.4f)).start();
         } else if (!on && fabShown) {
             fab.animate().cancel();
-            fab.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(120)
+            fab.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(Defaults.anim(this, 120))
                     .withEndAction(() -> {
                         if (!fabShown) fab.setVisibility(View.GONE);
                     }).start();
@@ -774,7 +905,7 @@ public class MainActivity extends Activity {
             }
         } else if (selecting) {
             l.add("Select all"); id.add(M_SELECT_ALL);
-            if (sel.size() == 1) { l.add("Rename"); id.add(M_RENAME); }
+            if (sel.size() == 1 && !sel.iterator().next().contains("/")) { l.add("Rename"); id.add(M_RENAME); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
             if (sel.size() == 1 && selectedSet() != null) { l.add("Browse as plain folder"); id.add(M_PLAIN); }
@@ -804,8 +935,14 @@ public class MainActivity extends Activity {
                 prefs.edit().putBoolean("show_hidden", showHidden).apply();
                 loadDir(cwd);
                 break;
-            case M_REFRESH: loadDir(cwd); break;
-            case M_SETTINGS: startActivity(new Intent(this, SettingsActivity.class)); break;
+            case M_REFRESH:
+                forceAnim = true;
+                loadDir(cwd, true);
+                break;
+            case M_SETTINGS:
+                startActivity(new Intent(this, SettingsActivity.class));
+                Ui.noSlideIfOff(this);
+                break;
             case M_OPTIONS: {
                 Item it = selectedPlainFile();
                 if (it != null) {
@@ -873,9 +1010,14 @@ public class MainActivity extends Activity {
 
     /** Folders always come first; then the chosen key; ties fall back to the name. */
     private void sortRows() {
+        sortList(rows);
+        if (searching) sortList(srcRows);
+    }
+
+    private void sortList(List<Row> list) {
         final int key = sortKey;
         final boolean asc = sortAsc;
-        Collections.sort(rows, (a, b) -> {
+        Collections.sort(list, (a, b) -> {
             boolean fa = a.folder || a.dir, fb = b.folder || b.dir;
             if (fa != fb) return fa ? -1 : 1;
             int c;
@@ -888,6 +1030,382 @@ public class MainActivity extends Activity {
             if (c == 0) return a.title.compareToIgnoreCase(b.title);
             return asc ? c : -c;
         });
+    }
+
+    // ------------------------------------------------------------------ search
+
+    private static List<String> terms(String q) {
+        List<String> t = new ArrayList<>();
+        for (String w : q.toLowerCase(Locale.ROOT).split("\\s+")) {
+            if (!w.isEmpty()) t.add(w);
+        }
+        return t;
+    }
+
+    private static boolean matches(String name, List<String> t) {
+        String l = name.toLowerCase(Locale.ROOT);
+        for (String w : t) {
+            if (!l.contains(w)) return false;
+        }
+        return true;
+    }
+
+    private void captureSource() {
+        srcRows.clear();
+        srcRows.addAll(rows);
+        srcItems.clear();
+        srcItems.addAll(items);
+    }
+
+    private void refreshList() {
+        adapter.notifyDataSetChanged();
+        updateEmpty();
+    }
+
+    private void showSource() {
+        rows.clear();
+        rows.addAll(srcRows);
+        items.clear();
+        items.addAll(srcItems);
+        sel.retainAll(keysOf(rows));
+        empty.setText(emptyText());
+        redraw();
+    }
+
+    private void openSearch() {
+        if (searching || app == null || !hasStorage()) return;
+        deepOn = Defaults.deepSearch(this);
+        searchField.setText("");
+        searching = true;
+        query = "";
+        searchGen++;
+        searchRow.setVisibility(View.VISIBLE);
+        searchRow.animate().cancel();
+        if (Defaults.animOn(this)) {
+            searchRow.setAlpha(0f);
+            searchRow.setTranslationY(-dp(10));
+            searchRow.animate().alpha(1f).translationY(0).setDuration(Defaults.anim(this, 180)).start();
+        } else {
+            searchRow.setAlpha(1f);
+            searchRow.setTranslationY(0);
+        }
+        renderSearchRow();
+        renderHeader();
+        searchField.requestFocus();
+        showKeyboard(searchField);
+    }
+
+    /** Leaves search and shows the plain list again. */
+    private void closeSearch() {
+        if (!searching) return;
+        closeSearchQuiet();
+        showSource();
+    }
+
+    /** Leaves search without touching the list (the caller is about to replace it). */
+    private void closeSearchQuiet() {
+        if (!searching) return;
+        searching = false;
+        query = "";
+        searchGen++;
+        if (pendingSearch != null) {
+            ui.removeCallbacks(pendingSearch);
+            pendingSearch = null;
+        }
+        cancelDeep();
+        deepRunning = false;
+        hideKeyboard();
+        searchRow.animate().cancel();
+        searchRow.setVisibility(View.GONE);
+        searchField.setText("");
+    }
+
+    private void renderSearchRow() {
+        deepChip.setVisibility(arc == null ? View.VISIBLE : View.GONE);
+        deepChip.setText(deepOn ? "Subfolders \u2713" : "Subfolders");
+        deepChip.setTextColor(deepOn ? Ui.accent(this) : Ui.text2(this));
+        deepChip.setBackground(deepOn
+                ? Ui.pressable(this, getColor(R.color.k_chip), 0, 10)
+                : Ui.pressable(this, 0, Ui.line(this), 10));
+    }
+
+    private void onQueryChanged(String text) {
+        if (!searching) return;
+        query = text.trim();
+        searchGen++;
+        if (pendingSearch != null) {
+            ui.removeCallbacks(pendingSearch);
+            pendingSearch = null;
+        }
+        cancelDeep();
+        deepRunning = false;
+        if (query.isEmpty()) {
+            showSource();
+            return;
+        }
+        filterLocal();                                      // instant: the list that's already here
+        list.setSelection(0);
+        refreshList();
+        startDeepSoon(220);                                 // then the folders below, once typing pauses
+    }
+
+    /** Filters the folder (or the whole open archive) by the words in the box. */
+    private void filterLocal() {
+        List<String> t = terms(query);
+        rows.clear();
+        items.clear();
+        if (arc != null) {
+            for (Ent e : arc.ents) {
+                if (rows.size() >= 1000) break;
+                int sl = e.p.lastIndexOf('/');
+                if (matches(e.p.substring(sl + 1), t)) rows.add(arcSearchRow(e, sl));
+            }
+        } else {
+            for (Row r : srcRows) {
+                if (matches(r.title, t)) {
+                    rows.add(r);
+                    if (r.item != null) items.add(r.item);
+                }
+            }
+        }
+        sortRows();
+        sel.retainAll(keysOf(rows));
+        empty.setText(rows.isEmpty() ? (deepRunning ? "Searching..." : "No matches.") : "");
+    }
+
+    private Row arcSearchRow(Ent e, int sl) {
+        Row r = new Row();
+        r.key = e.p;
+        r.title = e.p.substring(sl + 1);
+        r.ent = e;
+        r.icon = Thumbs.iconFor(e.p);
+        r.size = Math.max(e.s, 0);
+        r.time = e.m;
+        r.ext = Fmt.ext(r.title);
+        String when = e.m > 0 ? Fmt.date(e.m) : "";
+        String where = sl > 0 ? e.p.substring(0, sl) : "";
+        r.sub = where.isEmpty() ? when : (when.isEmpty() ? where : where + " \u00b7 " + when);
+        r.right = Fmt.size(e.s);
+        return r;
+    }
+
+    private void startDeepSoon(long delay) {
+        if (!searching || query.isEmpty() || arc != null || !deepOn) return;
+        final int g = searchGen;
+        if (pendingSearch != null) ui.removeCallbacks(pendingSearch);
+        pendingSearch = () -> {
+            pendingSearch = null;
+            startDeep(g);
+        };
+        ui.postDelayed(pendingSearch, delay);
+    }
+
+    private void startDeep(final int g) {
+        if (g != searchGen || !searching || app == null || arc != null) return;
+        deepRunning = true;
+        final String path = cwd.getPath(), q = query;
+        final boolean all = showAll, hid = showHidden;
+        if (rows.isEmpty()) {
+            empty.setText("Searching...");
+            updateEmpty();
+        }
+        new Thread(() -> {
+            JSONObject r;
+            try {
+                r = call("search", path, q, all, hid);
+            } catch (Exception e) {
+                r = errObj(String.valueOf(e.getMessage()));
+            }
+            final JSONObject res = r;
+            ui.post(() -> {
+                if (g != searchGen || !searching || arc != null) return;
+                if (res.optBoolean("cancelled")) return;      // a newer search took over
+                deepRunning = false;
+                applyDeep(res);
+            });
+        }).start();
+    }
+
+    private void applyDeep(JSONObject res) {
+        if (!res.optBoolean("ok")) {
+            empty.setText(res.optString("error", "Search failed"));
+            updateEmpty();
+            return;
+        }
+        List<Row> rr = new ArrayList<>();
+        List<Item> ii = new ArrayList<>();
+        parseItems(res, rr, ii);
+        rows.clear();
+        rows.addAll(rr);
+        items.clear();
+        items.addAll(ii);
+        sortRows();
+        sel.retainAll(keysOf(rows));
+        empty.setText("No matches.");
+        if (res.optBoolean("truncated")) toast("Showing the first 1000 matches");
+        refreshList();
+    }
+
+    private void cancelDeep() {
+        final PyObject m = app;
+        if (m == null || !deepRunning) return;
+        new Thread(() -> {
+            try {
+                m.callAttr("search_cancel");
+            } catch (Throwable ignored) {
+            }
+        }).start();
+    }
+
+    private void showKeyboard(final View v) {
+        v.postDelayed(() -> {
+            InputMethodManager m = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (m != null) m.showSoftInput(v, 0);
+        }, 60);
+    }
+
+    private void hideKeyboard() {
+        View v = getCurrentFocus();
+        InputMethodManager m = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (v != null && m != null) m.hideSoftInputFromWindow(v.getWindowToken(), 0);
+    }
+
+    // ------------------------------------------------------------------ bookmarks
+
+    /** The drop-down under the title: home, saved folders, and a button to save or drop this one. */
+    private void showBookmarks() {
+        if (marks != null && marks.isShowing()) {
+            marks.dismiss();
+            return;
+        }
+        if (arc != null || !hasStorage() || !sel.isEmpty()) return;
+        final List<String> saved = Defaults.bookmarks(this);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(6), dp(6), dp(6), dp(6));
+        card.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 18));
+        card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false));
+        for (String bp : saved) {
+            File f = new File(bp);
+            card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true));
+        }
+        if (!cwd.equals(root)) {
+            View d = new View(this);
+            d.setBackgroundColor(Ui.line(this));
+            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+            dl.topMargin = dp(4);
+            dl.bottomMargin = dp(4);
+            card.addView(d, dl);
+            final String here = cwd.getPath();
+            final boolean has = saved.contains(here);
+            card.addView(actionRow(has ? R.drawable.ic_close : R.drawable.ic_add,
+                    has ? "Remove this bookmark" : "Bookmark this folder", () -> {
+                        if (has) {
+                            Defaults.removeBookmark(this, here);
+                            toast("Bookmark removed");
+                        } else {
+                            Defaults.addBookmark(this, here);
+                            toast("Bookmarked " + cwd.getName());
+                        }
+                    }));
+        }
+        Ui.MaxScroll sv = new Ui.MaxScroll(this);
+        sv.addView(card);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(8), dp(2), dp(8), dp(14));       // room for the shadow
+        card.setElevation(dp(8));
+        wrap.addView(sv);
+        int w = Math.min(getResources().getDisplayMetrics().widthPixels - dp(8), dp(360));
+        marks = new PopupWindow(wrap, w, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        marks.setBackgroundDrawable(new ColorDrawable(0));
+        marks.setOutsideTouchable(true);
+        marks.setAnimationStyle(0);
+        marks.showAsDropDown(titleBox, -titleBox.getLeft() - dp(4), 0);
+        if (Defaults.animOn(this)) {
+            wrap.setAlpha(0f);
+            wrap.setScaleY(0.9f);
+            wrap.setPivotX(dp(60));
+            wrap.setPivotY(0f);
+            wrap.animate().alpha(1f).scaleY(1f).setDuration(Defaults.anim(this, 170))
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+        }
+    }
+
+    private View iconTile(int icon) {
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(icon);
+        Ui.tint(iv, Ui.accent(this));
+        iv.setPadding(dp(7), dp(7), dp(7), dp(7));
+        iv.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 10));
+        return iv;
+    }
+
+    private LinearLayout rowBase() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(7), dp(4), dp(7));
+        row.setBackground(Ui.pressable(this, 0, 0, 12));
+        return row;
+    }
+
+    private View markRow(int icon, String name, final String path, boolean removable) {
+        LinearLayout row = rowBase();
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(36), dp(36));
+        ip.rightMargin = dp(12);
+        row.addView(iconTile(icon), ip);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView n = Ui.label(this, name, 15, path.equals(cwd.getPath()), false);
+        if (path.equals(cwd.getPath())) n.setTextColor(Ui.accent(this));
+        n.setSingleLine(true);
+        n.setEllipsize(TextUtils.TruncateAt.END);
+        TextView pt = Ui.label(this, path, 11, false, true);
+        pt.setSingleLine(true);
+        pt.setEllipsize(TextUtils.TruncateAt.START);
+        col.addView(n);
+        col.addView(pt);
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (removable) {
+            ImageButton x = Ui.iconButton(this, R.drawable.ic_close, v -> {
+                Defaults.removeBookmark(this, path);
+                if (marks != null) marks.dismiss();
+                toast("Bookmark removed");
+            });
+            row.addView(x, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        } else {
+            row.addView(new View(this), new LinearLayout.LayoutParams(dp(8), 1));
+        }
+        row.setOnClickListener(v -> {
+            if (marks != null) marks.dismiss();
+            goTo(path);
+        });
+        return row;
+    }
+
+    private View actionRow(int icon, String label, final Runnable r) {
+        LinearLayout row = rowBase();
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(36), dp(36));
+        ip.rightMargin = dp(12);
+        row.addView(iconTile(icon), ip);
+        row.addView(Ui.label(this, label, 15, false, false),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.setOnClickListener(v -> {
+            if (marks != null) marks.dismiss();
+            r.run();
+        });
+        return row;
+    }
+
+    private void goTo(String path) {
+        File f = new File(path);
+        if (!f.isDirectory()) {
+            toast("That folder isn't there any more");
+            return;
+        }
+        if (f.equals(cwd)) return;
+        loadDir(f);
     }
 
     // ------------------------------------------------------------------ Python and permissions
@@ -940,6 +1458,8 @@ public class MainActivity extends Activity {
     private void loadDir(File dir) { loadDir(dir, false); }
 
     private void loadDir(File dir, boolean keepSelection) {
+        boolean moved = arc != null || !dir.equals(cwd);
+        if (searching && moved) closeSearchQuiet();
         cwd = dir;
         arc = null;
         if (!keepSelection) {
@@ -967,6 +1487,12 @@ public class MainActivity extends Activity {
 
     private String lastDir = "";
 
+    private String emptyText() {
+        if (arc != null) return "This folder is empty.";
+        return showAll ? "This folder is empty."
+                : "No Kiln archives here.\nOpen the menu to show all files.";
+    }
+
     private void applyScan(JSONObject r) {
         swipe.setRefreshing(false);
         rows.clear();
@@ -977,6 +1503,27 @@ public class MainActivity extends Activity {
             redraw();
             return;
         }
+        parseItems(r, rows, items);
+        sel.retainAll(keysOf(rows));
+        sortRows();
+        captureSource();
+        empty.setText(emptyText());
+        boolean newDir = !cwd.getPath().equals(lastDir);
+        lastDir = cwd.getPath();
+        if (searching && !query.isEmpty()) {
+            filterLocal();
+            startDeepSoon(0);
+        }
+        if (newDir || forceAnim) {
+            forceAnim = false;
+            redrawAnimated();
+        } else {
+            redraw();
+        }
+    }
+
+    /** Turns scan or search output into rows. Names from a search are paths below the folder. */
+    private void parseItems(JSONObject r, List<Row> outRows, List<Item> outItems) {
         JSONArray arr = r.optJSONArray("items");
         for (int i = 0; arr != null && i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
@@ -988,14 +1535,16 @@ public class MainActivity extends Activity {
             it.mtime = o.optLong("m");
             it.count = o.optInt("c");
             it.enc = o.optBoolean("e");
-            items.add(it);
+            outItems.add(it);
             Row row = new Row();
             row.key = it.name;
-            row.title = it.name;
+            int slash = it.name.lastIndexOf('/');
+            row.title = slash >= 0 ? it.name.substring(slash + 1) : it.name;
             row.item = it;
             row.time = it.mtime;
             row.ext = Fmt.ext(it.name);
             String when = Fmt.date(it.mtime);
+            if (slash > 0) when = it.name.substring(0, slash) + " \u00b7 " + when;   // search hit in a subfolder
             switch (it.kind) {
                 case "dir":
                     row.folder = true;
@@ -1030,17 +1579,8 @@ public class MainActivity extends Activity {
                     row.right = Fmt.size(it.size);
                     break;
             }
-            rows.add(row);
+            outRows.add(row);
         }
-        sel.retainAll(keysOf(rows));
-        sortRows();
-        empty.setText(showAll
-                ? "This folder is empty."
-                : "No Kiln archives here.\nOpen the menu to show all files.");
-        boolean newDir = !cwd.getPath().equals(lastDir);
-        lastDir = cwd.getPath();
-        if (newDir) redrawAnimated();
-        else redraw();
     }
 
     private static Collection<String> keysOf(List<Row> l) {
@@ -1160,6 +1700,7 @@ public class MainActivity extends Activity {
         i.putExtra("path", f.getPath());
         i.putExtra("edit", edit);
         startActivity(i);
+        Ui.noSlideIfOff(this);
     }
 
     private static String mimeOf(File f) {
@@ -1353,7 +1894,7 @@ public class MainActivity extends Activity {
     private void onOpened(final File f, final String pw, JSONObject r, final Runnable after) {
         if (!r.optBoolean("ok")) {
             if (r.optBoolean("need_password") || r.optBoolean("bad_password")) {
-                if (r.optBoolean("bad_password")) toast("Wrong password");
+                if (r.optBoolean("bad_password")) toast("Incorrect password");
                 askPassword(f.getName(), p -> doOpen(f, p, after));
             } else {
                 message("Couldn't open " + f.getName(), r.optString("error", "Unknown error"));
@@ -1377,6 +1918,7 @@ public class MainActivity extends Activity {
             e.m = o.optLong("m");
             a.ents.add(e);
         }
+        closeSearchQuiet();
         arc = a;
         plainSet = false;
         sel.clear();
@@ -1487,7 +2029,9 @@ public class MainActivity extends Activity {
             rows.add(r);
         }
         sortRows();
-        empty.setText("This folder is empty.");
+        captureSource();
+        empty.setText(emptyText());
+        if (searching && !query.isEmpty()) filterLocal();
         redrawAnimated();
     }
 
@@ -2104,7 +2648,7 @@ public class MainActivity extends Activity {
             lv.scheduleLayoutAnimation();
             ad.notifyDataSetChanged();
         };
-        lv.setLayoutAnimation(AnimationUtils.loadLayoutAnimation(this, R.anim.k_row_layout));
+        lv.setLayoutAnimation(Ui.rowAnim(this));
         lv.setOnItemClickListener((av, v, pos, id) -> {
             Pick e = entries.get(pos);
             if (e.type == Pick.FILE) return;

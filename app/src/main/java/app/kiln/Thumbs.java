@@ -123,7 +123,7 @@ final class Thumbs {
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setImageBitmap(b);
         iv.setAlpha(0f);
-        iv.animate().alpha(1f).setDuration(160).start();       // fades in when it arrives
+        iv.animate().alpha(1f).setDuration(Defaults.anim(iv.getContext(), 160)).start();       // fades in when it arrives
     }
 
     private static Bitmap load(File f, int kind, int px) {

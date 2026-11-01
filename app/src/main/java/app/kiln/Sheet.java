@@ -36,7 +36,8 @@ final class Sheet {
 
     private final Activity act;
     private final Dialog dialog;
-    private final FrameLayout screen;       // fills the window; padded by the keyboard
+    private final FrameLayout root;         // fills the whole window; the scrim lives here, unpadded
+    private final FrameLayout screen;       // holds the card; padded by the system bars and keyboard
     private final View scrim;
     private final Card card;
     private final LinearLayout body;
@@ -73,6 +74,7 @@ final class Sheet {
         };
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
+        root = new FrameLayout(a);
         screen = new FrameLayout(a);
         scrim = new View(a);
         scrim.setBackgroundColor(Color.BLACK);
@@ -80,7 +82,13 @@ final class Sheet {
         scrim.setOnClickListener(v -> {
             if (cancelable) dismiss();
         });
-        screen.addView(scrim, new FrameLayout.LayoutParams(
+        screen.setOnClickListener(v -> {                 // a tap beside the card closes it too
+            if (cancelable) dismiss();
+        });
+        // the scrim is a sibling of the padded holder, so the padding can't inset it
+        root.addView(scrim, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(screen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         card = new Card(a);
@@ -248,10 +256,12 @@ final class Sheet {
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         screen.addView(card, cp);
 
-        dialog.setContentView(screen);
+        dialog.setContentView(root);
         Window w = dialog.getWindow();
         w.setBackgroundDrawable(new ColorDrawable(0));
         w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);   // our own scrim does the dimming
+        w.setDimAmount(0f);
         w.setWindowAnimations(0);
         w.setDecorFitsSystemWindows(false);               // we place the card ourselves
         w.setStatusBarColor(Color.TRANSPARENT);
@@ -260,7 +270,7 @@ final class Sheet {
                 | (keyboard ? WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
                 : WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN));
 
-        screen.setOnApplyWindowInsetsListener((v, insets) -> {
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
             android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
             imeBottom = ime.bottom;
@@ -270,7 +280,7 @@ final class Sheet {
             return WindowInsets.CONSUMED;
         });
         // follow the keyboard while it slides, instead of jumping at the end
-        screen.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+        root.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
                 WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
             @Override
             public WindowInsets onProgress(WindowInsets insets, List<WindowInsetsAnimation> running) {
@@ -291,8 +301,8 @@ final class Sheet {
         card.setScaleY(0.92f);
         card.setTranslationY(Ui.dp(act, 14));
         card.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0)
-                .setDuration(200).setInterpolator(new DecelerateInterpolator(1.6f)).start();
-        scrim.animate().alpha(0.5f).setDuration(200).start();
+                .setDuration(Defaults.anim(act, 200)).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+        scrim.animate().alpha(0.5f).setDuration(Defaults.anim(act, 200)).start();
         return this;
     }
 
@@ -303,9 +313,9 @@ final class Sheet {
             hardDismiss();
             return;
         }
-        scrim.animate().alpha(0f).setDuration(140).start();
+        scrim.animate().alpha(0f).setDuration(Defaults.anim(act, 140)).start();
         card.animate().alpha(0f).scaleX(0.95f).scaleY(0.95f).translationY(Ui.dp(act, 8))
-                .setDuration(140).setListener(new AnimatorListenerAdapter() {
+                .setDuration(Defaults.anim(act, 140)).setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator a) { hardDismiss(); }
                 }).start();

@@ -21,6 +21,9 @@
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsFloating">false</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowTranslucentStatus">false</item>
         <item name="android:colorAccent">@color/k_accent</item>
         <item name="android:colorControlActivated">@color/k_accent</item>
         <item name="android:textColorPrimary">@color/k_text</item>

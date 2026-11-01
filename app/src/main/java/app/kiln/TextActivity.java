@@ -363,4 +363,10 @@ public class TextActivity extends Activity {
         });
         s.button("Close", Ui.TEXT, null).show();
     }
+
+    @Override
+    public void finish() {
+        super.finish();
+        Ui.noSlideIfOff(this);
+    }
 }

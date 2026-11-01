@@ -55,3 +55,12 @@ a floating bottom bar, dialogs that follow the keyboard, new folder while copyin
 "Open with" with default apps, Settings, opening .kln files from other apps, and the integrity-check
 fix for unsafe-path errors when the working directory is "/". Build 2 adds editing inside archives
 and custom/fallback scripts.
+
+## Version 3.2
+
+- Modals: the dim layer now covers the whole screen (it used to be inset, which looked like a black border).
+- The list no longer leaves a big gap at the bottom; the "+ New" button slides away while you scroll down and returns when you scroll up.
+- Search (magnifier in the header): filters the list as you type, and also searches subfolders (can be switched off with the "Subfolders" chip or in Settings). Inside an open archive it searches the whole archive.
+- Bookmarks: tap the folder name in the header for a drop-down with Internal storage and your saved folders.
+- Animation speed in Settings (Off / Fast / Normal / Relaxed); the default is a little quicker than before. Pull-down and Refresh replay the row animation.
+- "Wrong password" is now "Incorrect password".

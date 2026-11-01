@@ -92,6 +92,41 @@ public class SettingsActivity extends Activity {
         toggle(a, "Show previews", "Pictures, album art and video frames as icons",
                 Defaults.previews(this), (b, on) -> Defaults.setPreviews(this, on));
 
+        heading("ANIMATIONS");
+        LinearLayout an = card();
+        TextView ad = Ui.label(this, "Speed of slides, fades and pop-ins", 14, false, true);
+        ad.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 8));
+        an.addView(ad);
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        int cur = Defaults.animLevel(this);
+        for (int i = 0; i < Defaults.ANIM_NAMES.length; i++) {
+            final int lv = i;
+            android.widget.Button b = Ui.button(this, Defaults.ANIM_NAMES[i],
+                    i == cur ? Ui.FILLED : Ui.OUTLINE, v -> {
+                        Defaults.setAnimLevel(this, lv);
+                        render();
+                    });
+            b.setMinimumWidth(0);
+            b.setPadding(Ui.dp(this, 4), 0, Ui.dp(this, 4), 0);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) lp.leftMargin = Ui.dp(this, 6);
+            seg.addView(b, lp);
+        }
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sp.bottomMargin = Ui.dp(this, 8);
+        an.addView(seg, sp);
+        TextView note = Ui.label(this, "Off also turns off the slide between screens.", 12, false, true);
+        note.setPadding(0, 0, 0, Ui.dp(this, 8));
+        an.addView(note);
+
+        heading("SEARCH");
+        LinearLayout sc = card();
+        toggle(sc, "Search subfolders", "Search inside folders below the current one, not just the list",
+                Defaults.deepSearch(this), (b, on) -> Defaults.setDeepSearch(this, on));
+
         heading("OPEN FILES WITH");
         LinearLayout d = card();
         Map<String, String> defs = Defaults.all(this);
@@ -125,5 +160,11 @@ public class SettingsActivity extends Activity {
                 render();
             }), rp);
         }
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        Ui.noSlideIfOff(this);
     }
 }

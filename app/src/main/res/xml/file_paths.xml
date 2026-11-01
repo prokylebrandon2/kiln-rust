@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- everything on shared storage, so "Open with..." works for any file -->
+    <external-path name="storage" path="." />
+    <!-- files extracted from an archive for viewing -->
+    <cache-path name="cache" path="." />
+</paths>

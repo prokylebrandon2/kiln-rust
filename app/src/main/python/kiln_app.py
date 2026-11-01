@@ -41,7 +41,7 @@ def _sniff(path):
     return None
 
 
-def scan(path, show_all):
+def scan(path, show_all, show_hidden=False):
     """One folder for the file manager: folders, kiln archives, random-name sets, and (when
     show_all) every other file."""
     try:
@@ -54,10 +54,14 @@ def scan(path, show_all):
             if e.is_dir():
                 st = e.stat()
                 is_set = os.path.isfile(os.path.join(e.path, kiln.INDEX_NAME))
-                if e.name.startswith(".") and not show_all:
+                if e.name.startswith(".") and not show_hidden:
                     continue
+                try:
+                    count = len(os.listdir(e.path))
+                except OSError:
+                    count = 0
                 items.append({"n": e.name, "k": "set" if is_set else "dir",
-                              "s": 0, "m": int(st.st_mtime)})
+                              "s": 0, "m": int(st.st_mtime), "c": count})
             elif e.is_file():
                 st = e.stat()
                 kind, enc = "file", False
@@ -65,6 +69,8 @@ def scan(path, show_all):
                     sn = _sniff(e.path)
                     if sn:
                         kind, enc = sn
+                if e.name.startswith(".") and not show_hidden:
+                    continue
                 if kind == "file" and not show_all:
                     continue
                 items.append({"n": e.name, "k": kind, "s": st.st_size,
@@ -73,7 +79,8 @@ def scan(path, show_all):
             continue
     order = {"dir": 0, "set": 0}
     items.sort(key=lambda i: (order.get(i["k"], 1), i["n"].casefold()))
-    return _j(ok=True, path=path, items=items)
+    return _j(ok=True, path=path, items=items,
+              is_set=os.path.isfile(os.path.join(path, kiln.INDEX_NAME)))
 
 
 # ---------------------------------------------------------------- opening
@@ -236,3 +243,240 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, progress):
                 except OSError:
                     pass
     return res
+
+
+# ---------------------------------------------------------------- plain file operations
+# Copy, move and delete for ordinary files and folders (not archives). Policies for a name that
+# already exists at the destination: "replace", "skip", or "keep" (store the new one as "name (1)").
+
+_CHUNK = 1 << 20
+
+
+class _Job:
+    def __init__(self, progress, total):
+        self.progress, self.total = progress, total
+        self.done = self.skipped = 0
+        self.errors = []
+        self.last = 0.0
+
+    def check(self):
+        if self.progress is not None and self.progress.cancelled():
+            raise bridge.Cancelled()
+
+    def tick(self, name, force=False):
+        if self.progress is None:
+            return
+        now = time.time()
+        if not force and now - self.last < 0.05:
+            return
+        self.last = now
+        frac = min(self.done / self.total, 1.0) if self.total else -1
+        self.progress.event(_j(frac=frac, done=self.done, total=self.total, file=name))
+
+
+def _count(paths):
+    n = 0
+    for p in paths:
+        if os.path.isdir(p) and not os.path.islink(p):
+            for _r, _d, files in os.walk(p):
+                n += max(len(files), 0)
+            n = max(n, 1)
+        else:
+            n += 1
+    return n
+
+
+def _unique(path):
+    """'a/b.txt' -> 'a/b (1).txt' (first free number)."""
+    root, ext = os.path.splitext(path)
+    if os.path.isdir(path) and not ext:
+        pass
+    i = 1
+    while True:
+        cand = f"{root} ({i}){ext}"
+        if not os.path.lexists(cand):
+            return cand
+        i += 1
+
+
+def _inside(child, parent):
+    c, p = os.path.realpath(child), os.path.realpath(parent)
+    return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
+
+
+def fs_plan(srcs_json, dest, move):
+    """Check a copy/move before running it. -> {ok, conflicts: [names], error}"""
+    srcs = json.loads(srcs_json)
+    if not os.path.isdir(dest):
+        return _j(ok=False, error="the destination folder doesn't exist")
+    conflicts = []
+    for s in srcs:
+        if not os.path.lexists(s):
+            return _j(ok=False, error=f"{os.path.basename(s)} no longer exists")
+        if os.path.isdir(s) and _inside(dest, s):
+            return _j(ok=False, error=f"can't put \"{os.path.basename(s)}\" inside itself")
+        target = os.path.join(dest, os.path.basename(s))
+        same = os.path.abspath(os.path.dirname(s)) == os.path.abspath(dest)
+        if same and move:
+            return _j(ok=False, error="the items are already in this folder")
+        if same:
+            continue                    # copying into the same folder always makes "name (1)"
+        if os.path.lexists(target):
+            conflicts.append(os.path.basename(s))
+    return _j(ok=True, conflicts=conflicts)
+
+
+def _copy_file(src, dst, job):
+    tmp = dst + ".kilntmp"
+    try:
+        with open(src, "rb") as fi, open(tmp, "wb") as fo:
+            while True:
+                job.check()
+                buf = fi.read(_CHUNK)
+                if not buf:
+                    break
+                fo.write(buf)
+        try:
+            shutil.copystat(src, tmp)
+        except OSError:
+            pass
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _put(src, dst, move, policy, job):
+    """Copy or move one file or folder src to the exact path dst."""
+    job.check()
+    name = os.path.basename(src)
+    if os.path.islink(src) or not os.path.isdir(src):
+        if os.path.lexists(dst):
+            if os.path.isdir(dst) and not os.path.islink(dst):
+                if policy == "replace":
+                    shutil.rmtree(dst)
+                elif policy == "skip":
+                    job.skipped += 1
+                    job.done += 1
+                    return
+                else:
+                    dst = _unique(dst)
+            elif policy == "skip":
+                job.skipped += 1
+                job.done += 1
+                return
+            elif policy == "keep":
+                dst = _unique(dst)
+        try:
+            if move:
+                try:
+                    os.replace(src, dst)
+                except OSError:
+                    _copy_file(src, dst, job)
+                    os.remove(src)
+            elif os.path.islink(src):
+                os.symlink(os.readlink(src), dst)
+            else:
+                _copy_file(src, dst, job)
+        except bridge.Cancelled:
+            raise
+        except OSError as e:
+            job.errors.append(f"{name}: {e.strerror or e}")
+        job.done += 1
+        job.tick(name)
+        return
+    # a folder
+    if os.path.lexists(dst) and not os.path.isdir(dst):
+        if policy == "replace":
+            os.remove(dst)
+        elif policy == "skip":
+            job.skipped += _count([src])
+            job.done += _count([src])
+            return
+        else:
+            dst = _unique(dst)
+    if move and not os.path.lexists(dst):
+        try:
+            n = _count([src])
+            os.rename(src, dst)         # same filesystem: instant
+            job.done += n
+            job.tick(name, True)
+            return
+        except OSError:
+            pass
+    os.makedirs(dst, exist_ok=True)
+    for child in sorted(os.listdir(src)):
+        _put(os.path.join(src, child), os.path.join(dst, child), move, policy, job)
+    if move:
+        try:
+            os.rmdir(src)               # only succeeds when nothing was skipped
+        except OSError:
+            pass
+    try:
+        shutil.copystat(src, dst)
+    except OSError:
+        pass
+
+
+def fs_transfer(srcs_json, dest, move, policy, progress):
+    srcs = json.loads(srcs_json)
+    pl = json.loads(fs_plan(srcs_json, dest, move))
+    if not pl["ok"]:
+        return _j(ok=False, message=pl["error"])
+    job = _Job(progress, _count(srcs))
+    try:
+        for s in srcs:
+            name = os.path.basename(s)
+            target = os.path.join(dest, name)
+            same = os.path.abspath(os.path.dirname(s)) == os.path.abspath(dest)
+            if same:                    # duplicate in place
+                target = _unique(target)
+            _put(s, target, move, policy, job)
+    except bridge.Cancelled:
+        return _j(ok=False, cancelled=True, message="Cancelled")
+    verb = "Moved" if move else "Copied"
+    msg = f"{verb} {job.done - job.skipped} file(s)"
+    if job.skipped:
+        msg += f", skipped {job.skipped}"
+    if job.errors:
+        msg += f"; {len(job.errors)} failed:\n" + "\n".join(job.errors[:5])
+    job.tick("", True)
+    return _j(ok=not job.errors, message=msg, done=job.done, skipped=job.skipped)
+
+
+def fs_delete(paths_json, progress):
+    paths = json.loads(paths_json)
+    job = _Job(progress, _count(paths))
+    try:
+        for p in paths:
+            job.check()
+            try:
+                if os.path.isdir(p) and not os.path.islink(p):
+                    for root, dirs, files in os.walk(p, topdown=False):
+                        for f in files:
+                            job.check()
+                            os.remove(os.path.join(root, f))
+                            job.done += 1
+                            job.tick(f)
+                        for d in dirs:
+                            dp = os.path.join(root, d)
+                            if os.path.islink(dp):
+                                os.remove(dp)
+                            else:
+                                os.rmdir(dp)
+                    os.rmdir(p)
+                else:
+                    os.remove(p)
+                    job.done += 1
+                    job.tick(os.path.basename(p))
+            except OSError as e:
+                job.errors.append(f"{os.path.basename(p)}: {e.strerror or e}")
+    except bridge.Cancelled:
+        return _j(ok=False, cancelled=True, message="Cancelled")
+    msg = f"Deleted {job.done} file(s)"
+    if job.errors:
+        msg += f"; {len(job.errors)} failed:\n" + "\n".join(job.errors[:5])
+    return _j(ok=not job.errors, message=msg)

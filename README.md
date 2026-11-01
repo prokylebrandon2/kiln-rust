@@ -32,3 +32,15 @@ helper, so it does not need Termux, and it reads and writes the same archives.
 * Needs Android 11 or newer. Only shared storage is visible, not Termux's private home.
 * Pack runs on one core: worker processes are not safe inside an Android app.
 * Each unlock re-derives the key (a few seconds on a phone), exactly like the command line.
+
+## Version 3.0 (build 1 of 2)
+
+- New flat look that follows the system light/dark setting; no animations; bottom-sheet dialogs.
+- Sort by name, size, date or type (ascending/descending, remembered). Sizes on every row.
+- Works on any file: copy, move (with Replace / Skip / Keep both), delete, rename, new folder / text file.
+- Tapping a file offers "View in Kiln", "Edit in Kiln", or Android's "Open with / Edit with" chooser.
+- Kiln's text viewer/editor: search, wrap, text size, Save / Discard / Keep editing.
+- Random-name sets can be browsed as a plain folder (menu: "Browse as plain folder").
+- Needs `androidx.core` (FileProvider) - already in app/build.gradle.
+
+Build 2 will add editing inside archives, Settings, and custom/fallback scripts.

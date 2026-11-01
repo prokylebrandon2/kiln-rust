@@ -2,6 +2,7 @@
 
 Everything here is testable without Android. The Java side passes a `progress` object with
 event(json) and cancelled(); None is fine too."""
+import concurrent.futures
 import fnmatch
 import glob
 import json
@@ -28,12 +29,18 @@ def version():
 # ---------------------------------------------------------------- browsing
 
 def _sniff(path):
-    """-> ('archive', encrypted) | ('old', False) | None, from the first bytes of a file."""
+    """-> ('archive', encrypted) | ('old', False) | None, from the first bytes of a file.
+    Reads straight from the descriptor: a buffered open() would pull in a whole 8 KB block."""
     try:
-        with open(path, "rb") as f:
-            head = f.read(5)
+        fd = os.open(path, os.O_RDONLY)
     except OSError:
         return None
+    try:
+        head = os.read(fd, 5)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
     if head[:4] == _MAGIC and len(head) == 5:
         return "archive", bool(head[4] & kiln.FLAG_ENCRYPTED)
     if head[:4] in (b"KLN9", b"KLN2"):
@@ -41,42 +48,54 @@ def _sniff(path):
     return None
 
 
+_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+_PARALLEL_FROM = 24         # fewer entries than this: not worth handing out
+
+
+def _entry(e, show_all, show_hidden):
+    """One folder entry -> its row for the file manager, or None to leave it out."""
+    try:
+        hidden = e.name.startswith(".")
+        if hidden and not show_hidden:
+            return None
+        if e.is_dir():
+            st = e.stat()
+            is_set = os.path.isfile(os.path.join(e.path, kiln.INDEX_NAME))
+            try:
+                count = len(os.listdir(e.path))
+            except OSError:
+                count = 0
+            return {"n": e.name, "k": "set" if is_set else "dir",
+                    "s": 0, "m": int(st.st_mtime), "c": count}
+        if e.is_file():
+            st = e.stat()
+            kind, enc = "file", False
+            if st.st_size >= _MIN_ARCHIVE:
+                sn = _sniff(e.path)
+                if sn:
+                    kind, enc = sn
+            if kind == "file" and not show_all:
+                return None
+            return {"n": e.name, "k": kind, "s": st.st_size,
+                    "m": int(st.st_mtime), "e": enc}
+    except OSError:
+        pass
+    return None
+
+
 def scan(path, show_all, show_hidden=False):
     """One folder for the file manager: folders, kiln archives, random-name sets, and (when
-    show_all) every other file."""
+    show_all) every other file. Every entry is looked at on its own, so big folders are
+    read by several threads at once (the work is waiting on storage, not on the CPU)."""
     try:
         entries = list(os.scandir(path))
     except OSError as e:
         return _j(ok=False, error=f"can't open {path}: {e.strerror or e}")
-    items = []
-    for e in entries:
-        try:
-            if e.is_dir():
-                st = e.stat()
-                is_set = os.path.isfile(os.path.join(e.path, kiln.INDEX_NAME))
-                if e.name.startswith(".") and not show_hidden:
-                    continue
-                try:
-                    count = len(os.listdir(e.path))
-                except OSError:
-                    count = 0
-                items.append({"n": e.name, "k": "set" if is_set else "dir",
-                              "s": 0, "m": int(st.st_mtime), "c": count})
-            elif e.is_file():
-                st = e.stat()
-                kind, enc = "file", False
-                if st.st_size >= _MIN_ARCHIVE:
-                    sn = _sniff(e.path)
-                    if sn:
-                        kind, enc = sn
-                if e.name.startswith(".") and not show_hidden:
-                    continue
-                if kind == "file" and not show_all:
-                    continue
-                items.append({"n": e.name, "k": kind, "s": st.st_size,
-                              "m": int(st.st_mtime), "e": enc})
-        except OSError:
-            continue
+    if len(entries) < _PARALLEL_FROM:
+        found = [_entry(e, show_all, show_hidden) for e in entries]
+    else:
+        found = list(_POOL.map(lambda e: _entry(e, show_all, show_hidden), entries))
+    items = [i for i in found if i is not None]
     order = {"dir": 0, "set": 0}
     items.sort(key=lambda i: (order.get(i["k"], 1), i["n"].casefold()))
     return _j(ok=True, path=path, items=items,

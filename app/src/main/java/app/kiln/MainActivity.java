@@ -639,15 +639,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** A very short fade when another folder is shown. No sliding, so nothing moves up or down. */
-    private void softFade() {
-        list.animate().cancel();
-        if (!Defaults.animOn(this)) {
-            list.setAlpha(1f);
-            return;
-        }
-        list.setAlpha(0.45f);
-        list.animate().alpha(1f).setDuration(Defaults.anim(this, 150)).start();
+    /**
+     * The rows slide in, once. The animation is attached for a single draw and removed again
+     * right after it, so later layout passes (selection, thumbnails, a rescan) never replay it.
+     * Call after the list's data has changed.
+     */
+    private void playRows() {
+        android.view.animation.LayoutAnimationController c = Ui.rowAnim(this);   // null: animations off
+        list.setLayoutAnimation(c);
+        if (c == null) return;
+        list.scheduleLayoutAnimation();
+        list.post(() -> list.setLayoutAnimation(null));
     }
 
     private Row upRow;
@@ -1509,27 +1511,50 @@ public class MainActivity extends Activity {
 
     private void loadDir(File dir, boolean keepSelection) {
         boolean moved = arc != null || !dir.equals(cwd);
+        if (moved && arc == null) rememberScroll();           // so Back returns to the same spot
+        boolean goingUp = moved && arc == null && dir.equals(cwd.getParentFile());
         if (searching && moved) closeSearchQuiet();
-        // Like a stock file manager: the rows already on screen stay until the new ones arrive,
-        // then they're swapped in place. Nothing blanks out and nothing slides.
-        if (!rows.isEmpty()) upFrozen = upShown();            // the ".." row doesn't flicker meanwhile
+        // A folder seen before is shown at once from memory and rescanned quietly behind it,
+        // so going Back never waits for the scan. Otherwise the rows already on screen stay
+        // until the new ones arrive.
+        final Snap snap = moved ? snaps.get(snapKey(dir)) : null;
+        if (snap == null && !rows.isEmpty()) upFrozen = upShown();   // the \"..\" row doesn't flicker meanwhile
         cwd = dir;
         arc = null;
         final int gen = ++loadGen;
-        dirPending = true;
+        dirPending = snap == null;
         if (!keepSelection) sel.clear();
-        if (rows.isEmpty()) {
-            empty.setText("");                                // "Loading..." only if it's slow
-            final String waiting = dir.getPath();
-            ui.postDelayed(() -> {
-                if (dirPending && gen == loadGen && rows.isEmpty() && cwd.getPath().equals(waiting)
-                        && empty.getText().length() == 0) {
-                    empty.setText("Loading...");
-                    updateEmpty();
-                }
-            }, 700);
+        if (snap != null) {
+            upFrozen = null;
+            plainSet = snap.plainSet;
+            rows.clear();
+            rows.addAll(snap.rows);
+            items.clear();
+            items.addAll(snap.items);
+            sortRows();
+            captureSource();
+            empty.setText(emptyText());
+            shownSig = snap.sig;
+            lastDir = dir.getPath();
+            if (goingUp) list.setSelectionFromTop(snap.first, snap.top);
+            else list.setSelectionFromTop(0, 0);
+            redraw();
+            playRows();
+        } else {
+            if (moved) shownSig = null;                       // what's on screen isn't this folder
+            if (rows.isEmpty()) {
+                empty.setText("");                            // "Loading..." only if it's slow
+                final String waiting = dir.getPath();
+                ui.postDelayed(() -> {
+                    if (dirPending && gen == loadGen && rows.isEmpty() && cwd.getPath().equals(waiting)
+                            && empty.getText().length() == 0) {
+                        empty.setText("Loading...");
+                        updateEmpty();
+                    }
+                }, 700);
+            }
+            redraw();
         }
-        redraw();
         final String path = dir.getPath();
         final boolean all = showAll, hidden = showHidden;
         new Thread(() -> {
@@ -1555,6 +1580,45 @@ public class MainActivity extends Activity {
 
     private String lastDir = "";
 
+    // ---- folders seen before, kept in memory so Back is instant
+
+    private static final class Snap {
+        List<Row> rows;
+        List<Item> items;
+        boolean plainSet;
+        String sig;
+        int first, top;                                        // where the list was scrolled to
+    }
+
+    private final java.util.LinkedHashMap<String, Snap> snaps =
+            new java.util.LinkedHashMap<String, Snap>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Snap> e) {
+                    return size() > 24;
+                }
+            };
+    private String shownSig;                                   // what the rows on screen were built from
+
+    private String snapKey(File dir) { return dir.getPath() + "|" + showAll + "|" + showHidden; }
+
+    private void rememberScroll() {
+        if (searching || dirPending || shownSig == null) return;
+        Snap s = snaps.get(snapKey(cwd));
+        if (s == null) return;
+        s.first = list.getFirstVisiblePosition();
+        View c = list.getChildAt(0);
+        s.top = c == null ? 0 : c.getTop() - list.getPaddingTop();
+    }
+
+    private static String sigOf(List<Item> its, boolean set) {
+        StringBuilder b = new StringBuilder(its.size() * 40).append(set).append('\n');
+        for (Item it : its) {
+            b.append(it.name).append('|').append(it.kind).append('|').append(it.size).append('|')
+                    .append(it.mtime).append('|').append(it.count).append('|').append(it.enc).append('\n');
+        }
+        return b.toString();
+    }
+
     private String emptyText() {
         if (arc != null) return "This folder is empty.";
         return showAll ? "This folder is empty."
@@ -1567,6 +1631,7 @@ public class MainActivity extends Activity {
         items.clear();
         plainSet = r.optBoolean("is_set");
         if (!r.optBoolean("ok")) {
+            shownSig = null;
             empty.setText(r.optString("error", "Couldn't read this folder"));
             redraw();
             return;
@@ -1578,18 +1643,28 @@ public class MainActivity extends Activity {
         empty.setText(emptyText());
         boolean newDir = !cwd.getPath().equals(lastDir);
         lastDir = cwd.getPath();
+        boolean replay = newDir || forceAnim;                  // a new folder, or Refresh: slide the rows in
+        forceAnim = false;
+        String sig = sigOf(items, plainSet);
+        boolean same = !replay && sig.equals(shownSig) && !(searching && !query.isEmpty());
+        shownSig = sig;
+        Snap sn = snaps.get(snapKey(cwd));
+        if (sn == null) {
+            sn = new Snap();
+            snaps.put(snapKey(cwd), sn);
+        }
+        sn.rows = new ArrayList<>(srcRows);
+        sn.items = new ArrayList<>(srcItems);
+        sn.plainSet = plainSet;
+        sn.sig = sig;
+        if (same) return;                                      // nothing changed: leave the list alone
         if (searching && !query.isEmpty()) {
             filterLocal();
             startDeepSoon(0);
         }
-        forceAnim = false;
-        if (newDir) {
-            list.setSelectionFromTop(0, 0);                      // a new folder always starts at the top
-            redraw();
-            softFade();
-        } else {
-            redraw();                                            // a refresh just updates in place
-        }
+        if (newDir) list.setSelectionFromTop(0, 0);            // a new folder always starts at the top
+        redraw();
+        if (replay) playRows();
     }
 
     /** Turns scan or search output into rows. Names from a search are paths below the folder. */

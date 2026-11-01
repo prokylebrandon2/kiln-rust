@@ -44,7 +44,9 @@ final class Sheet {
     private final Ui.MaxScroll scroll;
     private final List<Button> buttons = new ArrayList<>();
     private boolean keyboard, cancelable = true, closing;
-    private int imeBottom, navBottom, statusTop, naturalH;
+    private int imeBottom, navBottom, statusTop;
+    private boolean insetsSeen;
+    private android.animation.ObjectAnimator glide;
     private Runnable onClose;
 
     /** The card measures itself so it never grows taller than the room above the keyboard. */
@@ -55,7 +57,6 @@ final class Sheet {
         protected void onMeasure(int w, int h) {
             scroll.limit = -1;
             super.onMeasure(w, h);
-            naturalH = getMeasuredHeight();
             int avail = MeasureSpec.getSize(h);
             int over = getMeasuredHeight() - avail;
             if (avail > 0 && over > 0) {
@@ -261,28 +262,26 @@ final class Sheet {
 
     // ---- showing
 
+    private int bottomPad() { return Math.max(imeBottom, navBottom) + Ui.dp(act, 12); }
+
     private void applyInsets() {
-        int extra = (imeBottom > 0 && !keyboard) ? Ui.dp(act, 16) : 0;
         int side = Ui.dp(act, 20);
-        int padTop = statusTop + Ui.dp(act, 12);
-        int padBottom = Math.max(imeBottom, navBottom) + Ui.dp(act, 12) + extra;
-        screen.setPadding(side, padTop, side, padBottom);
-        if (keyboard) {
-            // A modal with a text box sits at its final height from the very first frame, so the
-            // keyboard sliding up doesn't drag it from the middle of the screen. It only moves
-            // when the keyboard would otherwise cover it.
-            int h = root.getHeight() > 0 ? root.getHeight()
-                    : act.getResources().getDisplayMetrics().heightPixels;
-            int availH = h - padTop - padBottom;
-            int want = (int) (h * 0.22f) - padTop;
-            int top = naturalH > 0 ? Math.min(want, availH - naturalH) : want;
-            top = Math.max(0, top);
-            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
-            if (lp != null && lp.topMargin != top) {
-                lp.topMargin = top;
-                card.setLayoutParams(lp);
-            }
-        }
+        screen.setPadding(side, statusTop + Ui.dp(act, 12), side, bottomPad());
+    }
+
+    /**
+     * The card always sits centred in the room above the keyboard. When the keyboard comes or goes
+     * the layout moves at once, and the picture glides there in a single smooth movement, the way a
+     * stock dialog does, instead of snapping or trailing the keyboard.
+     */
+    private void glideBy(float layoutShift) {
+        float from = screen.getTranslationY() + layoutShift;
+        if (glide != null) glide.cancel();
+        screen.setTranslationY(from);
+        glide = android.animation.ObjectAnimator.ofFloat(screen, View.TRANSLATION_Y, from, 0f);
+        glide.setDuration(Defaults.anim(act, 260));
+        glide.setInterpolator(new DecelerateInterpolator(1.8f));
+        glide.start();
     }
 
     Sheet show() {
@@ -311,14 +310,8 @@ final class Sheet {
         int width = Math.min(screenW - Ui.dp(act, 40), Ui.dp(act, 460));
         FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(width,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                keyboard ? (Gravity.TOP | Gravity.CENTER_HORIZONTAL) : Gravity.CENTER);
+                Gravity.CENTER);
         screen.addView(card, cp);
-        if (keyboard) {
-            applyInsets();                                 // right place before the first frame
-            card.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-                if (b - t != ob - ot) applyInsets();       // now we know how tall it really is
-            });
-        }
 
         dialog.setContentView(root);
         Window w = dialog.getWindow();
@@ -337,21 +330,15 @@ final class Sheet {
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+            int before = bottomPad();
             imeBottom = ime.bottom;
             navBottom = bars.bottom;
             statusTop = bars.top;
+            int after = bottomPad();
             applyInsets();
+            if (insetsSeen && after != before && !closing) glideBy((after - before) / 2f);
+            insetsSeen = true;
             return WindowInsets.CONSUMED;
-        });
-        // follow the keyboard while it slides, instead of jumping at the end
-        root.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
-                WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
-            @Override
-            public WindowInsets onProgress(WindowInsets insets, List<WindowInsetsAnimation> running) {
-                imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
-                applyInsets();
-                return insets;
-            }
         });
 
         dialog.setOnDismissListener(d -> {
@@ -363,8 +350,7 @@ final class Sheet {
         card.setAlpha(0f);
         card.setScaleX(0.92f);
         card.setScaleY(0.92f);
-        card.setTranslationY(Ui.dp(act, 14));
-        card.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0)
+        card.animate().alpha(1f).scaleX(1f).scaleY(1f)
                 .setDuration(Defaults.anim(act, 200)).setInterpolator(new DecelerateInterpolator(1.6f)).start();
         scrim.animate().alpha(0.5f).setDuration(Defaults.anim(act, 200)).start();
         return this;
@@ -378,7 +364,7 @@ final class Sheet {
             return;
         }
         scrim.animate().alpha(0f).setDuration(Defaults.anim(act, 140)).start();
-        card.animate().alpha(0f).scaleX(0.95f).scaleY(0.95f).translationY(Ui.dp(act, 8))
+        card.animate().alpha(0f).scaleX(0.95f).scaleY(0.95f)
                 .setDuration(Defaults.anim(act, 140)).setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator a) { hardDismiss(); }

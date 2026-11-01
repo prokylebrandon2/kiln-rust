@@ -445,6 +445,7 @@ public class MainActivity extends Activity {
         });
         list.setOnItemClickListener((av, v, pos, id) -> onRowClick(pos));
         list.setOnItemLongClickListener((av, v, pos, id) -> {
+            if (dirPending) return true;
             int i = pos - off();
             if (i >= 0 && i < rows.size()) toggle(rows.get(i).key);
             return true;
@@ -542,6 +543,7 @@ public class MainActivity extends Activity {
 
     /** The ".." row shows when there's somewhere to go up to. */
     private boolean upShown() {
+        if (upFrozen != null) return upFrozen;
         return upRowOn && (arc != null || !cwd.equals(root)) && hasStorage()
                 && !(searching && !query.isEmpty());
     }
@@ -633,45 +635,19 @@ public class MainActivity extends Activity {
             } else {
                 v.bind(r, sel.contains(r.key));
             }
-            animateIn(v, i);
             return v;
         }
     }
 
-    // Rows slide in by themselves, once per load. (The ListView's own layout animation replays on
-    // every layout pass, which made a folder start low and then jump while it was still settling.)
-    private int rowGen;
-    private long rowWindowEnd;
-    private boolean rowSoft;                                   // a refresh of the same folder: lighter
-    private final java.util.HashSet<Integer> rowDone = new java.util.HashSet<>();
-
-    private void startRowAnim(boolean soft) {
-        rowGen++;
-        rowSoft = soft;
-        rowDone.clear();
-        rowWindowEnd = Defaults.animOn(this) ? android.os.SystemClock.uptimeMillis() + 350 : 0;
-    }
-
-    private void animateIn(View v, int pos) {
-        final int token = (rowGen << 10) | (pos & 1023);
-        Object cur = v.getTag(R.id.k_row_token);
-        boolean live = cur instanceof Integer && (Integer) cur == token;
-        boolean inWindow = rowWindowEnd > android.os.SystemClock.uptimeMillis() && pos < 14;
-        if (live) return;                                      // already sliding for this position
-        v.animate().cancel();
-        v.setAlpha(1f);
-        v.setTranslationY(0f);
-        v.setTag(R.id.k_row_token, token);
-        if (!inWindow || rowDone.contains(pos)) return;        // later passes show the finished row
-        rowDone.add(pos);
-        // a new folder fades up from nothing; a refresh of the same folder only dips and settles,
-        // so the list never goes blank
-        v.setAlpha(rowSoft ? 0.55f : 0f);
-        v.setTranslationY(dp(rowSoft ? 5 : 10));
-        v.animate().alpha(1f).translationY(0f)
-                .setStartDelay(Defaults.anim(this, (rowSoft ? 12L : 22L) * pos))
-                .setDuration(Defaults.anim(this, rowSoft ? 180 : 230))
-                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+    /** A very short fade when another folder is shown. No sliding, so nothing moves up or down. */
+    private void softFade() {
+        list.animate().cancel();
+        if (!Defaults.animOn(this)) {
+            list.setAlpha(1f);
+            return;
+        }
+        list.setAlpha(0.45f);
+        list.animate().alpha(1f).setDuration(Defaults.anim(this, 150)).start();
     }
 
     private Row upRow;
@@ -695,14 +671,6 @@ public class MainActivity extends Activity {
         adapter.notifyDataSetChanged();
         updateEmpty();
         renderHeader();
-    }
-
-    /** Same as redraw(), and the rows slide in. Used when a different folder is shown. */
-    private void redrawAnimated() { redrawAnimated(false); }
-
-    private void redrawAnimated(boolean soft) {
-        startRowAnim(soft);
-        redraw();
     }
 
     private void updateEmpty() {
@@ -1542,18 +1510,22 @@ public class MainActivity extends Activity {
     private void loadDir(File dir, boolean keepSelection) {
         boolean moved = arc != null || !dir.equals(cwd);
         if (searching && moved) closeSearchQuiet();
+        // Like a stock file manager: the rows already on screen stay until the new ones arrive,
+        // then they're swapped in place. Nothing blanks out and nothing slides.
+        if (!rows.isEmpty()) upFrozen = upShown();            // the ".." row doesn't flicker meanwhile
         cwd = dir;
         arc = null;
-        if (!keepSelection) {
-            sel.clear();
-            rows.clear();
-            items.clear();
-            empty.setText("");                              // blank at first; "Loading..." only if it's slow
+        final int gen = ++loadGen;
+        dirPending = true;
+        if (!keepSelection) sel.clear();
+        if (rows.isEmpty()) {
+            empty.setText("");                                // "Loading..." only if it's slow
             final String waiting = dir.getPath();
             ui.postDelayed(() -> {
-                if (rows.isEmpty() && cwd.getPath().equals(waiting) && arc == null
+                if (dirPending && gen == loadGen && rows.isEmpty() && cwd.getPath().equals(waiting)
                         && empty.getText().length() == 0) {
                     empty.setText("Loading...");
+                    updateEmpty();
                 }
             }, 700);
         }
@@ -1569,10 +1541,17 @@ public class MainActivity extends Activity {
             }
             final JSONObject res = r;
             ui.post(() -> {
-                if (arc == null && cwd.getPath().equals(path)) applyScan(res);
+                if (gen != loadGen || arc != null || !cwd.getPath().equals(path)) return;
+                dirPending = false;
+                upFrozen = null;
+                applyScan(res);
             });
         }).start();
     }
+
+    private int loadGen;
+    private boolean dirPending;                                // a folder is loading: rows are the old ones
+    private Boolean upFrozen;
 
     private String lastDir = "";
 
@@ -1603,12 +1582,13 @@ public class MainActivity extends Activity {
             filterLocal();
             startDeepSoon(0);
         }
-        if (newDir || forceAnim) {
-            if (newDir) list.setSelectionFromTop(0, 0);          // a new folder always starts at the top
-            forceAnim = false;
-            redrawAnimated(!newDir);
-        } else {
+        forceAnim = false;
+        if (newDir) {
+            list.setSelectionFromTop(0, 0);                      // a new folder always starts at the top
             redraw();
+            softFade();
+        } else {
+            redraw();                                            // a refresh just updates in place
         }
     }
 
@@ -1685,6 +1665,7 @@ public class MainActivity extends Activity {
     }
 
     private void onRowClick(int pos) {
+        if (dirPending) return;                              // still showing the previous folder
         Row r = rowAt(pos);
         if (r == null) {                                     // the ".." row
             if (sel.isEmpty()) onBackPressed();
@@ -2055,6 +2036,9 @@ public class MainActivity extends Activity {
     }
 
     private void buildArcRows() {
+        dirPending = false;                                   // an archive view replaces any folder load
+        upFrozen = null;
+        loadGen++;
         rows.clear();
         String prefix = arc.prefix;
         Map<String, long[]> dirs = new HashMap<>();
@@ -2107,7 +2091,7 @@ public class MainActivity extends Activity {
         captureSource();
         empty.setText(emptyText());
         if (searching && !query.isEmpty()) filterLocal();
-        redrawAnimated();
+        redraw();
     }
 
     // ------------------------------------------------------------------ progress and jobs

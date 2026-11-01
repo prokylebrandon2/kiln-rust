@@ -189,6 +189,45 @@ final class Sheet {
         return this;
     }
 
+    /** A radio-button row. Picking it closes the sheet, then runs the action. */
+    Sheet radio(String label, String detail, boolean selected, final Runnable action) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Ui.dp(act, 8), Ui.dp(act, 12), Ui.dp(act, 8), Ui.dp(act, 12));
+        row.setBackground(Ui.pressable(act, 0, 0, 12));
+        View dot = new View(act);
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setColor(Color.TRANSPARENT);
+        ring.setStroke(Ui.dp(act, 2), selected ? Ui.accent(act) : Ui.line(act));
+        GradientDrawable core = new GradientDrawable();
+        core.setShape(GradientDrawable.OVAL);
+        core.setColor(selected ? Ui.accent(act) : Color.TRANSPARENT);
+        int in = Ui.dp(act, 5);
+        android.graphics.drawable.LayerDrawable ld =
+                new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{ring, core});
+        ld.setLayerInset(1, in, in, in, in);
+        dot.setBackground(ld);
+        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(Ui.dp(act, 22), Ui.dp(act, 22));
+        dp.rightMargin = Ui.dp(act, 14);
+        row.addView(dot, dp);
+        LinearLayout col = new LinearLayout(act);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(act, label, 16, false, false));
+        if (detail != null && !detail.isEmpty()) col.addView(Ui.label(act, detail, 12, false, true));
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.setOnClickListener(v -> {
+            dismiss();
+            if (action != null) action.run();
+        });
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rp.bottomMargin = Ui.dp(act, 2);
+        body.addView(row, rp);
+        return this;
+    }
+
     /** A thin divider line between groups of options. */
     Sheet divider() {
         View v = new View(act);

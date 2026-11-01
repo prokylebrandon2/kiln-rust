@@ -417,7 +417,6 @@ public class MainActivity extends Activity {
         list.setSelector(android.R.color.transparent);
         list.setClipToPadding(false);
         list.setPadding(0, 0, 0, dp(10));                 // grows only while a bar or the keyboard is up
-        list.setLayoutAnimation(Ui.rowAnim(this));
         adapter = new RowAdapter();
         list.setAdapter(adapter);
         list.setOnScrollListener(new AbsListView.OnScrollListener() {
@@ -634,8 +633,41 @@ public class MainActivity extends Activity {
             } else {
                 v.bind(r, sel.contains(r.key));
             }
+            animateIn(v, i);
             return v;
         }
+    }
+
+    // Rows slide in by themselves, once per load. (The ListView's own layout animation replays on
+    // every layout pass, which made a folder start low and then jump while it was still settling.)
+    private int rowGen;
+    private long rowWindowEnd;
+    private final java.util.HashSet<Integer> rowDone = new java.util.HashSet<>();
+
+    private void startRowAnim() {
+        rowGen++;
+        rowDone.clear();
+        rowWindowEnd = Defaults.animOn(this) ? android.os.SystemClock.uptimeMillis() + 350 : 0;
+    }
+
+    private void animateIn(View v, int pos) {
+        final int token = (rowGen << 10) | (pos & 1023);
+        Object cur = v.getTag(R.id.k_row_token);
+        boolean live = cur instanceof Integer && (Integer) cur == token;
+        boolean inWindow = rowWindowEnd > android.os.SystemClock.uptimeMillis() && pos < 14;
+        if (live) return;                                      // already sliding for this position
+        v.animate().cancel();
+        v.setAlpha(1f);
+        v.setTranslationY(0f);
+        v.setTag(R.id.k_row_token, token);
+        if (!inWindow || rowDone.contains(pos)) return;        // later passes show the finished row
+        rowDone.add(pos);
+        v.setAlpha(0f);
+        v.setTranslationY(dp(14));
+        v.animate().alpha(1f).translationY(0f)
+                .setStartDelay(Defaults.anim(this, 28L * pos))
+                .setDuration(Defaults.anim(this, 230))
+                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
     private Row upRow;
@@ -663,8 +695,7 @@ public class MainActivity extends Activity {
 
     /** Same as redraw(), and the rows slide in. Used when a different folder is shown. */
     private void redrawAnimated() {
-        list.setLayoutAnimation(Ui.rowAnim(this));
-        list.scheduleLayoutAnimation();
+        startRowAnim();
         redraw();
     }
 
@@ -693,6 +724,7 @@ public class MainActivity extends Activity {
     private void renderHeader() {
         boolean selecting = !sel.isEmpty();
         left.setVisibility(View.VISIBLE);
+        if (selecting || arc != null) leftWasHome = false;
         sortBtn.setVisibility(selecting ? View.GONE : View.VISIBLE);
         searchBtn.setVisibility(selecting ? View.GONE : View.VISIBLE);
         searchBtn.setImageResource(searching ? R.drawable.ic_close : R.drawable.ic_search);
@@ -700,19 +732,24 @@ public class MainActivity extends Activity {
         titleBox.setClickable(marksOk);
         title.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, marksOk ? R.drawable.ic_down : 0, 0);
         if (selecting) {
-            left.setImageResource(R.drawable.ic_close);
+            setLeft(R.drawable.ic_close, true);
             title.setText(sel.size() + " selected");
             sub.setText("");
         } else if (arc != null) {
-            left.setImageResource(R.drawable.ic_up);
+            setLeft(R.drawable.ic_up, true);
             title.setText(arc.file.getName());
             sub.setText(arc.prefix.isEmpty()
                     ? plural(arc.ents.size(), "file", "files") + (arc.encrypted ? " \u00b7 encrypted" : "")
                     : "/" + arc.prefix);
         } else {
-            left.setImageResource(R.drawable.ic_up);
             boolean atRoot = cwd.equals(root);
-            left.setVisibility(atRoot ? View.INVISIBLE : View.VISIBLE);
+            if (atRoot) {
+                setLeft(R.drawable.ic_kiln, false);          // home: the Kiln mark fills the corner
+                if (!leftWasHome) glowMark();
+            } else {
+                setLeft(R.drawable.ic_up, true);
+            }
+            leftWasHome = atRoot;
             title.setText(atRoot ? "Kiln" : cwd.getName());
             sub.setText(cwd.getPath());
         }
@@ -720,6 +757,27 @@ public class MainActivity extends Activity {
         banner.setText("Plain view of an encrypted set. Renaming or deleting files here can make "
                 + "the set unreadable.");
         renderBars();
+    }
+
+    private boolean leftWasHome;
+
+    private void setLeft(int res, boolean tinted) {
+        left.setImageResource(res);
+        left.setImageTintList(tinted ? ColorStateList.valueOf(Ui.text(this)) : null);
+    }
+
+    /** A short warm pulse on the mark when you arrive at home. */
+    private void glowMark() {
+        left.animate().cancel();
+        if (!Defaults.animOn(this)) {
+            left.setScaleX(1f);
+            left.setScaleY(1f);
+            return;
+        }
+        left.setScaleX(0.8f);
+        left.setScaleY(0.8f);
+        left.animate().scaleX(1f).scaleY(1f).setDuration(Defaults.anim(this, 420))
+                .setInterpolator(new android.view.animation.OvershootInterpolator(2.2f)).start();
     }
 
     private void renderBars() {
@@ -851,6 +909,9 @@ public class MainActivity extends Activity {
         if (!sel.isEmpty()) {
             sel.clear();
             redraw();
+        } else if (arc == null && !searching && cwd.equals(root)) {
+            glowMark();                                      // at home the mark isn't "up": tap for About
+            aboutDialog();
         } else {
             onBackPressed();
         }
@@ -1183,10 +1244,25 @@ public class MainActivity extends Activity {
         r.time = e.m;
         r.ext = Fmt.ext(r.title);
         String when = e.m > 0 ? Fmt.date(e.m) : "";
-        String where = sl > 0 ? e.p.substring(0, sl) : "";
+        String where = sl > 0 ? arcWhere(e.p.substring(0, sl)) : (Defaults.searchPath(this) == 1 ? "/" : "");
         r.sub = where.isEmpty() ? when : (when.isEmpty() ? where : where + " \u00b7 " + when);
         r.right = Fmt.size(e.s);
         return r;
+    }
+
+    /** The folder shown under a search hit: below the searched folder, or the full path from /. */
+    private String whereLabel(String relDir) {
+        return Defaults.searchPath(this) == 1 ? new File(cwd, relDir).getPath() : relDir;
+    }
+
+    /** Same for a hit inside an open archive. */
+    private String arcWhere(String dir) {
+        if (Defaults.searchPath(this) == 1) return "/" + dir;
+        String d = dir + "/";
+        if (arc != null && !arc.prefix.isEmpty() && d.startsWith(arc.prefix)) {
+            return d.substring(arc.prefix.length(), d.length() - 1);
+        }
+        return dir;
     }
 
     private void startDeepSoon(long delay) {
@@ -1515,6 +1591,7 @@ public class MainActivity extends Activity {
             startDeepSoon(0);
         }
         if (newDir || forceAnim) {
+            if (newDir) list.setSelectionFromTop(0, 0);          // a new folder always starts at the top
             forceAnim = false;
             redrawAnimated();
         } else {
@@ -1544,7 +1621,7 @@ public class MainActivity extends Activity {
             row.time = it.mtime;
             row.ext = Fmt.ext(it.name);
             String when = Fmt.date(it.mtime);
-            if (slash > 0) when = it.name.substring(0, slash) + " \u00b7 " + when;   // search hit in a subfolder
+            if (slash > 0) when = whereLabel(it.name.substring(0, slash)) + " \u00b7 " + when;   // hit in a subfolder
             switch (it.kind) {
                 case "dir":
                     row.folder = true;
@@ -1820,25 +1897,10 @@ public class MainActivity extends Activity {
     }
 
     private void showImage(final File f, final boolean cleanup) {
-        BitmapFactory.Options o = new BitmapFactory.Options();
-        o.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(f.getPath(), o);
-        int sample = 1;
-        while (o.outWidth / sample > 2048 || o.outHeight / sample > 2048) sample *= 2;
-        o = new BitmapFactory.Options();
-        o.inSampleSize = sample;
-        Bitmap bmp = BitmapFactory.decodeFile(f.getPath(), o);
-        if (cleanup && bmp == null) deleteTree(f.getParentFile());
-        if (bmp == null) {
-            message("Couldn't open", "This image can't be decoded.");
-            return;
-        }
-        ImageView iv = new ImageView(this);
-        iv.setImageBitmap(bmp);
-        iv.setAdjustViewBounds(true);
-        Sheet s = new Sheet(this, f.getName()).content(iv).button("Close", Ui.FILLED, null);
-        if (cleanup) s.onClose(() -> deleteTree(f.getParentFile()));
-        s.show();
+        Intent in = new Intent(this, ImageActivity.class);
+        in.putExtra(ImageActivity.EXTRA_PATH, f.getPath());
+        in.putExtra(ImageActivity.EXTRA_CLEANUP, cleanup);    // a temp copy from an archive: delete when done
+        startActivity(in);
     }
 
     // ------------------------------------------------------------------ opening an archive

@@ -83,6 +83,25 @@ public class SettingsActivity extends Activity {
         parent.addView(row);
     }
 
+    /** A row that shows the current choice and opens a modal with radio buttons when tapped. */
+    private void choiceRow(LinearLayout parent, String title, String value, String detail, Runnable open) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        row.setBackground(Ui.pressable(this, 0, 0, 10));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, title, 16, false, false));
+        if (detail != null) col.addView(Ui.label(this, detail, 12, false, true));
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView v = Ui.label(this, value, 14, true, false);
+        v.setTextColor(Ui.accent(this));
+        v.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        row.addView(v);
+        row.setOnClickListener(x -> open.run());
+        parent.addView(row);
+    }
+
     private void render() {
         content.removeAllViews();
         heading("FILE LIST");
@@ -94,38 +113,37 @@ public class SettingsActivity extends Activity {
 
         heading("ANIMATIONS");
         LinearLayout an = card();
-        TextView ad = Ui.label(this, "Speed of slides, fades and pop-ins", 14, false, true);
-        ad.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 8));
-        an.addView(ad);
-        LinearLayout seg = new LinearLayout(this);
-        seg.setOrientation(LinearLayout.HORIZONTAL);
-        int cur = Defaults.animLevel(this);
-        for (int i = 0; i < Defaults.ANIM_NAMES.length; i++) {
-            final int lv = i;
-            android.widget.Button b = Ui.button(this, Defaults.ANIM_NAMES[i],
-                    i == cur ? Ui.FILLED : Ui.OUTLINE, v -> {
-                        Defaults.setAnimLevel(this, lv);
-                        render();
-                    });
-            b.setMinimumWidth(0);
-            b.setPadding(Ui.dp(this, 4), 0, Ui.dp(this, 4), 0);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) lp.leftMargin = Ui.dp(this, 6);
-            seg.addView(b, lp);
-        }
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sp.bottomMargin = Ui.dp(this, 8);
-        an.addView(seg, sp);
-        TextView note = Ui.label(this, "Off also turns off the slide between screens.", 12, false, true);
-        note.setPadding(0, 0, 0, Ui.dp(this, 8));
-        an.addView(note);
+        choiceRow(an, "Animation speed", Defaults.ANIM_NAMES[Defaults.animLevel(this)],
+                "Off also turns off the slide between screens.", () -> {
+                    Sheet sh = new Sheet(this, "Animation speed");
+                    String[] det = {"No animations", null, "Default", null};
+                    for (int i = 0; i < Defaults.ANIM_NAMES.length; i++) {
+                        final int lv = i;
+                        sh.radio(Defaults.ANIM_NAMES[i], det[i], i == Defaults.animLevel(this), () -> {
+                            Defaults.setAnimLevel(this, lv);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
 
         heading("SEARCH");
         LinearLayout sc = card();
         toggle(sc, "Search subfolders", "Search inside folders below the current one, not just the list",
                 Defaults.deepSearch(this), (b, on) -> Defaults.setDeepSearch(this, on));
+        choiceRow(sc, "Path shown in results", Defaults.PATH_NAMES[Defaults.searchPath(this)],
+                "Relative is from the folder you searched in. Absolute starts at /", () -> {
+                    Sheet sh = new Sheet(this, "Path shown in results");
+                    String[] det = {"e.g. Docs/Notes", "e.g. /storage/emulated/0/Docs/Notes"};
+                    for (int i = 0; i < Defaults.PATH_NAMES.length; i++) {
+                        final int v = i;
+                        sh.radio(Defaults.PATH_NAMES[i], det[i], i == Defaults.searchPath(this), () -> {
+                            Defaults.setSearchPath(this, v);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
 
         heading("OPEN FILES WITH");
         LinearLayout d = card();

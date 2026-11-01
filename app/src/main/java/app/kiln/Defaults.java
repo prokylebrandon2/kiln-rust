@@ -51,6 +51,13 @@ final class Defaults {
     static boolean deepSearch(Context c) { return p(c).getBoolean("search_deep", true); }
     static void setDeepSearch(Context c, boolean v) { p(c).edit().putBoolean("search_deep", v).apply(); }
 
+    // ---- how search results show their folder: 0 relative to where you are, 1 full path from /
+
+    static final String[] PATH_NAMES = {"Relative", "Absolute"};
+
+    static int searchPath(Context c) { return p(c).getInt("search_path", 0) == 1 ? 1 : 0; }
+    static void setSearchPath(Context c, int v) { p(c).edit().putInt("search_path", v).apply(); }
+
     // ---- bookmarks: folder paths, in the order they were added
 
     static List<String> bookmarks(Context c) {

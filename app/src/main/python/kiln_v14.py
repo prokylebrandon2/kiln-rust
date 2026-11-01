@@ -1742,10 +1742,15 @@ def extract_one(src, out_dir, pw, write=True, name=None):
     run_extract(a, write)
 
 
+def _is_under(root, dest):
+    """True when dest is strictly below root (works when root is "/" too)."""
+    return dest.startswith(root.rstrip(os.sep) + os.sep)
+
+
 def safe_dest(root, rel):
     """Where rel goes below root; refuses paths that would escape it."""
     dest = os.path.abspath(os.path.join(root, *rel.split("/")))
-    if not dest.startswith(root + os.sep) or os.path.basename(dest) != rel.split("/")[-1]:
+    if not _is_under(root, dest) or os.path.basename(dest) != rel.split("/")[-1]:
         raise KilnError(f"refusing unsafe path: {rel}")
     return dest
 
@@ -2127,7 +2132,7 @@ def run_extract(args, write):
                 if not w:
                     continue
                 dest = os.path.abspath(os.path.join(root, e["rel"]))
-                if not dest.startswith(root + os.sep):
+                if not _is_under(root, dest):
                     raise KilnError(f"refusing unsafe path: {e['rel']}")
                 if os.path.exists(dest):
                     clashes.append(e["rel"])
@@ -4202,7 +4207,7 @@ class Shell(cmd.Cmd):
         dests, clashes = {}, []
         for i, e in want.items():
             dest = os.path.abspath(os.path.join(root, e["rel"]))
-            if not dest.startswith(root + os.sep):
+            if not _is_under(root, dest):
                 raise KilnError(f"refusing unsafe path: {e['rel']}")
             dests[i] = dest
             if os.path.exists(dest):

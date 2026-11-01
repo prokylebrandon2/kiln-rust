@@ -6,6 +6,11 @@ import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.database.Cursor;
+import android.graphics.drawable.Drawable;
+import android.provider.OpenableColumns;
+import android.view.animation.AnimationUtils;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.content.res.ColorStateList;
@@ -36,6 +41,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
@@ -46,6 +52,9 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -84,9 +93,9 @@ public class MainActivity extends Activity {
     static final class Item { String name, kind; long size, mtime; int count; boolean enc; }
     static final class Ent { String p; long s, m; }
     static final class Row {
-        String key, title, sub, right, ext = "";
+        String key, title, sub, right, ext = "", path;
         int icon;
-        boolean dir, folder;
+        boolean dir, folder, up;
         long size, time;
         Item item;
         Ent ent;
@@ -97,13 +106,15 @@ public class MainActivity extends Activity {
         boolean isSet, encrypted;
         long packed;
         String prefix = "";
+        File home;                           // where extract defaults to (null = beside the file)
         final List<Ent> ents = new ArrayList<>();
     }
 
     private static final int S_NAME = 0, S_SIZE = 1, S_DATE = 2, S_TYPE = 3;
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
-            M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14;
+            M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
+            M_OPTIONS = 16;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -131,6 +142,9 @@ public class MainActivity extends Activity {
     private boolean loadedOnce = false;
     private boolean askedNotif = false;
     private boolean needRefresh = false;
+    private boolean upRowOn = true;
+    private boolean previewsOn = true;
+    private Intent pendingIntent;            // a .kln opened from another app, waiting for Python
     private File cwd = Environment.getExternalStorageDirectory();
     private Arc arc;                         // non-null while an archive is open
     private ProgressUi currentProgress;
@@ -141,6 +155,9 @@ public class MainActivity extends Activity {
     private View permView;
     private Button fab;
     private LinearLayout bottomBar;
+    private SwipeRefreshLayout swipe;
+    private FrameLayout body;
+    private boolean barShown, fabShown;
     private RowAdapter adapter;
 
     // ------------------------------------------------------------------ lifecycle
@@ -154,13 +171,34 @@ public class MainActivity extends Activity {
         showAll = prefs.getBoolean("show_all", true);
         showHidden = prefs.getBoolean("show_hidden", false);
         deleteTree(new File(getCacheDir(), "preview"));
+        deleteTree(new File(getCacheDir(), "incoming"));
+        upRowOn = Defaults.upRow(this);
+        previewsOn = Defaults.previews(this);
         buildUi();
         startPython();
+        if (state == null && Intent.ACTION_VIEW.equals(getIntent().getAction())) {
+            pendingIntent = getIntent();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+            if (app == null) pendingIntent = intent;
+            else openIncoming(intent);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        boolean up = Defaults.upRow(this), pv = Defaults.previews(this);
+        boolean changed = up != upRowOn || pv != previewsOn;
+        upRowOn = up;
+        previewsOn = pv;
+        if (changed && adapter != null) adapter.notifyDataSetChanged();
         refreshPermission();
         if (needRefresh && arc == null && loadedOnce) {
             needRefresh = false;
@@ -306,32 +344,56 @@ public class MainActivity extends Activity {
         banner.setVisibility(View.GONE);
         page.addView(banner);
 
-        FrameLayout body = new FrameLayout(this);
+        body = new FrameLayout(this);
         list = new ListView(this);
         list.setDivider(null);
         list.setSelector(android.R.color.transparent);
+        list.setClipToPadding(false);
+        list.setPadding(0, 0, 0, dp(96));                 // the last rows scroll clear of the bars
+        list.setLayoutAnimation(AnimationUtils.loadLayoutAnimation(this, R.anim.k_row_layout));
         adapter = new RowAdapter();
         list.setAdapter(adapter);
         list.setOnItemClickListener((av, v, pos, id) -> onRowClick(pos));
         list.setOnItemLongClickListener((av, v, pos, id) -> {
-            toggle(rows.get(pos).key);
+            int i = pos - off();
+            if (i >= 0 && i < rows.size()) toggle(rows.get(i).key);
             return true;
         });
-        body.addView(list, new FrameLayout.LayoutParams(
+        swipe = new SwipeRefreshLayout(this);
+        swipe.addView(list, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        swipe.setColorSchemeColors(Ui.accent(this));
+        swipe.setProgressBackgroundColorSchemeColor(Ui.surface(this));
+        swipe.setOnRefreshListener(this::onPull);
+        body.addView(swipe, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // not the list's empty view: the list has to stay on screen so pulling down still works
         empty = Ui.label(this, "Starting...", 15, false, true);
-        empty.setGravity(Gravity.CENTER);
-        empty.setPadding(dp(32), dp(32), dp(32), dp(32));
+        empty.setGravity(Gravity.CENTER_HORIZONTAL);
+        empty.setPadding(dp(32), 0, dp(32), 0);
         body.addView(empty, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        list.setEmptyView(empty);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
 
         fab = Ui.button(this, "+  New", Ui.FILLED, v -> newSheet());
+        fab.setElevation(dp(4));
+        fab.setVisibility(View.GONE);
         FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(48), Gravity.BOTTOM | Gravity.END);
         fp.setMargins(0, 0, dp(16), dp(16));
         body.addView(fab, fp);
+
+        bottomBar = new LinearLayout(this);
+        bottomBar.setOrientation(LinearLayout.VERTICAL);
+        bottomBar.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 20));
+        bottomBar.setElevation(dp(8));
+        bottomBar.setPadding(dp(6), dp(6), dp(6), dp(6));
+        bottomBar.setVisibility(View.GONE);
+        FrameLayout.LayoutParams bp2 = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
+        bp2.setMargins(dp(12), 0, dp(12), dp(12));
+        body.addView(bottomBar, bp2);
 
         LinearLayout perm = new LinearLayout(this);
         perm.setOrientation(LinearLayout.VERTICAL);
@@ -354,28 +416,39 @@ public class MainActivity extends Activity {
         page.addView(body, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        bottomBar = new LinearLayout(this);
-        bottomBar.setOrientation(LinearLayout.VERTICAL);
-        bottomBar.setBackgroundColor(Ui.surface(this));
-        bottomBar.setVisibility(View.GONE);
-        page.addView(bottomBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(page);
         renderHeader();
     }
 
-    /** One row: icon, name and date, size on the right. A selected row is tinted. */
+    /** The ".." row shows when there's somewhere to go up to. */
+    private boolean upShown() {
+        return upRowOn && (arc != null || !cwd.equals(root)) && hasStorage();
+    }
+
+    private int off() { return upShown() ? 1 : 0; }
+
+    private Row rowAt(int adapterPos) {
+        int i = adapterPos - off();
+        return i >= 0 && i < rows.size() ? rows.get(i) : null;
+    }
+
+    /** One row: icon (or preview), name and date, size on the right. A selected row is tinted. */
     private final class RowView extends LinearLayout {
         final ImageView icon;
         final TextView name, detail, size;
+        private final Drawable plain, picked;
+        private boolean wasSelected;
 
         RowView() {
             super(MainActivity.this);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(16), dp(11), dp(16), dp(11));
-            icon = new ImageView(MainActivity.this);
-            addView(icon, new LayoutParams(dp(28), dp(28)));
+            setPadding(dp(16), dp(9), dp(16), dp(9));
+            plain = Ui.ripple(MainActivity.this, 0, 0, 0, Ui.alpha(Ui.text(MainActivity.this), 0x22));
+            picked = Ui.ripple(MainActivity.this, getColor(R.color.k_sel), 0, 0,
+                    Ui.alpha(Ui.text(MainActivity.this), 0x22));
+            icon = Thumbs.box(MainActivity.this);
+            addView(icon, new LayoutParams(dp(40), dp(40)));
             LinearLayout col = new LinearLayout(MainActivity.this);
             col.setOrientation(VERTICAL);
             name = Ui.label(MainActivity.this, "", 16, false, false);
@@ -386,7 +459,7 @@ public class MainActivity extends Activity {
             col.addView(name);
             col.addView(detail);
             LayoutParams cp = new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            cp.leftMargin = dp(16);
+            cp.leftMargin = dp(14);
             addView(col, cp);
             size = Ui.label(MainActivity.this, "", 13, false, true);
             size.setSingleLine(true);
@@ -397,40 +470,100 @@ public class MainActivity extends Activity {
         }
 
         void bind(Row r, boolean selected) {
+            int accent = Ui.accent(getContext());
             if (selected) {
-                icon.setImageResource(R.drawable.ic_check);
-                Ui.tint(icon, Ui.accent(getContext()));
+                icon.animate().cancel();
+                Thumbs.showIcon(icon, R.drawable.ic_check, accent);
+                icon.setTag(null);
+            } else if (r.path != null && !r.up) {
+                File f = new File(r.path);
+                Thumbs.bind(icon, f, r.icon, r.folder || r.dir ? accent : Ui.text2(getContext()),
+                        previewsOn);
             } else {
-                icon.setImageResource(r.icon);
-                Ui.tint(icon, r.folder || r.dir ? Ui.accent(getContext()) : Ui.text2(getContext()));
+                icon.setTag(null);
+                Thumbs.showIcon(icon, r.icon, r.folder || r.dir || r.up ? accent : Ui.text2(getContext()));
             }
+            if (selected != wasSelected) {                    // a little pop when selection flips
+                icon.setScaleX(0.7f);
+                icon.setScaleY(0.7f);
+                icon.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
+            }
+            wasSelected = selected;
             name.setText(r.title);
             detail.setText(r.sub);
             detail.setVisibility(r.sub.isEmpty() ? View.GONE : View.VISIBLE);
             size.setText(r.right);
-            setBackgroundColor(selected ? getColor(R.color.k_sel) : 0);
+            setBackground(selected ? picked : plain);
+            jumpDrawablesToCurrentState();
         }
     }
 
     private final class RowAdapter extends BaseAdapter {
-        @Override public int getCount() { return rows.size(); }
-        @Override public Object getItem(int i) { return rows.get(i); }
+        @Override public int getCount() { return rows.size() + off(); }
+        @Override public Object getItem(int i) { return rowAt(i); }
         @Override public long getItemId(int i) { return i; }
 
         @Override
         public View getView(int i, View convert, ViewGroup parent) {
             RowView v = convert instanceof RowView ? (RowView) convert : new RowView();
-            Row r = rows.get(i);
-            v.bind(r, sel.contains(r.key));
+            Row r = rowAt(i);
+            if (r == null) {
+                v.bind(upRow(), false);
+            } else {
+                v.bind(r, sel.contains(r.key));
+            }
             return v;
         }
+    }
+
+    private Row upRow;
+
+    private Row upRow() {
+        if (upRow == null) {
+            upRow = new Row();
+            upRow.up = true;
+            upRow.key = "..";
+            upRow.title = "..";
+            upRow.sub = "";
+            upRow.right = "";
+            upRow.icon = R.drawable.ic_up_dir;
+        }
+        return upRow;
     }
 
     // ------------------------------------------------------------------ header, bars, menus
 
     private void redraw() {
         adapter.notifyDataSetChanged();
+        updateEmpty();
         renderHeader();
+    }
+
+    /** Same as redraw(), and the rows slide in. Used when a different folder is shown. */
+    private void redrawAnimated() {
+        list.scheduleLayoutAnimation();
+        redraw();
+    }
+
+    private void updateEmpty() {
+        empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) empty.getLayoutParams();
+        int top = dp(upShown() ? 96 : 56);
+        if (lp.topMargin != top) {
+            lp.topMargin = top;
+            empty.setLayoutParams(lp);
+        }
+    }
+
+    private void onPull() {
+        if (app == null || !hasStorage()) {
+            swipe.setRefreshing(false);
+        } else if (arc != null) {
+            buildArcRows();                                 // an open archive doesn't change
+            swipe.setRefreshing(false);
+        } else {
+            loadDir(cwd, true);
+        }
     }
 
     private void renderHeader() {
@@ -464,50 +597,123 @@ public class MainActivity extends Activity {
         bottomBar.removeAllViews();
         boolean selecting = !sel.isEmpty();
         boolean show = true;
+        int accent = Ui.accent(this), danger = getColor(R.color.k_danger);
         if (arc != null) {
             if (selecting) {
-                bar(btn("Extract", Ui.FILLED, this::extractSelected));
+                tiles(tile(R.drawable.ic_extract, "Extract", accent, this::extractSelected),
+                        tile(R.drawable.ic_check, "Select all", accent, () -> onMenu(M_SELECT_ALL)));
             } else {
-                bar(btn("Extract all", Ui.FILLED, () -> extractDialog(new ArrayList<String>())));
+                tiles(tile(R.drawable.ic_extract, "Extract all", accent,
+                                () -> extractDialog(new ArrayList<String>())),
+                        tile(R.drawable.ic_check, "Check", Ui.text(this), this::runTest),
+                        tile(R.drawable.ic_archive, "Info", Ui.text(this), this::infoDialog));
             }
         } else if (selecting) {
-            bar(btn("Copy", Ui.OUTLINE, () -> setClip(false)),
-                    btn("Move", Ui.OUTLINE, () -> setClip(true)),
-                    btn("Delete", Ui.DANGER, this::deleteSelected),
-                    btn("Pack", Ui.FILLED, () -> packDialog(selectedFiles())));
+            tiles(tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> setClip(false)),
+                    tile(R.drawable.ic_move, "Move", Ui.text(this), () -> setClip(true)),
+                    tile(R.drawable.ic_delete, "Delete", danger, this::deleteSelected),
+                    tile(R.drawable.ic_archive, "Pack", accent, () -> packDialog(selectedFiles())));
         } else if (!clip.isEmpty()) {
-            TextView t = Ui.label(this, (clipMove ? "Move " : "Copy ")
-                    + plural(clip.size(), "item", "items") + " here?", 13, false, true);
-            t.setPadding(dp(16), dp(10), dp(16), 0);
-            bottomBar.addView(t);
-            bar(btn("Cancel", Ui.TEXT, () -> {
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.setPadding(dp(12), dp(8), dp(12), dp(2));
+            info.addView(Ui.label(this, (clipMove ? "Moving " : "Copying ")
+                    + plural(clip.size(), "item", "items"), 15, true, false));
+            info.addView(Ui.label(this, "Into " + (cwd.equals(root) ? "Internal storage" : cwd.getName()),
+                    12, false, true));
+            bottomBar.addView(info);
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(2), dp(4), dp(4), dp(2));
+            View nf = tile(R.drawable.ic_new_folder, "New folder", accent, this::newFolderHere);
+            row.addView(nf, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+            row.addView(Ui.button(this, "Cancel", Ui.TEXT, v -> {
                 clip.clear();
                 redraw();
-            }), btn(clipMove ? "Move here" : "Paste here", Ui.FILLED, this::paste));
+            }));
+            Button go = Ui.button(this, clipMove ? "Move here" : "Paste here", Ui.FILLED, v -> paste());
+            LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            gp.leftMargin = dp(6);
+            row.addView(go, gp);
+            bottomBar.addView(row);
         } else {
             show = false;
         }
-        bottomBar.setVisibility(show ? View.VISIBLE : View.GONE);
+        showBar(show);
         boolean fabOn = arc == null && !selecting && clip.isEmpty() && app != null && hasStorage();
-        fab.setVisibility(fabOn ? View.VISIBLE : View.GONE);
+        showFab(fabOn);
     }
 
-    private Button btn(String label, int kind, final Runnable r) {
-        return Ui.button(this, label, kind, v -> r.run());
+    /** Icon over a small label; the whole tile lights up when touched. */
+    private View tile(int icon, String label, int color, final Runnable r) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(10), dp(8), dp(10), dp(6));
+        t.setBackground(Ui.pressable(this, 0, 0, 14));
+        Ui.pressScale(t);
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(icon);
+        Ui.tint(iv, color);
+        t.addView(iv, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        TextView tv = Ui.label(this, label, 11, false, false);
+        tv.setTextColor(color);
+        tv.setSingleLine(true);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        t.addView(tv, lp);
+        t.setOnClickListener(v -> r.run());
+        return t;
     }
 
-    private void bar(Button... buttons) {
+    private void tiles(View... views) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        for (int i = 0; i < buttons.length; i++) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) lp.leftMargin = dp(8);
-            buttons[i].setMinimumWidth(0);
-            row.addView(buttons[i], lp);
+        for (View v : views) {
+            row.addView(v, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         }
         bottomBar.addView(row);
+    }
+
+    private void showBar(boolean on) {
+        if (on && !barShown) {
+            bottomBar.animate().cancel();
+            bottomBar.setVisibility(View.VISIBLE);
+            bottomBar.setAlpha(0f);
+            bottomBar.setTranslationY(dp(70));
+            bottomBar.animate().alpha(1f).translationY(0).setDuration(240)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f)).start();
+        } else if (!on && barShown) {
+            bottomBar.animate().cancel();
+            bottomBar.animate().alpha(0f).translationY(dp(70)).setDuration(160)
+                    .withEndAction(() -> {
+                        if (!barShown) bottomBar.setVisibility(View.GONE);
+                    }).start();
+        }
+        barShown = on;
+    }
+
+    private void showFab(boolean on) {
+        if (on && !fabShown) {
+            fab.animate().cancel();
+            fab.setVisibility(View.VISIBLE);
+            fab.setAlpha(0f);
+            fab.setScaleX(0.6f);
+            fab.setScaleY(0.6f);
+            fab.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200)
+                    .setInterpolator(new android.view.animation.OvershootInterpolator(1.4f)).start();
+        } else if (!on && fabShown) {
+            fab.animate().cancel();
+            fab.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(120)
+                    .withEndAction(() -> {
+                        if (!fabShown) fab.setVisibility(View.GONE);
+                    }).start();
+        }
+        fabShown = on;
     }
 
     private void onLeft() {
@@ -524,9 +730,28 @@ public class MainActivity extends Activity {
         Sheet s = new Sheet(this, heading);
         for (int i = 0; i < labels.length; i++) {
             final int id = ids[i];
-            s.option(labels[i], false, () -> onMenu(id));
+            s.option(menuIcon(id), labels[i], false, () -> onMenu(id));
         }
         s.show();
+    }
+
+    private static int menuIcon(int id) {
+        switch (id) {
+            case M_SETTINGS: return R.drawable.ic_settings;
+            case M_REFRESH: return R.drawable.ic_refresh;
+            case M_SELECT_ALL: return R.drawable.ic_check;
+            case M_CLEAR: return R.drawable.ic_close;
+            case M_EXTRACT:
+            case M_EXTRACT_ALL: return R.drawable.ic_extract;
+            case M_RENAME: return R.drawable.ic_edit;
+            case M_TEST: return R.drawable.ic_check;
+            case M_PLAIN: return R.drawable.ic_folder;
+            case M_DECRYPT: return R.drawable.ic_lock;
+            case M_OPTIONS: return R.drawable.ic_open;
+            case M_INFO:
+            case M_ABOUT: return R.drawable.ic_archive;
+            default: return R.drawable.ic_file;
+        }
     }
 
     private void showMenu() {
@@ -550,6 +775,7 @@ public class MainActivity extends Activity {
         } else if (selecting) {
             l.add("Select all"); id.add(M_SELECT_ALL);
             if (sel.size() == 1) { l.add("Rename"); id.add(M_RENAME); }
+            if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
             if (sel.size() == 1 && selectedSet() != null) { l.add("Browse as plain folder"); id.add(M_PLAIN); }
             l.add("Clear selection"); id.add(M_CLEAR);
@@ -558,6 +784,7 @@ public class MainActivity extends Activity {
             l.add(showAll ? "Show archives only" : "Show all files"); id.add(M_ALL_FILES);
             l.add(showHidden ? "Hide hidden files" : "Show hidden files"); id.add(M_HIDDEN);
             l.add("Refresh"); id.add(M_REFRESH);
+            l.add("Settings"); id.add(M_SETTINGS);
             l.add("About"); id.add(M_ABOUT);
         }
         int[] ids = new int[id.size()];
@@ -578,6 +805,17 @@ public class MainActivity extends Activity {
                 loadDir(cwd);
                 break;
             case M_REFRESH: loadDir(cwd); break;
+            case M_SETTINGS: startActivity(new Intent(this, SettingsActivity.class)); break;
+            case M_OPTIONS: {
+                Item it = selectedPlainFile();
+                if (it != null) {
+                    File f = new File(cwd, it.name);
+                    sel.clear();
+                    redraw();
+                    fileSheet(f, it);
+                }
+                break;
+            }
             case M_ABOUT: aboutDialog(); break;
             case M_SELECT_ALL:
                 for (Row r : rows) sel.add(r.key);
@@ -666,6 +904,11 @@ public class MainActivity extends Activity {
                     if (!note.isEmpty()) toast("Slow mode: " + note);
                     refreshPermission();
                     renderBars();
+                    if (pendingIntent != null) {
+                        Intent in = pendingIntent;
+                        pendingIntent = null;
+                        openIncoming(in);
+                    }
                 });
             } catch (Throwable t) {
                 ui.post(() -> empty.setText("Kiln couldn't start: " + t));
@@ -699,10 +942,12 @@ public class MainActivity extends Activity {
     private void loadDir(File dir, boolean keepSelection) {
         cwd = dir;
         arc = null;
-        if (!keepSelection) sel.clear();
-        rows.clear();
-        items.clear();
-        empty.setText("Loading...");
+        if (!keepSelection) {
+            sel.clear();
+            rows.clear();
+            items.clear();
+            empty.setText("Loading...");
+        }
         redraw();
         final String path = dir.getPath();
         final boolean all = showAll, hidden = showHidden;
@@ -720,7 +965,10 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private String lastDir = "";
+
     private void applyScan(JSONObject r) {
+        swipe.setRefreshing(false);
         rows.clear();
         items.clear();
         plainSet = r.optBoolean("is_set");
@@ -776,7 +1024,8 @@ public class MainActivity extends Activity {
                     break;
                 default:
                     row.size = it.size;
-                    row.icon = R.drawable.ic_file;
+                    row.icon = Thumbs.iconFor(it.name);
+                    row.path = new File(cwd, it.name).getPath();
                     row.sub = when;
                     row.right = Fmt.size(it.size);
                     break;
@@ -788,7 +1037,10 @@ public class MainActivity extends Activity {
         empty.setText(showAll
                 ? "This folder is empty."
                 : "No Kiln archives here.\nOpen the menu to show all files.");
-        redraw();
+        boolean newDir = !cwd.getPath().equals(lastDir);
+        lastDir = cwd.getPath();
+        if (newDir) redrawAnimated();
+        else redraw();
     }
 
     private static Collection<String> keysOf(List<Row> l) {
@@ -803,8 +1055,11 @@ public class MainActivity extends Activity {
     }
 
     private void onRowClick(int pos) {
-        if (pos < 0 || pos >= rows.size()) return;
-        Row r = rows.get(pos);
+        Row r = rowAt(pos);
+        if (r == null) {                                     // the ".." row
+            if (sel.isEmpty()) onBackPressed();
+            return;
+        }
         if (!sel.isEmpty()) {
             toggle(r.key);
             return;
@@ -827,7 +1082,7 @@ public class MainActivity extends Activity {
                 message("Older format", "This archive was made by an older Kiln (format 9 or earlier) "
                         + "that this app can't open.");
                 break;
-            default: fileSheet(new File(cwd, it.name), it); break;
+            default: openFile(new File(cwd, it.name), it); break;
         }
     }
 
@@ -844,6 +1099,13 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    private Item selectedPlainFile() {
+        for (Item it : items) {
+            if (sel.contains(it.name) && it.kind.equals("file")) return it;
+        }
+        return null;
+    }
+
     private Item selectedSet() {
         for (Item it : items) {
             if (sel.contains(it.name) && it.kind.equals("set")) return it;
@@ -853,22 +1115,42 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ opening ordinary files
 
+    /** Tapping a file: use the app chosen for its extension, otherwise ask. */
+    private void openFile(File f, Item it) {
+        String def = Defaults.get(this, Fmt.ext(f.getName()));
+        if (def == null) {
+            fileSheet(f, it);
+            return;
+        }
+        if (Defaults.KILN_VIEW.equals(def)) {
+            if (kindOf(f.getName()) == 2) showImage(f, false);
+            else openText(f, false);
+        } else if (Defaults.KILN_EDIT.equals(def)) {
+            openText(f, true);
+        } else if (!launch(f, false, Defaults.pkgOf(def))) {
+            Defaults.clear(this, Fmt.ext(f.getName()));       // the app is gone: forget it
+            toast("That app isn't available any more");
+            fileSheet(f, it);
+        }
+    }
+
     private void fileSheet(final File f, Item it) {
         int kind = kindOf(f.getName());
         Sheet s = new Sheet(this, f.getName());
         s.text(Fmt.size(it.size) + " \u00b7 " + Fmt.date(it.mtime));
         boolean small = it.size <= TextActivity.MAX_BYTES;
         if (kind == 2 && it.size <= IMAGE_PREVIEW_MAX) {
-            s.option("View in Kiln", false, () -> showImage(f, false));
+            s.option(R.drawable.ic_image, "View in Kiln", false, () -> showImage(f, false));
         } else if (kind == 1 && small) {
-            s.option("View in Kiln", false, () -> openText(f, false));
-            s.option("Edit in Kiln", false, () -> openText(f, true));
+            s.option(R.drawable.ic_open, "View in Kiln", false, () -> openText(f, false));
+            s.option(R.drawable.ic_edit, "Edit in Kiln", false, () -> openText(f, true));
         } else if (kind == 0 && small && it.size > 0) {
-            s.option("View as text in Kiln", false, () -> openText(f, false));
-            s.option("Edit as text in Kiln", false, () -> openText(f, true));
+            s.option(R.drawable.ic_open, "View as text in Kiln", false, () -> openText(f, false));
+            s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, () -> openText(f, true));
         }
-        s.option("Open with...", false, () -> openExternal(f, false));
-        s.option("Edit with...", false, () -> openExternal(f, true));
+        s.divider();
+        s.option(R.drawable.ic_open, "Open with...", false, () -> appChooser(f, false));
+        s.option(R.drawable.ic_edit, "Edit with...", false, () -> appChooser(f, true));
         s.button("Cancel", Ui.TEXT, null).show();
     }
 
@@ -886,19 +1168,114 @@ public class MainActivity extends Activity {
         return kindOf(f.getName()) == 1 ? "text/plain" : "*/*";
     }
 
-    private void openExternal(File f, boolean edit) {
+    private Intent viewIntent(File f, boolean edit) {
+        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", f);
+        Intent i = new Intent(edit ? Intent.ACTION_EDIT : Intent.ACTION_VIEW);
+        i.setDataAndType(uri, mimeOf(f));
+        i.setClipData(ClipData.newRawUri("", uri));
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | (edit ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : 0));
+        return i;
+    }
+
+    /** Opens f in one specific app. False if that app can't take it. */
+    private boolean launch(File f, boolean edit, String pkg) {
         try {
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", f);
-            Intent i = new Intent(edit ? Intent.ACTION_EDIT : Intent.ACTION_VIEW);
-            i.setDataAndType(uri, mimeOf(f));
-            i.setClipData(ClipData.newRawUri("", uri));
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | (edit ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : 0));
+            Intent i = viewIntent(f, edit);
+            i.setPackage(pkg);
             needRefresh = edit;
-            startActivity(Intent.createChooser(i, edit ? "Edit with" : "Open with"));
+            startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void openExternal(File f, boolean edit) { appChooser(f, edit); }
+
+    /** Our own "Open with" list: app icons and names, and an "always" tick for this extension. */
+    private void appChooser(final File f, final boolean edit) {
+        final PackageManager pm = getPackageManager();
+        List<ResolveInfo> found;
+        try {
+            found = pm.queryIntentActivities(viewIntent(f, edit), PackageManager.MATCH_DEFAULT_ONLY);
         } catch (Exception e) {
             toast("No app can open this file");
+            return;
         }
+        final String ext = Fmt.ext(f.getName());
+        final CheckBox always = Ui.check(this, ext.isEmpty() ? "Always open this with the app"
+                : "Always open ." + ext + " files with this app", false);
+        final Sheet s = new Sheet(this, edit ? "Edit with" : "Open with");
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int kind = kindOf(f.getName());
+        boolean small = f.length() <= TextActivity.MAX_BYTES && f.length() > 0;
+        if (!edit && (kind == 2 || ((kind == 1 || kind == 0) && small))) {
+            box.addView(appRow(getDrawable(R.drawable.ic_open), "Kiln " + (kind == 2 ? "image viewer" : "text viewer"), () -> {
+                if (always.isChecked()) Defaults.set(this, ext, Defaults.KILN_VIEW);
+                s.dismiss();
+                if (kind == 2) showImage(f, false);
+                else openText(f, false);
+            }));
+        }
+        if (!edit && (kind == 1 || kind == 0) && small) {
+            box.addView(appRow(getDrawable(R.drawable.ic_edit), "Kiln text editor", () -> {
+                if (always.isChecked()) Defaults.set(this, ext, Defaults.KILN_EDIT);
+                s.dismiss();
+                openText(f, true);
+            }));
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (final ResolveInfo ri : found) {
+            final String pkg = ri.activityInfo.packageName;
+            if (pkg.equals(getPackageName()) || !seen.add(pkg)) continue;
+            final String label = String.valueOf(ri.loadLabel(pm));
+            box.addView(appRow(ri.loadIcon(pm), label, () -> {
+                s.dismiss();
+                if (launch(f, edit, pkg)) {
+                    if (always.isChecked() && !edit) Defaults.set(this, ext, pkg + "|" + label);
+                } else {
+                    toast("That app couldn't open the file");
+                }
+            }));
+        }
+        box.addView(appRow(getDrawable(R.drawable.ic_more), "More options...", () -> {
+            s.dismiss();
+            try {
+                needRefresh = edit;
+                startActivity(Intent.createChooser(viewIntent(f, edit), edit ? "Edit with" : "Open with"));
+            } catch (Exception e) {
+                toast("No app can open this file");
+            }
+        }));
+        s.content(box);
+        if (!edit && !ext.isEmpty()) s.space(6).content(always);
+        s.button("Cancel", Ui.TEXT, null).show();
+    }
+
+    private View appRow(Drawable icon, String label, final Runnable r) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setBackground(Ui.pressable(this, 0, 0, 12));
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(icon);
+        if (icon != null && icon.getConstantState() != null && label.startsWith("Kiln")
+                || label.equals("More options...")) {
+            iv.setImageTintList(ColorStateList.valueOf(Ui.accent(this)));
+            iv.setPadding(dp(7), dp(7), dp(7), dp(7));
+        }
+        row.addView(iv, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        TextView t = Ui.label(this, label, 16, false, false);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tp.leftMargin = dp(14);
+        row.addView(t, tp);
+        row.setOnClickListener(v -> r.run());
+        return row;
     }
 
     private void showImage(final File f, final boolean cleanup) {
@@ -985,6 +1362,7 @@ public class MainActivity extends Activity {
         }
         Arc a = new Arc();
         a.file = f;
+        a.home = f.equals(incomingFile) ? incomingHome : null;
         a.password = pw;
         a.isSet = "set".equals(r.optString("kind"));
         a.encrypted = r.optBoolean("encrypted");
@@ -1004,6 +1382,53 @@ public class MainActivity extends Activity {
         sel.clear();
         buildArcRows();
         if (after != null) after.run();
+    }
+
+    private File incomingFile, incomingHome;
+
+    /** A .kln handed to us by another app (ZArchiver, a browser, a share...). */
+    private void openIncoming(Intent intent) {
+        final Uri uri = intent.getData();
+        if (uri == null) return;
+        if ("file".equals(uri.getScheme()) && uri.getPath() != null && new File(uri.getPath()).isFile()) {
+            File f = new File(uri.getPath());
+            incomingFile = f;
+            incomingHome = f.getParentFile();
+            doOpen(f, "", null);
+            return;
+        }
+        String n = null;
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME},
+                null, null, null)) {
+            if (c != null && c.moveToFirst()) n = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        if (n == null || n.isEmpty()) n = uri.getLastPathSegment();
+        if (n == null || n.isEmpty()) n = "archive.kln";
+        n = n.replace('/', '_');
+        final File dir = new File(getCacheDir(), "incoming");
+        dir.mkdirs();
+        final File out = new File(dir, n);
+        runOp("Opening...", false, p -> {
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 OutputStream os = new FileOutputStream(out)) {
+                if (in == null) throw new java.io.IOException("can't read that file");
+                byte[] buf = new byte[1 << 16];
+                int k;
+                while ((k = in.read(buf)) > 0) os.write(buf, 0, k);
+            }
+            JSONObject ok = new JSONObject();
+            ok.put("ok", true);
+            return ok;
+        }, r -> {
+            if (!r.optBoolean("ok")) {
+                message("Couldn't open the file", r.optString("message", r.optString("error")));
+                return;
+            }
+            incomingFile = out;
+            incomingHome = root;
+            doOpen(out, "", null);
+        });
     }
 
     private void closeArchive() {
@@ -1053,7 +1478,7 @@ public class MainActivity extends Activity {
             r.key = e.p;
             r.title = e.p.substring(prefix.length());
             r.ent = e;
-            r.icon = R.drawable.ic_file;
+            r.icon = Thumbs.iconFor(e.p);
             r.size = Math.max(e.s, 0);
             r.time = e.m;
             r.ext = Fmt.ext(r.title);
@@ -1063,7 +1488,7 @@ public class MainActivity extends Activity {
         }
         sortRows();
         empty.setText("This folder is empty.");
-        redraw();
+        redrawAnimated();
     }
 
     // ------------------------------------------------------------------ progress and jobs
@@ -1182,8 +1607,7 @@ public class MainActivity extends Activity {
         clipMove = move;
         sel.clear();
         redraw();
-        toast((move ? "Moving " : "Copying ") + plural(clip.size(), "item", "items")
-                + ". Open a folder and tap \"" + (move ? "Move here" : "Paste here") + "\".");
+        toast("Open a folder, then tap \"" + (move ? "Move here" : "Paste here") + "\"");
     }
 
     private void paste() {
@@ -1241,25 +1665,31 @@ public class MainActivity extends Activity {
 
     private void newSheet() {
         new Sheet(this, "New")
-                .option("Folder", false, () -> nameSheet("New folder", "", "Create", n -> {
-                    File nf = new File(cwd, n);
-                    if (nf.exists()) return "That name is taken";
-                    if (!nf.mkdirs()) return "Couldn't create it";
-                    loadDir(cwd);
-                    return null;
-                }))
-                .option("Text file", false, () -> nameSheet("New text file", "untitled.txt", "Create", n -> {
-                    File nf = new File(cwd, n);
-                    if (nf.exists()) return "That name is taken";
-                    try {
-                        if (!nf.createNewFile()) return "Couldn't create it";
-                    } catch (java.io.IOException e) {
-                        return String.valueOf(e.getMessage());
-                    }
-                    loadDir(cwd);
-                    return null;
-                }))
+                .option(R.drawable.ic_new_folder, "Folder", false, this::newFolderHere)
+                .option(R.drawable.ic_new_file, "Text file", false, () ->
+                        nameSheet("New text file", "untitled.txt", "Create", n -> {
+                            File nf = new File(cwd, n);
+                            if (nf.exists()) return "That name is taken";
+                            try {
+                                if (!nf.createNewFile()) return "Couldn't create it";
+                            } catch (java.io.IOException e) {
+                                return String.valueOf(e.getMessage());
+                            }
+                            loadDir(cwd);
+                            return null;
+                        }))
                 .button("Cancel", Ui.TEXT, null).show();
+    }
+
+    /** Makes a folder in the folder being shown. Also works while items are being held to paste. */
+    private void newFolderHere() {
+        nameSheet("New folder", "", "Create", n -> {
+            File nf = new File(cwd, n);
+            if (nf.exists()) return "That name is taken";
+            if (!nf.mkdirs()) return "Couldn't create it";
+            loadDir(cwd);
+            return null;
+        });
     }
 
     private void nameSheet(String heading, String initial, String ok, final OnName cb) {
@@ -1370,7 +1800,7 @@ public class MainActivity extends Activity {
 
     private void extractDialog(final List<String> keys) {
         final Arc a = arc;
-        File defDest = new File(a.file.getParentFile(),
+        File defDest = new File(a.home != null ? a.home : a.file.getParentFile(),
                 a.isSet ? a.file.getName() + "_files" : Fmt.stripExt(a.file.getName()));
         final EditText where = Ui.field(this, "Folder", false);
         where.setText(defDest.getPath());
@@ -1571,7 +2001,15 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Folder chooser: tap a folder to enter it, then "Select this folder". */
+    /** One line of the folder chooser. */
+    private static final class Pick {
+        static final int NEW = 0, UP = 1, DIR = 2, FILE = 3;
+        final int type;
+        final File f;
+        Pick(int type, File f) { this.type = type; this.f = f; }
+    }
+
+    /** Folder chooser: tap a folder to enter it, then "Select this folder". Files show dimmed. */
     private void pickFolder(File start, final OnFile cb) {
         if (!hasStorage()) {
             askStorage();
@@ -1580,44 +2018,97 @@ public class MainActivity extends Activity {
         File s = start;
         while (s != null && !s.isDirectory()) s = s.getParentFile();
         final File[] cur = {s != null ? s : root};
-        final List<File> dirs = new ArrayList<>();
-        final List<String> labels = new ArrayList<>();
-        final ArrayAdapter<String> ad = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, labels);
-        final ListView lv = new ListView(this);
-        lv.setAdapter(ad);
-        lv.setDivider(null);
+        final List<Pick> entries = new ArrayList<>();
         final TextView path = Ui.label(this, "", 13, false, true);
         path.setEllipsize(TextUtils.TruncateAt.START);
         path.setSingleLine(true);
+        final ListView lv = new ListView(this);
+        lv.setDivider(null);
+        lv.setSelector(android.R.color.transparent);
+        final BaseAdapter ad = new BaseAdapter() {
+            @Override public int getCount() { return entries.size(); }
+            @Override public Object getItem(int i) { return entries.get(i); }
+            @Override public long getItemId(int i) { return i; }
+
+            @Override
+            public View getView(int i, View convert, ViewGroup parent) {
+                LinearLayout row;
+                ImageView icon;
+                TextView name;
+                if (convert instanceof LinearLayout) {
+                    row = (LinearLayout) convert;
+                    icon = (ImageView) row.getChildAt(0);
+                    name = (TextView) row.getChildAt(1);
+                } else {
+                    row = new LinearLayout(MainActivity.this);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(dp(4), dp(6), dp(4), dp(6));
+                    icon = Thumbs.box(MainActivity.this);
+                    row.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                    name = Ui.label(MainActivity.this, "", 16, false, false);
+                    name.setSingleLine(true);
+                    name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                    LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    np.leftMargin = dp(14);
+                    row.addView(name, np);
+                }
+                Pick e = entries.get(i);
+                int accent = Ui.accent(MainActivity.this);
+                row.setBackground(e.type == Pick.FILE ? null : Ui.pressable(MainActivity.this, 0, 0, 12));
+                row.setAlpha(e.type == Pick.FILE ? 0.5f : 1f);
+                icon.setTag(null);
+                switch (e.type) {
+                    case Pick.NEW:
+                        Thumbs.showIcon(icon, R.drawable.ic_new_folder, accent);
+                        name.setText("New folder...");
+                        break;
+                    case Pick.UP:
+                        Thumbs.showIcon(icon, R.drawable.ic_up_dir, accent);
+                        name.setText("..");
+                        break;
+                    case Pick.DIR:
+                        Thumbs.showIcon(icon, R.drawable.ic_folder, accent);
+                        name.setText(e.f.getName());
+                        break;
+                    default:
+                        Thumbs.bind(icon, e.f, Thumbs.iconFor(e.f.getName()),
+                                Ui.text2(MainActivity.this), previewsOn);
+                        name.setText(e.f.getName());
+                        break;
+                }
+                return row;
+            }
+        };
+        lv.setAdapter(ad);
         final Runnable[] fill = new Runnable[1];
         fill[0] = () -> {
-            dirs.clear();
-            labels.clear();
-            dirs.add(null);
-            labels.add("+  New folder...");
+            entries.clear();
+            entries.add(new Pick(Pick.NEW, null));
             File parent = cur[0].getParentFile();
-            if (parent != null && !cur[0].equals(root.getParentFile())) {
-                dirs.add(parent);
-                labels.add(".. (up)");
-            }
+            if (parent != null && !cur[0].equals(root)) entries.add(new Pick(Pick.UP, parent));
             File[] kids = cur[0].listFiles();
-            List<File> sub = new ArrayList<>();
+            List<File> dirs = new ArrayList<>(), files = new ArrayList<>();
             if (kids != null) {
                 for (File k : kids) {
-                    if (k.isDirectory()) sub.add(k);
+                    if (k.getName().startsWith(".")) continue;
+                    (k.isDirectory() ? dirs : files).add(k);
                 }
             }
-            Collections.sort(sub, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-            for (File k : sub) {
-                dirs.add(k);
-                labels.add(k.getName() + "/");
-            }
+            java.util.Comparator<File> byName = (x, y) -> x.getName().compareToIgnoreCase(y.getName());
+            Collections.sort(dirs, byName);
+            Collections.sort(files, byName);
+            for (File k : dirs) entries.add(new Pick(Pick.DIR, k));
+            for (File k : files) entries.add(new Pick(Pick.FILE, k));
             path.setText(cur[0].getPath());
+            lv.scheduleLayoutAnimation();
             ad.notifyDataSetChanged();
         };
+        lv.setLayoutAnimation(AnimationUtils.loadLayoutAnimation(this, R.anim.k_row_layout));
         lv.setOnItemClickListener((av, v, pos, id) -> {
-            File target = dirs.get(pos);
-            if (target == null) {
+            Pick e = entries.get(pos);
+            if (e.type == Pick.FILE) return;
+            if (e.type == Pick.NEW) {
                 nameSheet("New folder", "", "Create", n -> {
                     File nf = new File(cur[0], n);
                     if (nf.exists()) return "That name is taken";
@@ -1628,11 +2119,11 @@ public class MainActivity extends Activity {
                 });
                 return;
             }
-            cur[0] = target;
+            cur[0] = e.f;
             fill[0].run();
         });
         fill[0].run();
-        new Sheet(this, "Choose a folder").content(path).fixed(lv, 300)
+        new Sheet(this, "Choose a folder").content(path).space(6).fixed(lv, 320)
                 .button("Cancel", Ui.TEXT, null)
                 .button("Select this folder", Ui.FILLED, () -> {
                     cb.got(cur[0]);

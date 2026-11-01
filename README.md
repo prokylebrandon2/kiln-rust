@@ -46,3 +46,12 @@ Dialogs are centered; "Edit in Kiln" is offered for any small text-like file.
 - Needs `androidx.core` (FileProvider) - already in app/build.gradle.
 
 Build 2 will add editing inside archives, Settings, and custom/fallback scripts.
+
+## 3.1 (build 1 of 2)
+
+Animations (screen transitions, rows, bottom bar, dialogs), touch ripples, ".." row, pull to
+refresh, icons and previews (pictures, album art, video frames) in lists and the folder chooser,
+a floating bottom bar, dialogs that follow the keyboard, new folder while copying/moving,
+"Open with" with default apps, Settings, opening .kln files from other apps, and the integrity-check
+fix for unsafe-path errors when the working directory is "/". Build 2 adds editing inside archives
+and custom/fallback scripts.

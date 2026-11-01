@@ -11,8 +11,8 @@ android {
         applicationId "app.kiln"
         minSdk 30            // Android 11+: simple "all files access" permission
         targetSdk 34
-        versionCode 3
-        versionName "3.0"
+        versionCode 4
+        versionName "3.1"
         ndk { abiFilters "arm64-v8a", "x86_64" }
     }
 
@@ -27,6 +27,7 @@ android {
 
 dependencies {
     implementation "androidx.core:core:1.13.1"   // FileProvider: lets other apps open files
+    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"   // pull down to refresh
 }
 
 chaquopy {

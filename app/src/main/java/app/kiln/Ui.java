@@ -3,10 +3,13 @@ package app.kiln;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -21,7 +24,7 @@ import android.widget.TextView;
 final class Ui {
     private Ui() {}
 
-    static final int FILLED = 0, OUTLINE = 1, TEXT = 2, DANGER = 3;
+    static final int FILLED = 0, OUTLINE = 1, TEXT = 2, DANGER = 3, TONAL = 4;
 
     static int dp(Context c, float v) {
         return Math.round(v * c.getResources().getDisplayMetrics().density);
@@ -42,14 +45,37 @@ final class Ui {
         return g;
     }
 
-    /** A plain pressed-state change instead of an animated ripple. */
-    static StateListDrawable pressable(Context c, int fill, int stroke, float radiusDp) {
-        StateListDrawable s = new StateListDrawable();
-        int pressed = (fill == 0 || (fill >>> 24) == 0) ? c.getColor(R.color.k_sel) : dim(fill);
-        s.addState(new int[]{android.R.attr.state_pressed}, shape(c, pressed, stroke, radiusDp));
-        s.addState(new int[]{-android.R.attr.state_enabled}, shape(c, fill == 0 ? 0 : fade(fill), stroke == 0 ? 0 : fade(stroke), radiusDp));
-        s.addState(new int[]{}, shape(c, fill, stroke, radiusDp));
-        return s;
+    static int alpha(int color, int a) { return (a << 24) | (color & 0xFFFFFF); }
+
+    /** A background that lights up with a ripple where the finger touches it. */
+    static Drawable pressable(Context c, int fill, int stroke, float radiusDp) {
+        boolean solid = fill != 0 && (fill >>> 24) != 0;
+        int rc = solid ? alpha(c.getColor(R.color.k_on_accent), 0x4D) : alpha(text(c), 0x26);
+        return ripple(c, fill, stroke, radiusDp, rc);
+    }
+
+    static Drawable ripple(Context c, int fill, int stroke, float radiusDp, int rippleColor) {
+        StateListDrawable content = new StateListDrawable();
+        content.addState(new int[]{-android.R.attr.state_enabled},
+                shape(c, fill == 0 ? 0 : fade(fill), stroke == 0 ? 0 : fade(stroke), radiusDp));
+        content.addState(new int[]{}, shape(c, fill, stroke, radiusDp));
+        GradientDrawable mask = new GradientDrawable();
+        mask.setColor(0xFF000000);
+        mask.setCornerRadius(dp(c, radiusDp));
+        return new RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask);
+    }
+
+    /** A little squash while the finger is down. Doesn't consume the touch. */
+    static void pressScale(View v) {
+        v.setOnTouchListener((view, e) -> {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) {
+                view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start();
+            } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                view.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+            }
+            return false;
+        });
     }
 
     private static int dim(int color) {
@@ -97,11 +123,16 @@ final class Ui {
                 b.setTextColor(c.getColor(R.color.k_danger));
                 b.setBackground(pressable(c, 0, c.getColor(R.color.k_danger), 10));
                 break;
+            case TONAL:
+                b.setTextColor(acc);
+                b.setBackground(pressable(c, c.getColor(R.color.k_chip), 0, 10));
+                break;
             default:
                 b.setTextColor(acc);
                 b.setBackground(pressable(c, 0, 0, 10));
                 break;
         }
+        pressScale(b);
         b.setOnClickListener(l);
         return b;
     }
@@ -111,6 +142,7 @@ final class Ui {
         b.setImageResource(res);
         b.setImageTintList(ColorStateList.valueOf(text(c)));
         b.setBackground(pressable(c, 0, 0, 24));
+        pressScale(b);
         b.setOnClickListener(l);
         return b;
     }
@@ -157,13 +189,15 @@ final class Ui {
 
     static int gravityEnd() { return Gravity.END; }
 
-    /** A ScrollView that never grows past 50% of the screen, so sheets stay reachable. */
+    /** A ScrollView with a height cap, so a modal never outgrows the room above the keyboard. */
     static final class MaxScroll extends ScrollView {
+        int limit = -1;               // pixels; -1 = 60% of the screen
+
         MaxScroll(Context c) { super(c); }
 
         @Override
         protected void onMeasure(int w, int h) {
-            int max = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
+            int max = limit >= 0 ? limit : (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
             super.onMeasure(w, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST));
         }
     }

@@ -256,6 +256,7 @@ class _Job:
     def __init__(self, progress, total):
         self.progress, self.total = progress, total
         self.done = self.skipped = 0
+        self.dirs = 0                   # folders created / moved (files are counted in done)
         self.errors = []
         self.last = 0.0
 
@@ -280,9 +281,16 @@ def _count(paths):
         if os.path.isdir(p) and not os.path.islink(p):
             for _r, _d, files in os.walk(p):
                 n += max(len(files), 0)
-            n = max(n, 1)
         else:
             n += 1
+    return n
+
+
+def _count_dirs(path):
+    """Folders in a tree, including the top one."""
+    n = 1
+    for _r, dirs, _f in os.walk(path):
+        n += len(dirs)
     return n
 
 
@@ -401,13 +409,16 @@ def _put(src, dst, move, policy, job):
     if move and not os.path.lexists(dst):
         try:
             n = _count([src])
+            ndirs = _count_dirs(src)
             os.rename(src, dst)         # same filesystem: instant
+            job.dirs += ndirs
             job.done += n
             job.tick(name, True)
             return
         except OSError:
             pass
     os.makedirs(dst, exist_ok=True)
+    job.dirs += 1
     for child in sorted(os.listdir(src)):
         _put(os.path.join(src, child), os.path.join(dst, child), move, policy, job)
     if move:
@@ -438,13 +449,19 @@ def fs_transfer(srcs_json, dest, move, policy, progress):
     except bridge.Cancelled:
         return _j(ok=False, cancelled=True, message="Cancelled")
     verb = "Moved" if move else "Copied"
-    msg = f"{verb} {job.done - job.skipped} file(s)"
+    files = job.done - job.skipped
+    parts = []
+    if files > 0 or job.dirs == 0:
+        parts.append(f"{files} file" + ("" if files == 1 else "s"))
+    if job.dirs:
+        parts.append(f"{job.dirs} folder" + ("" if job.dirs == 1 else "s"))
+    msg = f"{verb} " + " and ".join(parts)
     if job.skipped:
         msg += f", skipped {job.skipped}"
     if job.errors:
         msg += f"; {len(job.errors)} failed:\n" + "\n".join(job.errors[:5])
     job.tick("", True)
-    return _j(ok=not job.errors, message=msg, done=job.done, skipped=job.skipped)
+    return _j(ok=not job.errors, message=msg, done=job.done, skipped=job.skipped, dirs=job.dirs)
 
 
 def fs_delete(paths_json, progress):

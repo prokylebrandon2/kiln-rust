@@ -287,7 +287,7 @@ public class TextActivity extends Activity {
         }
         new Sheet(this, "Unsaved changes")
                 .text("Save your changes to \"" + file.getName() + "\" before leaving?")
-                .button("Keep editing", Ui.TEXT, null)
+                .button("Keep editing", Ui.OUTLINE, null)
                 .button("Discard", Ui.DANGER, () -> {
                     dirty = false;
                     finish();

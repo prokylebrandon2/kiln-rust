@@ -11,4 +11,5 @@
     <color name="k_sel">#1F3F5F8F</color>
     <color name="k_warn_bg">#FFF3ECD9</color>
     <color name="k_danger">#FFB3261E</color>
+    <color name="k_chip">#FFECEEF3</color>
 </resources>

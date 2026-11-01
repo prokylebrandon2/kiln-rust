@@ -3,7 +3,7 @@
     <bool name="k_light_bars">false</bool>
 
     <style name="KilnTheme" parent="android:Theme.DeviceDefault.NoActionBar">
-        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowAnimationStyle">@style/KilnWindowAnim</item>
         <item name="android:windowBackground">@color/k_bg</item>
         <item name="android:statusBarColor">@color/k_bg</item>
         <item name="android:navigationBarColor">@color/k_bg</item>
@@ -27,5 +27,12 @@
         <item name="android:textColorSecondary">@color/k_text2</item>
         <item name="android:textColor">@color/k_text</item>
         <item name="android:textColorHint">@color/k_text2</item>
+    </style>
+
+    <style name="KilnWindowAnim" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/k_enter_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/k_exit_left</item>
+        <item name="android:activityCloseEnterAnimation">@anim/k_enter_left</item>
+        <item name="android:activityCloseExitAnimation">@anim/k_exit_right</item>
     </style>
 </resources>

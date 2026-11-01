@@ -3014,17 +3014,22 @@ public class MainActivity extends Activity {
         s.text(Fmt.size(r.ent.s) + (r.ent.m > 0 ? " \u00b7 " + Fmt.date(r.ent.m) : ""));
         boolean text = (kind == 1 || kind == 0) && r.ent.s <= TextActivity.MAX_BYTES && r.ent.s > 0;
         boolean image = kind == 2 && r.ent.s <= IMAGE_PREVIEW_MAX;
-        if (text || image) s.option(kind == 0 ? "View as text in Kiln" : "View in Kiln", false,
-                () -> previewFile(r.ent.p, 0));
+        // every row gets an icon, like the file sheet outside an archive; groups are divided
+        if (text || image) s.option(image ? R.drawable.ic_image : R.drawable.ic_open,
+                kind == 0 ? "View as text in Kiln" : "View in Kiln", false, () -> previewFile(r.ent.p, 0));
         if (text) s.option(R.drawable.ic_edit, "Edit as text in Kiln", false,
                 () -> editInKiln(r.ent.p));
-        s.option("Open with...", false, () -> previewFile(r.ent.p, 1));
-        s.option("Edit with...", false, () -> editExternalFile(r.ent.p));
-        if (!arc.dirty) s.option("Extract...", false, () -> {
-            List<String> k = new ArrayList<>();
-            k.add(r.key);
-            extractDialog(k);
-        });
+        if (text || image) s.divider();
+        s.option(R.drawable.ic_open, "Open with...", false, () -> previewFile(r.ent.p, 1));
+        s.option(R.drawable.ic_edit, "Edit with...", false, () -> editExternalFile(r.ent.p));
+        if (!arc.dirty) {
+            s.divider();
+            s.option(R.drawable.ic_extract, "Extract...", false, () -> {
+                List<String> k = new ArrayList<>();
+                k.add(r.key);
+                extractDialog(k);
+            });
+        }
         s.button("Cancel", Ui.TEXT, null).show();
     }
 
@@ -3394,18 +3399,113 @@ public class MainActivity extends Activity {
     }
 
     private void aboutDialog() {
-        String body = "Kiln " + getVersionName() + "\nOpen, create and unpack Kiln archives "
-                + "(AES-256-GCM encryption), and manage ordinary files.";
-        if (app != null) {
-            try {
-                JSONObject v = call("version");
-                body += "\nEngine: kiln " + v.optString("kiln");
-                String h = v.optString("helper");
-                body += h.isEmpty() ? "\nFast mode: on" : "\nFast mode: off (" + h + ")";
-            } catch (Exception ignored) {
-            }
+        final String ver = getVersionName();
+        long code = 0;
+        try {
+            code = getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
+        } catch (Exception ignored) {
         }
-        message("About Kiln", body);
+        final long build = code;
+        // the engine and script details come from Python: ask off the UI thread, then show
+        bg(p -> {
+            JSONObject o = new JSONObject();
+            if (app != null) {
+                try {
+                    JSONObject v = call("version");
+                    o.put("engine", v.optString("kiln"));
+                    o.put("helper", v.optString("helper"));
+                } catch (Exception ignored) {
+                }
+                try {
+                    PyObject m = Python.getInstance().getModule("kiln_scripts");
+                    JSONObject sc = new JSONObject(m.callAttr("status", getFilesDir().getPath()).toString());
+                    o.put("main", sc.optString("main"));
+                    o.put("main_version", sc.optString("main_version"));
+                    o.put("fallback", sc.optString("fallback"));
+                    o.put("fallback_version", sc.optString("fallback_version"));
+                } catch (Exception ignored) {
+                }
+            }
+            return o;
+        }, o -> showAbout(ver, build, o));
+    }
+
+    private void showAbout(String ver, long build, JSONObject o) {
+        // header: the mark in a tile, the name, and the version as a small chip
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.VERTICAL);
+        head.setGravity(Gravity.CENTER_HORIZONTAL);
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.drawable.ic_kiln);
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        mark.setPadding(dp(14), dp(14), dp(14), dp(14));
+        mark.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 20));
+        head.addView(mark, new LinearLayout.LayoutParams(dp(72), dp(72)));
+        TextView name = Ui.label(this, "Kiln", 24, true, false);
+        name.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        np.topMargin = dp(12);
+        head.addView(name, np);
+        TextView chip = Ui.label(this, "Version " + ver, 13, true, false);
+        chip.setTextColor(Ui.accent(this));
+        chip.setPadding(dp(12), dp(4), dp(12), dp(4));
+        chip.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 12));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cp.topMargin = dp(6);
+        head.addView(chip, cp);
+        TextView tag = Ui.label(this, "Open, create and unpack Kiln archives, and manage ordinary files.",
+                14, false, true);
+        tag.setGravity(Gravity.CENTER);
+        tag.setLineSpacing(0, 1.15f);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tp.topMargin = dp(10);
+        tp.bottomMargin = dp(16);
+        head.addView(tag, tp);
+
+        // details: label on the left, value on the right, thin lines between
+        String engine = o.optString("engine");
+        String helper = o.optString("helper");
+        String mainName = o.optString("main");
+        String fbName = o.optString("fallback");
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{"Version", ver + (build > 0 ? " (build " + build + ")" : "")});
+        if (!engine.isEmpty()) rows.add(new String[]{"Engine", "kiln " + engine});
+        if (app != null) rows.add(new String[]{"Fast mode", helper.isEmpty() ? "On" : "Off \u2013 " + helper});
+        rows.add(new String[]{"Main script", mainName.isEmpty() ? "Built-in"
+                : mainName + (o.optString("main_version").isEmpty() ? "" : " (v" + o.optString("main_version") + ")")});
+        rows.add(new String[]{"Fallback script", fbName.isEmpty() ? "None"
+                : fbName + (o.optString("fallback_version").isEmpty() ? "" : " (v" + o.optString("fallback_version") + ")")});
+        rows.add(new String[]{"Encryption", "AES-256-GCM"});
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(4), dp(14), dp(4));
+        card.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+        for (int i = 0; i < rows.size(); i++) {
+            if (i > 0) {
+                View ln = new View(this);
+                ln.setBackgroundColor(Ui.line(this));
+                card.addView(ln, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+            }
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(11), 0, dp(11));
+            TextView k = Ui.label(this, rows.get(i)[0], 14, false, true);
+            row.addView(k, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            TextView v = Ui.label(this, rows.get(i)[1], 14, true, false);
+            v.setGravity(Gravity.END);
+            LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            vp.leftMargin = dp(16);
+            row.addView(v, vp);
+            card.addView(row);
+        }
+        new Sheet(this, null).content(head).content(card).space(4)
+                .button("OK", Ui.FILLED, null).show();
     }
 
     private String getVersionName() {

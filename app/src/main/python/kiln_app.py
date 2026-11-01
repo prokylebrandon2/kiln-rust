@@ -6,6 +6,7 @@ import fnmatch
 import glob
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -630,10 +631,62 @@ def set_jobs(n):
     return _j(ok=True, jobs=bridge.JOBS)
 
 
+class _ToolSink(_Sink):
+    """Sink for the Tools screen. The self-test reports one line per finished check, so those
+    drive a real progress bar; benchmark and WAV info just show their latest line."""
+    _CHECK = re.compile(r"^(PASS|FAIL)\s+(.*?)\s+\(\d+(?:\.\d+)?s\)")
+
+    def __init__(self, progress, name, total):
+        _Sink.__init__(self, progress, total, False)
+        self.name, self.failed = name, 0
+
+    def _emit(self, force=False):
+        if self.progress is None:
+            return
+        now = time.time()
+        if not force and now - self.last < 0.05:
+            return
+        self.last = now
+        # a moving bar until the first check finishes (and always when the count is unknown)
+        frac = min(self.done / self.total, 1.0) if self.total and self.done else -1
+        self.progress.event(_j(frac=frac, done=self.done, total=self.total, file=self.file))
+
+    def line(self, text):
+        self._check()
+        self.lines.append(text)
+        if self.name == "selftest":
+            m = self._CHECK.match(text.strip())
+            if m:
+                self.done += 1
+                self.failed += m.group(1) == "FAIL"
+                self.file = (f"{self.done} of {self.total} checks done" if self.total
+                             else f"{self.done} checks done") + " \u00b7 " + m.group(2)
+                self._emit(True)
+        elif text.strip():
+            self.file = text.strip()
+            self._emit()
+
+
+def _selftest_total():
+    """How many checks the running script's self-test has (0 if it can't be told)."""
+    try:
+        import inspect
+        src = inspect.getsource(kiln.run_selftest)
+        return len(re.findall(r'^\s+check\("', src, re.M))
+    except Exception:
+        return 0
+
+
 def tool(name, arg, progress):
-    """Self-test, benchmark or WAV info. -> {ok, text}"""
+    """Self-test, benchmark or WAV info. -> {ok, text}  (or cancelled=True when stopped)"""
     args = [name] + ([arg] if arg else [])
-    sink = _Sink(None, 0, False)
-    rc = bridge.run(args, None, sink)
+    total = _selftest_total() if name == "selftest" else 0
+    sink = _ToolSink(progress, name, total)
+    if progress is not None:
+        sink.progress.event(_j(frac=-1, done=0, total=total,
+                               file="Starting..." if name == "selftest" else "Working..."))
+    rc = bridge.run(args, None, sink, hook=sink.on_bytes if progress is not None else None)
+    if rc == 130:
+        return _j(ok=False, cancelled=True, text="Cancelled")
     text = "\n".join(x.rstrip() for x in sink.lines)
     return _j(ok=rc == 0, text=text or ("Done" if rc == 0 else "The tool failed"))

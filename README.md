@@ -74,6 +74,13 @@ and custom/fallback scripts.
 - Extract and Check are blocked while there are unsaved changes (they read the saved archive).
 - Still to come (checkpoint 2): Settings for main/fallback scripts and Tools, flash drives, Termux home.
 
+## 3.13
+
+- The file menu inside an archive now has an icon on every row, with dividers between groups.
+- Self-test, Benchmark and WAV info show progress (the self-test has a bar that counts its checks)
+  and can be cancelled.
+- A tidier About box: mark, version, and a details card (engine, fast mode, scripts, encryption).
+
 ## 3.12 (second half, checkpoint 2)
 
 - **Settings > Scripts:** a custom *main script* (replaces built-in v14 at the next start; checked when chosen and falls back to v14 if it fails to load; v14 can always be switched back to) and one *fallback script* used automatically for archives the main script can't read (browse, extract and check only; no editing). The fallback needs an `open_archive` function like v14's for browsing.

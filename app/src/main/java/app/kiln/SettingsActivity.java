@@ -20,7 +20,10 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.content.res.ColorStateList;
+import android.text.TextUtils;
 import android.widget.CompoundButton;
+import android.widget.ProgressBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -362,26 +365,112 @@ public class SettingsActivity extends Activity {
                 .button("OK", Ui.FILLED, null).show();
     }
 
+    /** Python reports tool progress here and polls for cancellation. Public so Python can call it. */
+    public static class ToolProgress {
+        private final SettingsActivity owner;
+        private volatile boolean cancel;
+
+        ToolProgress(SettingsActivity owner) { this.owner = owner; }
+
+        public void event(String json) { owner.onToolProgress(json); }
+
+        public boolean cancelled() { return cancel; }
+
+        void cancel() { cancel = true; }
+    }
+
+    private ToolProgress toolP;
+    private ProgressBar toolBar;
+    private TextView toolLine;
+
+    private void onToolProgress(String json) {
+        try {
+            JSONObject o = new JSONObject(json);
+            final double frac = o.optDouble("frac", -1);
+            final String file = o.optString("file", "");
+            runOnUiThread(() -> {
+                if (toolBar == null) return;
+                if (!file.isEmpty() && toolLine != null) toolLine.setText(file);
+                if (frac < 0) {
+                    toolBar.setIndeterminate(true);
+                } else {
+                    toolBar.setIndeterminate(false);
+                    toolBar.setProgress((int) Math.round(frac * 1000));
+                }
+            });
+        } catch (Exception ignored) {
+        }
+    }
+
     private void runTool(final String tool, final String arg, final String title) {
-        final Sheet busy = new Sheet(this, title).text("Running... this can take a minute.").cancelable(false);
+        final ToolProgress tp = new ToolProgress(this);
+        toolP = tp;
+        toolLine = Ui.label(this, tool.equals("selftest") ? "Starting..." : "Working...", 13, false, true);
+        toolLine.setSingleLine(true);
+        toolLine.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        toolBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        toolBar.setIndeterminate(true);
+        toolBar.setMax(1000);
+        ColorStateList acc = ColorStateList.valueOf(Ui.accent(this));
+        toolBar.setProgressTintList(acc);
+        toolBar.setIndeterminateTintList(acc);
+        TextView hint = Ui.label(this, tool.equals("selftest")
+                ? "This can take a minute or two. Cancel stops it after the current step."
+                : "Cancel stops it after the current step.", 12, false, true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(toolLine);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.topMargin = Ui.dp(this, 12);
+        box.addView(toolBar, bp);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hp.topMargin = Ui.dp(this, 12);
+        box.addView(hint, hp);
+        final Sheet busy = new Sheet(this, title).content(box).cancelable(false);
+        busy.button("Cancel", Ui.OUTLINE, () -> {
+            tp.cancel();
+            toolLine.setText("Cancelling...");
+            busy.lastButton().setEnabled(false);
+            return false;
+        });
         busy.show();
         new Thread(() -> {
-            String r = py("tool", "kiln_app", tool, arg == null ? "" : arg, null);
+            String r = py("tool", "kiln_app", tool, arg == null ? "" : arg, tp);
+            boolean cancelled = false;
             String text;
             try {
-                text = new JSONObject(r).optString("text", r);
+                JSONObject o = new JSONObject(r);
+                cancelled = o.optBoolean("cancelled");
+                text = o.optString("text", o.optString("message", r));
             } catch (Exception e) {
                 text = r;
             }
             final String shown = text;
+            final boolean was = cancelled;
             runOnUiThread(() -> {
+                toolBar = null;
+                toolLine = null;
+                toolP = null;
+                if (isFinishing() || isDestroyed()) return;
                 busy.dismiss();
+                if (was) {
+                    Toast.makeText(this, title + " cancelled", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 TextView tv = Ui.label(this, shown, 12, false, false);
                 tv.setTypeface(android.graphics.Typeface.MONOSPACE);
                 tv.setTextIsSelectable(true);
                 new Sheet(this, title).content(tv).button("Close", Ui.FILLED, null).show();
             });
         }).start();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (toolP != null) toolP.cancel();      // leaving Settings stops a running tool
+        super.onDestroy();
     }
 
     @Override

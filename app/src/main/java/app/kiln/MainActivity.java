@@ -642,10 +642,12 @@ public class MainActivity extends Activity {
     // every layout pass, which made a folder start low and then jump while it was still settling.)
     private int rowGen;
     private long rowWindowEnd;
+    private boolean rowSoft;                                   // a refresh of the same folder: lighter
     private final java.util.HashSet<Integer> rowDone = new java.util.HashSet<>();
 
-    private void startRowAnim() {
+    private void startRowAnim(boolean soft) {
         rowGen++;
+        rowSoft = soft;
         rowDone.clear();
         rowWindowEnd = Defaults.animOn(this) ? android.os.SystemClock.uptimeMillis() + 350 : 0;
     }
@@ -662,11 +664,13 @@ public class MainActivity extends Activity {
         v.setTag(R.id.k_row_token, token);
         if (!inWindow || rowDone.contains(pos)) return;        // later passes show the finished row
         rowDone.add(pos);
-        v.setAlpha(0f);
-        v.setTranslationY(dp(14));
+        // a new folder fades up from nothing; a refresh of the same folder only dips and settles,
+        // so the list never goes blank
+        v.setAlpha(rowSoft ? 0.55f : 0f);
+        v.setTranslationY(dp(rowSoft ? 5 : 10));
         v.animate().alpha(1f).translationY(0f)
-                .setStartDelay(Defaults.anim(this, 28L * pos))
-                .setDuration(Defaults.anim(this, 230))
+                .setStartDelay(Defaults.anim(this, (rowSoft ? 12L : 22L) * pos))
+                .setDuration(Defaults.anim(this, rowSoft ? 180 : 230))
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
@@ -694,8 +698,10 @@ public class MainActivity extends Activity {
     }
 
     /** Same as redraw(), and the rows slide in. Used when a different folder is shown. */
-    private void redrawAnimated() {
-        startRowAnim();
+    private void redrawAnimated() { redrawAnimated(false); }
+
+    private void redrawAnimated(boolean soft) {
+        startRowAnim(soft);
         redraw();
     }
 
@@ -1542,7 +1548,14 @@ public class MainActivity extends Activity {
             sel.clear();
             rows.clear();
             items.clear();
-            empty.setText("Loading...");
+            empty.setText("");                              // blank at first; "Loading..." only if it's slow
+            final String waiting = dir.getPath();
+            ui.postDelayed(() -> {
+                if (rows.isEmpty() && cwd.getPath().equals(waiting) && arc == null
+                        && empty.getText().length() == 0) {
+                    empty.setText("Loading...");
+                }
+            }, 700);
         }
         redraw();
         final String path = dir.getPath();
@@ -1593,7 +1606,7 @@ public class MainActivity extends Activity {
         if (newDir || forceAnim) {
             if (newDir) list.setSelectionFromTop(0, 0);          // a new folder always starts at the top
             forceAnim = false;
-            redrawAnimated();
+            redrawAnimated(!newDir);
         } else {
             redraw();
         }

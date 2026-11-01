@@ -44,7 +44,7 @@ final class Sheet {
     private final Ui.MaxScroll scroll;
     private final List<Button> buttons = new ArrayList<>();
     private boolean keyboard, cancelable = true, closing;
-    private int imeBottom, navBottom, statusTop;
+    private int imeBottom, navBottom, statusTop, naturalH;
     private Runnable onClose;
 
     /** The card measures itself so it never grows taller than the room above the keyboard. */
@@ -55,6 +55,7 @@ final class Sheet {
         protected void onMeasure(int w, int h) {
             scroll.limit = -1;
             super.onMeasure(w, h);
+            naturalH = getMeasuredHeight();
             int avail = MeasureSpec.getSize(h);
             int over = getMeasuredHeight() - avail;
             if (avail > 0 && over > 0) {
@@ -261,10 +262,27 @@ final class Sheet {
     // ---- showing
 
     private void applyInsets() {
-        int extra = imeBottom > 0 ? Ui.dp(act, 16) : 0;     // a little lift while typing
+        int extra = (imeBottom > 0 && !keyboard) ? Ui.dp(act, 16) : 0;
         int side = Ui.dp(act, 20);
-        screen.setPadding(side, statusTop + Ui.dp(act, 12), side,
-                Math.max(imeBottom, navBottom) + Ui.dp(act, 12) + extra);
+        int padTop = statusTop + Ui.dp(act, 12);
+        int padBottom = Math.max(imeBottom, navBottom) + Ui.dp(act, 12) + extra;
+        screen.setPadding(side, padTop, side, padBottom);
+        if (keyboard) {
+            // A modal with a text box sits at its final height from the very first frame, so the
+            // keyboard sliding up doesn't drag it from the middle of the screen. It only moves
+            // when the keyboard would otherwise cover it.
+            int h = root.getHeight() > 0 ? root.getHeight()
+                    : act.getResources().getDisplayMetrics().heightPixels;
+            int availH = h - padTop - padBottom;
+            int want = (int) (h * 0.22f) - padTop;
+            int top = naturalH > 0 ? Math.min(want, availH - naturalH) : want;
+            top = Math.max(0, top);
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
+            if (lp != null && lp.topMargin != top) {
+                lp.topMargin = top;
+                card.setLayoutParams(lp);
+            }
+        }
     }
 
     Sheet show() {
@@ -292,8 +310,15 @@ final class Sheet {
         int screenW = act.getResources().getDisplayMetrics().widthPixels;
         int width = Math.min(screenW - Ui.dp(act, 40), Ui.dp(act, 460));
         FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(width,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                keyboard ? (Gravity.TOP | Gravity.CENTER_HORIZONTAL) : Gravity.CENTER);
         screen.addView(card, cp);
+        if (keyboard) {
+            applyInsets();                                 // right place before the first frame
+            card.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                if (b - t != ob - ot) applyInsets();       // now we know how tall it really is
+            });
+        }
 
         dialog.setContentView(root);
         Window w = dialog.getWindow();

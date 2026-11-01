@@ -2,7 +2,6 @@
 
 Everything here is testable without Android. The Java side passes a `progress` object with
 event(json) and cancelled(); None is fine too."""
-import concurrent.futures
 import fnmatch
 import glob
 import json
@@ -48,10 +47,6 @@ def _sniff(path):
     return None
 
 
-_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-_PARALLEL_FROM = 24         # fewer entries than this: not worth handing out
-
-
 def _entry(e, show_all, show_hidden):
     """One folder entry -> its row for the file manager, or None to leave it out."""
     try:
@@ -85,16 +80,12 @@ def _entry(e, show_all, show_hidden):
 
 def scan(path, show_all, show_hidden=False):
     """One folder for the file manager: folders, kiln archives, random-name sets, and (when
-    show_all) every other file. Every entry is looked at on its own, so big folders are
-    read by several threads at once (the work is waiting on storage, not on the CPU)."""
+    show_all) every other file."""
     try:
         entries = list(os.scandir(path))
     except OSError as e:
         return _j(ok=False, error=f"can't open {path}: {e.strerror or e}")
-    if len(entries) < _PARALLEL_FROM:
-        found = [_entry(e, show_all, show_hidden) for e in entries]
-    else:
-        found = list(_POOL.map(lambda e: _entry(e, show_all, show_hidden), entries))
+    found = [_entry(e, show_all, show_hidden) for e in entries]
     items = [i for i in found if i is not None]
     order = {"dir": 0, "set": 0}
     items.sort(key=lambda i: (order.get(i["k"], 1), i["n"].casefold()))

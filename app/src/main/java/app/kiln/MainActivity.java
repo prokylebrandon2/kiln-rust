@@ -195,11 +195,42 @@ public class MainActivity extends Activity {
         deleteTree(new File(getCacheDir(), "incoming"));
         upRowOn = Defaults.upRow(this);
         previewsOn = Defaults.previews(this);
+        installCrashLog();
         buildUi();
         startPython();
+        ui.post(this::showLastCrash);
         if (state == null && Intent.ACTION_VIEW.equals(getIntent().getAction())) {
             pendingIntent = getIntent();
         }
+    }
+
+    /** If Kiln ever stops with an error, the details are kept and shown on the next start. */
+    private void installCrashLog() {
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        final File f = new File(getFilesDir(), "last-crash.txt");
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try (java.io.PrintWriter w = new java.io.PrintWriter(f)) {
+                w.println("Kiln " + getVersionName() + ", thread " + t.getName());
+                e.printStackTrace(w);
+            } catch (Throwable ignored) {
+            }
+            if (prev != null) prev.uncaughtException(t, e);
+        });
+    }
+
+    private void showLastCrash() {
+        File f = new File(getFilesDir(), "last-crash.txt");
+        if (!f.isFile()) return;
+        String text;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            byte[] b = new byte[(int) Math.min(f.length(), 2500)];
+            int n = in.read(b);
+            text = new String(b, 0, Math.max(n, 0), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            text = "";
+        }
+        f.delete();
+        if (!text.isEmpty()) message("Kiln stopped last time", text);
     }
 
     @Override
@@ -640,16 +671,31 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * The rows slide in, once. The animation is attached for a single draw and removed again
-     * right after it, so later layout passes (selection, thumbnails, a rescan) never replay it.
-     * Call after the list's data has changed.
+     * The rows slide in, once, staggered from the top. It starts on the first draw after the
+     * list's new data is laid out and runs on the rows themselves, so no later layout pass
+     * (selection, thumbnails, a rescan) can replay it. Call after the data has changed.
      */
     private void playRows() {
-        android.view.animation.LayoutAnimationController c = Ui.rowAnim(this);   // null: animations off
-        list.setLayoutAnimation(c);
-        if (c == null) return;
-        list.scheduleLayoutAnimation();
-        list.post(() -> list.setLayoutAnimation(null));
+        if (!Defaults.animOn(this)) return;
+        list.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                android.view.ViewTreeObserver o = list.getViewTreeObserver();
+                if (o.isAlive()) o.removeOnPreDrawListener(this);
+                int n = Math.min(list.getChildCount(), 24);
+                for (int k = 0; k < n; k++) {
+                    View c = list.getChildAt(k);
+                    c.setAlpha(0f);
+                    c.setTranslationY(c.getHeight() * 0.14f);
+                    c.animate().alpha(1f).translationY(0f)
+                            .setStartDelay(Defaults.anim(MainActivity.this, 29L * k))
+                            .setDuration(Defaults.anim(MainActivity.this, 240))
+                            .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
+                            .start();
+                }
+                return true;
+            }
+        });
     }
 
     private Row upRow;

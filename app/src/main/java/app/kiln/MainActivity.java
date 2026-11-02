@@ -24,6 +24,7 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowManager;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
@@ -124,7 +125,7 @@ public class MainActivity extends Activity {
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
-            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18;
+            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -1002,6 +1003,7 @@ public class MainActivity extends Activity {
         if (arc != null) {
             if (selecting) {
                 if (sel.size() == 1) { l.add("Rename"); id.add(M_RENAME); }
+                l.add("Properties"); id.add(M_PROPS);
                 l.add("Select all"); id.add(M_SELECT_ALL);
                 l.add("Clear selection"); id.add(M_CLEAR);
             } else {
@@ -1017,6 +1019,7 @@ public class MainActivity extends Activity {
             }
         } else if (selecting) {
             l.add("Select all"); id.add(M_SELECT_ALL);
+            l.add("Properties"); id.add(M_PROPS);
             if (sel.size() == 1 && !sel.iterator().next().contains("/")) { l.add("Rename"); id.add(M_RENAME); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
@@ -1093,12 +1096,39 @@ public class MainActivity extends Activity {
             case M_RENAME:
                 if (arc != null) arcRename(); else renameSheet();
                 break;
+            case M_PROPS: propertiesSelected(); break;
             case M_TEST: runTest(); break;
             case M_INFO: infoDialog(); break;
             case M_DECRYPT: decryptInPlace(); break;
             case M_EXTRACT_ALL: extractDialog(new ArrayList<String>()); break;
             default: break;
         }
+    }
+
+    /** Properties of what is selected: files and folders, or entries inside an open archive. */
+    private void propertiesSelected() {
+        if (sel.isEmpty()) return;
+        if (arc != null) {
+            List<String[]> picked = new ArrayList<>();
+            for (String k : sel) {
+                boolean dir = k.endsWith("/");
+                long size = 0, files = 0, m = 0;
+                for (Ent e : arc.ents) {
+                    if (dir ? e.p.startsWith(k) : e.p.equals(k)) {
+                        size += Math.max(e.s, 0);
+                        files++;
+                        m = Math.max(m, e.m);
+                    }
+                }
+                picked.add(new String[]{k, String.valueOf(size), String.valueOf(m), dir ? "dir" : "file",
+                        String.valueOf(files)});
+            }
+            Props.showInArchive(this, arc.file.getName(), picked);
+            return;
+        }
+        Map<String, String> kinds = new HashMap<>();
+        for (Item it : items) kinds.put(new File(it.name).getName(), it.kind);
+        Props.show(this, selectedFiles(), kinds, f -> call("open_archive", f.getPath(), ""), null);
     }
 
     private void sortSheet() {
@@ -2447,14 +2477,28 @@ public class MainActivity extends Activity {
         final File out = new File(dir, n);
         runOp("Opening...", true, p -> {
             boolean good = false;
+            long total = -1;
+            try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE},
+                    null, null, null)) {
+                if (c != null && c.moveToFirst() && !c.isNull(0)) total = c.getLong(0);
+            } catch (Exception ignored) {
+            }
             try (InputStream in = getContentResolver().openInputStream(uri);
                  OutputStream os = new FileOutputStream(out)) {
                 if (in == null) throw new java.io.IOException("can't read that file");
                 byte[] buf = new byte[1 << 16];
                 int k;
+                long done = 0, lastEv = 0;
                 while ((k = in.read(buf)) > 0) {
                     if (p.cancelled()) break;
                     os.write(buf, 0, k);
+                    done += k;
+                    long now = System.currentTimeMillis();
+                    if (total > 0 && now - lastEv > 100) {
+                        lastEv = now;
+                        p.event("{\"frac\":" + Math.min(1.0, (double) done / total)
+                                + ",\"file\":" + JSONObject.quote(out.getName()) + "}");
+                    }
                 }
                 good = !p.cancelled();
             } finally {
@@ -3014,12 +3058,13 @@ public class MainActivity extends Activity {
     private final class ProgressUi {
         final Sheet sheet;
         final ProgressBar bar;
-        final TextView line;
+        final TextView line, pct;
 
         ProgressUi(String heading, final Progress cancelP) {
-            line = Ui.label(MainActivity.this, "", 13, false, true);
+            line = Ui.label(MainActivity.this, "", 14, false, true);
             line.setSingleLine(true);
             line.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            pct = Ui.label(MainActivity.this, "", 16, true, false);
             bar = new ProgressBar(MainActivity.this, null, android.R.attr.progressBarStyleHorizontal);
             bar.setIndeterminate(true);
             bar.setMax(1000);
@@ -3028,11 +3073,27 @@ public class MainActivity extends Activity {
             bar.setIndeterminateTintList(acc);
             LinearLayout box = new LinearLayout(MainActivity.this);
             box.setOrientation(LinearLayout.VERTICAL);
-            box.addView(line);
+            LinearLayout top = new LinearLayout(MainActivity.this);       // file name ... percent
+            top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(line, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            pp.leftMargin = dp(12);
+            top.addView(pct, pp);
+            box.addView(top);
             LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             bp.topMargin = dp(12);
             box.addView(bar, bp);
+            CheckBox awake = Ui.check(MainActivity.this, "Keep the screen from turning off", false);
+            awake.setOnCheckedChangeListener((v, on) -> {
+                if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            });
+            LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            ap.topMargin = dp(10);
+            box.addView(awake, ap);
             final Sheet sh = new Sheet(MainActivity.this, heading).content(box).cancelable(false);
             if (cancelP != null) {
                 sh.button("Cancel", Ui.OUTLINE, () -> {
@@ -3050,13 +3111,18 @@ public class MainActivity extends Activity {
             if (!file.isEmpty()) line.setText(file);
             if (frac < 0) {
                 bar.setIndeterminate(true);
+                pct.setText("");
             } else {
                 bar.setIndeterminate(false);
                 bar.setProgress((int) Math.round(frac * 1000));
+                pct.setText(Math.min(100, (int) Math.round(frac * 100)) + "%");
             }
         }
 
-        void close() { sheet.dismiss(); }
+        void close() {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            sheet.dismiss();
+        }
     }
 
     void onProgress(String json) {

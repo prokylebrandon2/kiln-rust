@@ -121,3 +121,8 @@ and custom/fallback scripts.
 - Viewing an image from an archive no longer deletes its cached copy when you close the viewer.
 - A file opened from another app (a private copy in the cache) is deleted when you close the archive, and an earlier one is removed when you open the next.
 - Scratch folders from editing sessions that were cut short are cleaned up.
+
+## 3.18
+
+- **Percentages on every progress box:** the file name on the left, the percentage on the right, the bar underneath (also in Settings > Tools and when a file is copied in from another app). A "Keep the screen from turning off" tick is there for long jobs.
+- **Properties** (select something, then the menu): type, size (with the exact byte count), last modification, permissions, file system path and type. Files also show an MD5 (calculated in the background). Folders show the file count and total size as they are counted, and a "Disable media scanning" tick (adds or removes `.nomedia`). Kiln archives add archive properties: type, encryption, file count, content size and compression ratio. Several items show combined totals. Inside an archive it shows what the archive's table knows about the selected entries. Closing the box stops any counting or MD5 still running.

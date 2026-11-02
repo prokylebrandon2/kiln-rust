@@ -648,7 +648,7 @@ public class SettingsActivity extends Activity {
 
     private ToolProgress toolP;
     private ProgressBar toolBar;
-    private TextView toolLine;
+    private TextView toolLine, toolPct;
 
     private void onToolProgress(String json) {
         try {
@@ -660,9 +660,11 @@ public class SettingsActivity extends Activity {
                 if (!file.isEmpty() && toolLine != null) toolLine.setText(file);
                 if (frac < 0) {
                     toolBar.setIndeterminate(true);
+                    if (toolPct != null) toolPct.setText("");
                 } else {
                     toolBar.setIndeterminate(false);
                     toolBar.setProgress((int) Math.round(frac * 1000));
+                    if (toolPct != null) toolPct.setText(Math.min(100, (int) Math.round(frac * 100)) + "%");
                 }
             });
         } catch (Exception ignored) {
@@ -686,7 +688,15 @@ public class SettingsActivity extends Activity {
                 : "Cancel stops it after the current step.", 12, false, true);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(toolLine);
+        toolPct = Ui.label(this, "", 16, true, false);
+        LinearLayout top = new LinearLayout(this);                 // line ... percent
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(toolLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams tpp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tpp.leftMargin = Ui.dp(this, 12);
+        top.addView(toolPct, tpp);
+        box.addView(top);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         bp.topMargin = Ui.dp(this, 12);

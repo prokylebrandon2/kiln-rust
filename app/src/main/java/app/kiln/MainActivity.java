@@ -684,11 +684,13 @@ public class MainActivity extends Activity {
                 icon.setTag(null);
             } else if (r.path != null && !r.up) {
                 File f = new File(r.path);
-                Thumbs.bind(icon, f, r.icon, r.folder || r.dir ? accent : Ui.text2(getContext()),
+                Thumbs.bind(icon, f, r.icon, r.folder || r.dir ? accent : Icons.tintFor(getContext(), r.title),
                         previewsOn);
             } else {
                 icon.setTag(null);
-                Thumbs.showIcon(icon, r.icon, r.folder || r.dir || r.up ? accent : Ui.text2(getContext()));
+                Thumbs.showIcon(icon, r.icon, r.folder || r.dir || r.up ? accent
+                        : r.item != null && !r.item.kind.equals("file") ? Ui.text2(getContext())
+                        : Icons.tintFor(getContext(), r.title));
             }
             if (selected != wasSelected) {                    // a little pop when selection flips
                 icon.setScaleX(0.7f);
@@ -1539,7 +1541,12 @@ public class MainActivity extends Activity {
         r.time = e.m;
         r.ext = Fmt.ext(r.title);
         String when = e.m > 0 ? Fmt.date(e.m) : "";
-        String where = sl > 0 ? arcWhere(e.p.substring(0, sl)) : (Defaults.searchPath(this) == 1 ? "/" : "");
+        String where;
+        try {
+            where = sl > 0 ? arcWhere(e.p.substring(0, sl)) : (Defaults.searchPath(this) == 1 ? "/" : "");
+        } catch (RuntimeException ex) {
+            where = "";                                     // a label must never crash the search
+        }
         r.sub = where.isEmpty() ? when : (when.isEmpty() ? where : where + " \u00b7 " + when);
         r.right = Fmt.size(e.s);
         return r;
@@ -1558,9 +1565,11 @@ public class MainActivity extends Activity {
         if (Defaults.searchPath(this) == 1) return "/" + dir;
         String d = dir + "/";
         if (arc != null && !arc.prefix.isEmpty() && d.startsWith(arc.prefix)) {
+            // A hit directly in the folder being viewed: d equals the prefix, nothing below it.
+            if (d.length() <= arc.prefix.length()) return "This folder";
             return d.substring(arc.prefix.length(), d.length() - 1);
         }
-        return dir;
+        return dir.isEmpty() ? "This folder" : dir;
     }
 
     private void startDeepSoon(long delay) {
@@ -1762,6 +1771,12 @@ public class MainActivity extends Activity {
         if (d.equals(root)) return true;
         for (File[] v : volumes()) if (v[0].equals(d)) return true;
         return false;
+    }
+
+    /** The icon for a folder: Android's standard folders (Download, DCIM, Music...) get their own. */
+    private int dirIcon(File d) {
+        File p = d.getParentFile();
+        return Icons.forDir(d, p != null && isStorageRoot(p));
     }
 
     /** The storage a folder lives on (Internal storage if it matches none). */
@@ -2370,7 +2385,7 @@ public class MainActivity extends Activity {
                 case "dir":
                     row.folder = true;
                     row.size = Math.max(it.count, 0);
-                    row.icon = R.drawable.ic_folder;
+                    row.icon = dirIcon(new File(cwd, it.name));
                     row.sub = when;
                     row.right = it.count < 0 ? "" : plural(it.count, "item", "items");
                     break;
@@ -4332,7 +4347,7 @@ public class MainActivity extends Activity {
                         name.setText("..");
                         break;
                     case Pick.DIR:
-                        Thumbs.showIcon(icon, R.drawable.ic_folder, accent);
+                        Thumbs.showIcon(icon, dirIcon(e.f), accent);
                         name.setText(e.f.getName());
                         break;
                     case Pick.VOL:
@@ -4341,7 +4356,7 @@ public class MainActivity extends Activity {
                         break;
                     default:
                         Thumbs.bind(icon, e.f, Thumbs.iconFor(e.f.getName()),
-                                Ui.text2(MainActivity.this), previewsOn);
+                                Icons.tintFor(MainActivity.this, e.f.getName()), previewsOn);
                         name.setText(e.f.getName());
                         break;
                 }

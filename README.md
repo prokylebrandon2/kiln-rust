@@ -148,3 +148,10 @@ and custom/fallback scripts.
 - **New "Extraction complete" screen:** header with the archive name, tiles for files, size and time, and a card with where it was saved, the source archive, the checksum result and whether files were replaced. Buttons: OK and Open folder.
 - **Self-test result redone:** a verdict header, tiles for checks / passed / time, failures listed first in red with their message, then every passed check with its time. The raw text list is still the fallback if the output isn't in the usual shape.
 - **Files without an extension:** Kiln looks at the first 8 KB when a name doesn't say what a file is. Text opens in Kiln's viewer and editor (empty files too); an extensionless picture opens in the image viewer; binary data no longer gets a "View as text" option (from inside an archive, Kiln says it looks binary and offers Open with...). Other apps are told the real type (text/plain, image/png, application/pdf, application/zip, ...), so "Open with" lists the right apps. Properties shows the detected type.
+
+## 3.22 (checkpoint 1 of 2: icons)
+
+- **Distinct file icons, with colour:** PDF, documents, spreadsheets, slides, apps (APK), archives (zip, 7z, rar, tar...), fonts, databases, web pages, shell scripts, keys and certificates, e-books, disk images, executables, plain text, config files and code each have their own shape. Colours are muted so they work in light and dark. Pictures, music and video keep their previews.
+- **Standard Android folders have their own icons:** Download, DCIM (and Camera), Pictures (and Screenshots), Movies, Music (also Audiobooks, Podcasts, Recordings), Documents, Android, and Alarms / Notifications / Ringtones. They match only at the top of a storage, so your own folder called "Music" elsewhere stays plain.
+- The folder chooser uses the same icons.
+- Groundwork for checkpoint 2: `Icons.java` holds the list of folder icons (folder, download, camera, pictures, movies, music, documents, android, sounds, archives, favourite, heart, private, code, home, phone, SD card, USB), ready for choosing one per folder and per bookmark.

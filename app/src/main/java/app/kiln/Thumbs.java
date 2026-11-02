@@ -52,15 +52,7 @@ final class Thumbs {
     /** True when a preview can be drawn for this kind (code and other files only get icons). */
     static boolean previewable(int kind) { return kind == IMAGE || kind == AUDIO || kind == VIDEO; }
 
-    static int iconFor(String name) {
-        switch (kindOf(name)) {
-            case IMAGE: return R.drawable.ic_image;
-            case AUDIO: return R.drawable.ic_music;
-            case VIDEO: return R.drawable.ic_video;
-            case CODE: return R.drawable.ic_code;
-            default: return R.drawable.ic_file;
-        }
-    }
+    static int iconFor(String name) { return Icons.forFile(name); }
 
     /** A square, rounded icon tile. Used for list rows and the folder chooser. */
     static ImageView box(Context c) {

@@ -293,9 +293,17 @@ public class MainActivity extends Activity {
         } else if (pickArc != null) {
             endPick(false);
         } else {
-            super.onBackPressed();
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - lastBackAtHome < 2000) {
+                super.onBackPressed();
+            } else {
+                lastBackAtHome = now;
+                toast("Tap Back again to exit");
+            }
         }
     }
+
+    private long lastBackAtHome;                      // when Back was last pressed in the home folder
 
     // ------------------------------------------------------------------ small helpers
 
@@ -3739,13 +3747,86 @@ public class MainActivity extends Activity {
             if (r.optBoolean("ok")) {
                 sel.clear();
                 loadDir(cwd);
-                message("Created " + dest.getName(), r.optString("message"));
+                packResult(dest, r.optString("message"), encrypt, separate, noCompress);
             } else if (r.optBoolean("cancelled")) {
                 toast("Cancelled");
             } else {
                 message("Couldn't create the archive", r.optString("message"));
             }
         });
+    }
+
+    /** The result of Pack: a header, three number tiles, how much space it saved, and the details. */
+    private void packResult(File dest, String msg, boolean encrypt, boolean separate, boolean noCompress) {
+        int tone = Ui.accent(this);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(separate ? R.drawable.ic_set : encrypt ? R.drawable.ic_lock : R.drawable.ic_archive);
+        Ui.tint(ic, tone);
+        ic.setPadding(dp(13), dp(13), dp(13), dp(13));
+        ic.setBackground(Ui.shape(this, Ui.alpha(tone, 0x26), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, separate ? "Archives created" : "Archive created", 18, true, false));
+        TextView nm = Ui.label(this, dest.getName(), 13, false, true);
+        nm.setSingleLine(true);
+        nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(nm);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = dp(14);
+        head.addView(col, cp);
+        Sheet sh = new Sheet(this, null).content(head).space(16);
+
+        List<String[]> rows = new ArrayList<>();
+        // kiln's line: "3 file(s): 40.0 MB -> 40.0 MB (100.0% of original) in 3.6s [1 core]"
+        //          or: "18 archive(s) in /path: 65.4 KB -> 16.2 KB (24.8% of original) in 1.6s"
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(\\d+) (file|archive)\\(s\\).*?: (.+?) -> (.+?) \\(([\\d.]+)% of original\\) in ([\\d.]+)s")
+                .matcher(msg);
+        if (m.find()) {
+            int n = Integer.parseInt(m.group(1));
+            boolean arcs = m.group(2).equals("archive");
+            String orig = m.group(3), packed = m.group(4), time = m.group(6);
+            double pct = Double.parseDouble(m.group(5));
+            LinearLayout stats = new LinearLayout(this);
+            stats.addView(statTile(String.valueOf(n), arcs ? (n == 1 ? "archive" : "archives")
+                    : (n == 1 ? "file packed" : "files packed")), statLp(false));
+            stats.addView(statTile(packed, "stored"), statLp(true));
+            stats.addView(statTile(time + " s", "took"), statLp(false));
+            sh.content(stats).space(16);
+
+            LinearLayout cmp = new LinearLayout(this);
+            cmp.setOrientation(LinearLayout.VERTICAL);
+            cmp.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+            cmp.setPadding(dp(14), dp(12), dp(14), dp(12));
+            LinearLayout top = new LinearLayout(this);
+            top.addView(Ui.label(this, "Compression", 13, false, true),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView right = Ui.label(this, pct >= 100 ? "No saving"
+                    : "Saved " + Math.round(100 - pct) + "%", 13, true, false);
+            right.setTextColor(tone);
+            top.addView(right);
+            cmp.addView(top);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
+            bp.topMargin = dp(8);
+            cmp.addView(Ui.meter(this, pct / 100.0, true), bp);
+            TextView cap = Ui.label(this, orig + " became " + packed, 12, false, true);
+            LinearLayout.LayoutParams capP = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            capP.topMargin = dp(6);
+            cmp.addView(cap, capP);
+            sh.content(cmp).space(14);
+        } else {
+            rows.add(new String[]{"Result", msg.isEmpty() ? "Done" : msg, "stack"});
+        }
+        rows.add(new String[]{"Location", dest.getPath(), "stack"});
+        rows.add(new String[]{"Layout", separate ? "One archive per file, random names" : "Single archive"});
+        rows.add(new String[]{"Encryption", encrypt ? "AES-256-GCM" : "None"});
+        if (noCompress) rows.add(new String[]{"Compression", "Stored only"});
+        sh.content(detailCard(rows)).space(4).button("OK", Ui.FILLED, null).show();
     }
 
     /** One line of the folder chooser. */

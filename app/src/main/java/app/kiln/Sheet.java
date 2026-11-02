@@ -43,6 +43,7 @@ final class Sheet {
     private final LinearLayout body;
     private final Ui.MaxScroll scroll;
     private final List<Button> buttons = new ArrayList<>();
+    private Button last;                    // the most recently added button, whatever the final order
     private boolean keyboard, cancelable = true, closing;
     private int imeBottom, navBottom, statusTop;
     private boolean insetsSeen;
@@ -258,10 +259,11 @@ final class Sheet {
             if (click == null || click.run()) dismiss();
         });
         buttons.add(b);
+        last = b;
         return this;
     }
 
-    Button lastButton() { return buttons.isEmpty() ? null : buttons.get(buttons.size() - 1); }
+    Button lastButton() { return last; }
 
     Sheet keyboard() { keyboard = true; return this; }
 
@@ -295,7 +297,18 @@ final class Sheet {
 
     Sheet show() {
         if (!buttons.isEmpty()) {
+            int screenW0 = act.getResources().getDisplayMetrics().widthPixels;
+            int cardW = Math.min(screenW0 - Ui.dp(act, 40), Ui.dp(act, 460));
             boolean stack = buttons.size() > 2;
+            if (buttons.size() == 2) {
+                // two buttons share a row; if either label wouldn't fit on one line, stack them instead
+                int each = (cardW - Ui.dp(act, 40) - Ui.dp(act, 10)) / 2 - Ui.dp(act, 32);
+                for (Button b : buttons) {
+                    if (b.getPaint().measureText(b.getText().toString()) > each) stack = true;
+                }
+                // stacked: the main action (added last) goes on top
+                if (stack) java.util.Collections.reverse(buttons);
+            }
             LinearLayout row = new LinearLayout(act);
             row.setOrientation(stack ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
             for (int i = 0; i < buttons.size(); i++) {

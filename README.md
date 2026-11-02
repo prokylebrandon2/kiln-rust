@@ -200,3 +200,8 @@ and custom/fallback scripts.
 - **Shizuku is always read-only.**
 - **Root:** Settings > Access > "Allow changes (dangerous)" turns these back on, after a warning. Off by default.
 - The same rule is enforced inside `Priv` itself, so a missed button can't change anything either.
+
+## 4.0.3
+
+- Dialogs: when two buttons' labels don't fit side by side (e.g. "I understand, turn on"), they now stack, main action on top, instead of wrapping and getting clipped.
+- All buttons have a little vertical padding, so a wrapped label is never cut off.

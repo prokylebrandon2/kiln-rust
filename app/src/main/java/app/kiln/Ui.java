@@ -136,7 +136,7 @@ final class Ui {
         b.setMinimumHeight(dp(c, 44));
         b.setMinWidth(0);
         b.setMinimumWidth(dp(c, 64));
-        b.setPadding(dp(c, 16), 0, dp(c, 16), 0);
+        b.setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10));   // room for a wrapped label
         int acc = accent(c);
         switch (kind) {
             case FILLED:

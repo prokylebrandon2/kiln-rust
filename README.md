@@ -74,6 +74,17 @@ and custom/fallback scripts.
 - Extract and Check are blocked while there are unsaved changes (they read the saved archive).
 - Still to come (checkpoint 2): Settings for main/fallback scripts and Tools, flash drives, Termux home.
 
+## 3.14
+
+- Main and fallback scripts now have a signature: the first bytes of the files they handle. Choosing a
+  script reads its `MAGIC` constant; if it has none you type one (text like `KLNA` or hex like
+  `0x4B4C4E41`). It can be changed later in Settings. The file list uses the main script's signature
+  first, then the fallback's. Opening is still main first, then fallback.
+- A fallback script now takes effect straight away (no restart needed).
+- The "Termux home" bookmark is gone.
+- Back remembers where you were in a folder, including folders inside an archive.
+- Archive info and the Benchmark and WAV info results have proper layouts.
+
 ## 3.13
 
 - The file menu inside an archive now has an icon on every row, with dividers between groups.

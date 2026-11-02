@@ -117,6 +117,7 @@ public class MainActivity extends Activity {
         String sid;                          // staged-edit session (null until the first edit)
         boolean dirty;                       // there are unsaved changes
         final List<Ent> ents = new ArrayList<>();
+        final Map<String, int[]> pos = new HashMap<>();   // folder inside the archive -> {first row, offset}
     }
 
     private static final int S_NAME = 0, S_SIZE = 1, S_DATE = 2, S_TYPE = 3;
@@ -284,8 +285,7 @@ public class MainActivity extends Activity {
             } else {
                 String p = arc.prefix.substring(0, arc.prefix.length() - 1);
                 int i = p.lastIndexOf('/');
-                arc.prefix = i < 0 ? "" : p.substring(0, i + 1);
-                buildArcRows();
+                arcBackTo(i < 0 ? "" : p.substring(0, i + 1));
             }
         } else if (!cwd.equals(root) && cwd.getParentFile() != null) {
             loadDir(isTopLevel(cwd) ? root : cwd.getParentFile());
@@ -1423,7 +1423,6 @@ public class MainActivity extends Activity {
         for (File[] v : removableVolumes()) {                     // USB drives and SD cards: listed while plugged in
             card.addView(markRow(R.drawable.ic_archive, v[1].getName(), v[0].getPath(), false));
         }
-        card.addView(actionRow(R.drawable.ic_folder, "Termux home", this::openTermuxHome));
         for (String bp : saved) {
             File f = new File(bp);
             card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true));
@@ -1491,26 +1490,8 @@ public class MainActivity extends Activity {
 
     /** True for folders that act as a top of the tree: Back from here goes to Internal storage. */
     private boolean isTopLevel(File d) {
-        if (d.equals(termuxHome())) return true;
         for (File[] v : removableVolumes()) if (v[0].equals(d)) return true;
         return false;
-    }
-
-    private static File termuxHome() { return new File("/data/data/com.termux/files/home"); }
-
-    private void openTermuxHome() {
-        if (marks != null) marks.dismiss();
-        File h = termuxHome();
-        if (h.isDirectory() && h.canRead()) {
-            goTo(h.getPath());
-            return;
-        }
-        message("Termux home isn't readable",
-                "Android keeps each app's private files away from other apps, so Kiln can't open "
-                + "Termux's home folder directly (only a rooted phone allows it).\n\n"
-                + "Two ways around it:\n\u2022 In Termux run  termux-setup-storage  and keep what you want "
-                + "to use here in ~/storage/shared (it appears in Internal storage).\n"
-                + "\u2022 Copy files out with  cp -r ~/folder ~/storage/shared/  and open them from here.");
     }
 
     private View iconTile(int icon) {
@@ -1651,7 +1632,7 @@ public class MainActivity extends Activity {
         }
         boolean moved = arc != null || !dir.equals(cwd);
         if (moved && arc == null) rememberScroll();           // so Back returns to the same spot
-        boolean goingUp = moved && (arc != null ? dir.equals(cwd) : dir.equals(cwd.getParentFile()));   // Back, or leaving an archive
+        boolean goingUp = moved && (arc != null ? dir.equals(cwd) : isAncestor(dir, cwd));   // Back, up, or leaving an archive
         if (searching && moved) closeSearchQuiet();
         // A folder seen before is shown at once from memory and rescanned quietly behind it,
         // so going Back never waits for the scan. Otherwise the rows already on screen stay
@@ -1678,6 +1659,9 @@ public class MainActivity extends Activity {
             if (goingUp) list.setSelectionFromTop(snap.first, snap.top);
             else list.setSelectionFromTop(0, 0);
             redraw();
+            if (goingUp) list.post(() -> {                       // again once the rows are laid out
+                if (gen == loadGen && arc == null) list.setSelectionFromTop(snap.first, snap.top);
+            });
             playRows();
         } else {
             if (moved) shownSig = null;                       // what's on screen isn't this folder
@@ -1713,6 +1697,12 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** True when `dir` is a folder above `below` (the parent, or further up). */
+    private static boolean isAncestor(File dir, File below) {
+        String d = dir.getPath(), b = below.getPath();
+        return !d.equals(b) && b.startsWith(d.endsWith("/") ? d : d + "/");
+    }
+
     private int loadGen;
     private boolean dirPending;                                // a folder is loading: rows are the old ones
     private Boolean upFrozen;
@@ -1733,7 +1723,7 @@ public class MainActivity extends Activity {
             new java.util.LinkedHashMap<String, Snap>(32, 0.75f, true) {
                 @Override
                 protected boolean removeEldestEntry(java.util.Map.Entry<String, Snap> e) {
-                    return size() > 24;
+                    return size() > 64;
                 }
             };
     private String shownSig;                                   // what the rows on screen were built from
@@ -1900,8 +1890,7 @@ public class MainActivity extends Activity {
         }
         if (arc != null) {
             if (r.dir) {
-                arc.prefix = r.key;
-                buildArcRows();
+                arcEnter(r.key);
             } else {
                 arcFileSheet(r);
             }
@@ -2209,6 +2198,7 @@ public class MainActivity extends Activity {
         plainSet = false;
         sel.clear();
         buildArcRows();
+        list.setSelectionFromTop(0, 0);
         if (after != null) after.run();
     }
 
@@ -2268,6 +2258,32 @@ public class MainActivity extends Activity {
         arcClip.clear();
         sel.clear();
         loadDir(cwd);                                         // loadDir sees the open archive and leaves it
+    }
+
+    /** Where the list is scrolled to: {first visible row, its offset from the top}. */
+    private int[] scrollNow() {
+        View c = list.getChildAt(0);
+        return new int[]{list.getFirstVisiblePosition(), c == null ? 0 : c.getTop() - list.getPaddingTop()};
+    }
+
+    /** Open a folder inside the archive: remember where this one was, start the new one at the top. */
+    private void arcEnter(String prefix) {
+        if (!searching) arc.pos.put(arc.prefix, scrollNow());
+        arc.prefix = prefix;
+        buildArcRows();
+        list.setSelectionFromTop(0, 0);
+    }
+
+    /** Back to a folder inside the archive: land where it was left. */
+    private void arcBackTo(String prefix) {
+        arc.prefix = prefix;
+        buildArcRows();
+        final int[] at = arc.pos.get(prefix);
+        final Arc a = arc;
+        list.setSelectionFromTop(at == null ? 0 : at[0], at == null ? 0 : at[1]);
+        if (at != null) list.post(() -> {                       // once the rows are laid out
+            if (arc == a && a.prefix.equals(prefix)) list.setSelectionFromTop(at[0], at[1]);
+        });
     }
 
     private void buildArcRows() {
@@ -2603,8 +2619,7 @@ public class MainActivity extends Activity {
     /** Archives store files only: a new folder is just a place to put things (gone if left empty). */
     private void arcNewFolder() {
         nameSheet("New folder", "", "Create", n -> {
-            arc.prefix = arc.prefix + n + "/";
-            buildArcRows();
+            arcEnter(arc.prefix + n + "/");
             return null;
         });
     }
@@ -3150,17 +3165,89 @@ public class MainActivity extends Activity {
     }
 
     private void infoDialog() {
+        final Arc a = arc;
         long raw = 0;
-        for (Ent e : arc.ents) raw += Math.max(e.s, 0);
-        StringBuilder sb = new StringBuilder();
-        sb.append(arc.isSet ? "Encrypted set (one archive per file)\n" : "Archive\n");
-        sb.append("Encrypted: ").append(arc.encrypted ? "yes (AES-256-GCM)" : "no").append('\n');
-        sb.append("Files: ").append(arc.ents.size()).append('\n');
-        sb.append("Original size: ").append(Fmt.size(raw)).append('\n');
-        sb.append("Stored size: ").append(Fmt.size(arc.packed));
-        if (raw > 0) sb.append(" (").append(Math.round(100.0 * arc.packed / raw)).append("%)");
-        sb.append('\n').append("Location: ").append(arc.file.getPath());
-        message(arc.file.getName(), sb.toString());
+        java.util.HashSet<String> folders = new java.util.HashSet<>();
+        for (Ent e : a.ents) {
+            raw += Math.max(e.s, 0);
+            for (int i = e.p.indexOf('/'); i >= 0; i = e.p.indexOf('/', i + 1)) folders.add(e.p.substring(0, i));
+        }
+
+        // header: an icon for what kind of archive it is, the name, and whether it's locked
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(a.isSet ? R.drawable.ic_set : a.encrypted ? R.drawable.ic_lock : R.drawable.ic_archive);
+        Ui.tint(ic, Ui.accent(this));
+        ic.setPadding(dp(13), dp(13), dp(13), dp(13));
+        ic.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView name = Ui.label(this, a.file.getName(), 18, true, false);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(name);
+        TextView lock = Ui.label(this, a.encrypted ? "Encrypted \u00b7 AES-256-GCM" : "Not encrypted", 13, false, true);
+        col.addView(lock);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = dp(14);
+        head.addView(col, cp);
+
+        // three numbers at a glance
+        LinearLayout stats = new LinearLayout(this);
+        stats.addView(statTile(String.valueOf(a.ents.size()), a.ents.size() == 1 ? "file" : "files"), statLp(false));
+        stats.addView(statTile(Fmt.size(raw), "original"), statLp(true));
+        stats.addView(statTile(Fmt.size(a.packed), "stored"), statLp(false));
+
+        Sheet sh = new Sheet(this, null).content(head).space(16).content(stats);
+
+        // how much the packing saved: a bar of stored size against the original
+        if (raw > 0) {
+            double ratio = Math.min(1.0, (double) a.packed / raw);
+            long saved = Math.max(raw - a.packed, 0);
+            LinearLayout cmp = new LinearLayout(this);
+            cmp.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout top = new LinearLayout(this);
+            top.addView(Ui.label(this, "Compression", 13, false, true),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView right = Ui.label(this, saved > 0
+                    ? "Saved " + Fmt.size(saved) + " (" + Math.round(100.0 * saved / raw) + "%)"
+                    : "No saving", 13, true, false);
+            right.setTextColor(Ui.accent(this));
+            top.addView(right);
+            cmp.addView(top);
+            ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            bar.setMax(1000);
+            bar.setProgress((int) Math.max(Math.round(ratio * 1000), 8));   // never an empty-looking bar
+            bar.setProgressTintList(ColorStateList.valueOf(Ui.accent(this)));
+            bar.setProgressBackgroundTintList(ColorStateList.valueOf(Ui.line(this)));
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
+            bp.topMargin = dp(8);
+            cmp.addView(bar, bp);
+            TextView cap = Ui.label(this, "Stored size is " + Math.round(100.0 * a.packed / raw)
+                    + "% of the original", 12, false, true);
+            LinearLayout.LayoutParams capP = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            capP.topMargin = dp(6);
+            cmp.addView(cap, capP);
+            sh.space(16).content(cmp);
+        }
+
+        List<String[]> rows = new ArrayList<>();
+        rows.add(new String[]{"Type", a.isSet ? "Encrypted set (one archive per file)" : "Archive"});
+        rows.add(new String[]{"Folders", String.valueOf(folders.size())});
+        if (a.file.lastModified() > 0) rows.add(new String[]{"Modified", Fmt.date(a.file.lastModified() / 1000)});
+        if (!a.isSet && a.file.isFile()) rows.add(new String[]{"Size on disk", Fmt.size(a.file.length())});
+        rows.add(new String[]{"Location", a.file.getPath(), "stack"});
+        sh.space(16).content(detailCard(rows)).space(4).button("OK", Ui.FILLED, null).show();
+    }
+
+    private LinearLayout.LayoutParams statLp(boolean middle) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        if (middle) lp.setMargins(dp(8), 0, dp(8), 0);
+        return lp;
     }
 
     // ------------------------------------------------------------------ pack
@@ -3430,6 +3517,10 @@ public class MainActivity extends Activity {
         }, o -> showAbout(ver, build, o));
     }
 
+    private LinearLayout detailCard(List<String[]> rows) { return Ui.detailCard(this, rows); }
+
+    private View statTile(String big, String small) { return Ui.statTile(this, big, small); }
+
     private void showAbout(String ver, long build, JSONObject o) {
         // header: the mark in a tile, the name, and the version as a small chip
         LinearLayout head = new LinearLayout(this);
@@ -3480,30 +3571,7 @@ public class MainActivity extends Activity {
                 : fbName + (o.optString("fallback_version").isEmpty() ? "" : " (v" + o.optString("fallback_version") + ")")});
         rows.add(new String[]{"Encryption", "AES-256-GCM"});
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(4), dp(14), dp(4));
-        card.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
-        for (int i = 0; i < rows.size(); i++) {
-            if (i > 0) {
-                View ln = new View(this);
-                ln.setBackgroundColor(Ui.line(this));
-                card.addView(ln, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
-            }
-            LinearLayout row = new LinearLayout(this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(0, dp(11), 0, dp(11));
-            TextView k = Ui.label(this, rows.get(i)[0], 14, false, true);
-            row.addView(k, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            TextView v = Ui.label(this, rows.get(i)[1], 14, true, false);
-            v.setGravity(Gravity.END);
-            LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            vp.leftMargin = dp(16);
-            row.addView(v, vp);
-            card.addView(row);
-        }
+        LinearLayout card = detailCard(rows);
         new Sheet(this, null).content(head).content(card).space(4)
                 .button("OK", Ui.FILLED, null).show();
     }

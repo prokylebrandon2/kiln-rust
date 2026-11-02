@@ -46,6 +46,83 @@ def _save_meta(files_dir, m):
         json.dump(m, f)
 
 
+# ---- signatures: the first bytes of the files a script handles (e.g. b"KLNA")
+
+MAX_MAGIC = 16
+DEFAULT_MAGIC = b"KLNA"
+_main_loaded = False        # a custom main script is the one running
+
+
+def parse_magic(text):
+    """What the user typed -> bytes. Plain text is taken as is; 0x4B4C4E41 or hex:4B 4C 4E 41 is hex."""
+    t = (text or "").strip()
+    low = t.lower()
+    if low.startswith("0x") or low.startswith("hex:"):
+        h = "".join(t[2:].split()) if low.startswith("0x") else "".join(t[4:].split())
+        try:
+            b = bytes.fromhex(h)
+        except ValueError:
+            raise ValueError("that isn't valid hex (use pairs of digits, like 0x4B4C4E41)")
+    else:
+        b = t.encode("utf-8")
+    if not b:
+        raise ValueError("the signature is empty")
+    if len(b) > MAX_MAGIC:
+        raise ValueError(f"the signature can be at most {MAX_MAGIC} bytes")
+    return b
+
+
+def show_magic(b):
+    """bytes -> what the person sees: the text if it's printable, otherwise 0x..."""
+    if all(32 <= c < 127 for c in b):
+        return b.decode("ascii")
+    return "0x" + b.hex().upper()
+
+
+def _detect(mod):
+    """The script's own MAGIC constant, if it has a usable one."""
+    m = getattr(mod, "MAGIC", None)
+    if isinstance(m, (bytes, bytearray)) and 1 <= len(m) <= MAX_MAGIC:
+        return bytes(m)
+    return None
+
+
+def _meta_magic(m, role):
+    h = m.get(role + "_magic", "")
+    try:
+        return bytes.fromhex(h) if h else None
+    except ValueError:
+        return None
+
+
+def signatures(files_dir):
+    """-> (main signature, fallback signature or None) for the file browser."""
+    m = _meta(files_dir)
+    main = DEFAULT_MAGIC
+    if _main_loaded:
+        main = _meta_magic(m, "main")
+        if main is None:
+            mod = sys.modules.get("kiln_v14")
+            main = (_detect(mod) if mod else None) or DEFAULT_MAGIC
+    fb = None
+    if os.path.isfile(_paths(files_dir)[2]):
+        fb = _meta_magic(m, "fallback")
+        if fb is None:
+            mod = sys.modules.get("kiln_fallback")
+            fb = _detect(mod) if mod else None
+    return main, fb
+
+
+def _refresh_live(files_dir):
+    """A new or removed fallback takes effect straight away; no restart needed for it."""
+    try:
+        import kiln_app
+    except Exception:
+        return
+    kiln_app.fallback = load_fallback(files_dir)
+    kiln_app.set_signatures(*signatures(files_dir))
+
+
 def _check_main(mod):
     missing = [n for n in REQUIRED if not hasattr(mod, n)]
     if missing:
@@ -54,13 +131,18 @@ def _check_main(mod):
 
 def status(files_dir):
     m = _meta(files_dir)
+    main_sig, fb_sig = signatures(files_dir)
     return json.dumps({"ok": True, "main": m.get("main", ""), "main_version": m.get("main_version", ""),
                        "fallback": m.get("fallback", ""), "fallback_version": m.get("fallback_version", ""),
+                       "main_magic": show_magic(_meta_magic(m, "main") or main_sig) if m.get("main") else show_magic(DEFAULT_MAGIC),
+                       "fallback_magic": show_magic(fb_sig) if fb_sig else "",
                        "note": _note}, ensure_ascii=False)
 
 
-def install(files_dir, role, src, name):
-    """role: 'main' or 'fallback'. Checks the script loads, then keeps a private copy."""
+def install(files_dir, role, src, name, magic=""):
+    """role: 'main' or 'fallback'. Checks the script loads, then keeps a private copy.
+    magic: what the person typed for its signature; blank = read the script's own MAGIC. If the
+    script has none, nothing is installed and need_magic is returned so the app can ask."""
     d, main_p, fb_p, _ = _paths(files_dir)
     os.makedirs(d, exist_ok=True)
     tmp = os.path.join(d, "candidate.py")
@@ -71,8 +153,21 @@ def install(files_dir, role, src, name):
             _check_main(mod)
         elif not hasattr(mod, "main"):
             raise ValueError("it has no main() function")
+        if magic.strip():
+            try:
+                sig = parse_magic(magic)
+            except ValueError as e:      # a typo: keep the script and ask again
+                os.remove(tmp)
+                return json.dumps({"ok": False, "need_magic": True, "message": f"Signature: {e}"})
+        else:
+            sig = _detect(mod)
+            if sig is None:
+                os.remove(tmp)
+                return json.dumps({"ok": False, "need_magic": True,
+                                   "message": "This script doesn't say which files it handles."})
     except BaseException as e:
-        os.remove(tmp)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         return json.dumps({"ok": False, "message": f"This script can't be used: {e}"})
     finally:
         sys.modules.pop("kiln_candidate", None)
@@ -81,8 +176,25 @@ def install(files_dir, role, src, name):
     m = _meta(files_dir)
     m[role] = name
     m[role + "_version"] = ver
+    m[role + "_magic"] = sig.hex()
     _save_meta(files_dir, m)
-    return json.dumps({"ok": True, "version": ver, "restart": role == "main"})
+    if role == "fallback":
+        _refresh_live(files_dir)
+    return json.dumps({"ok": True, "version": ver, "magic": show_magic(sig), "restart": role == "main"})
+
+
+def set_magic(files_dir, role, text):
+    """Change the signature of the installed main or fallback script."""
+    try:
+        sig = parse_magic(text)
+    except ValueError as e:
+        return json.dumps({"ok": False, "message": f"Signature: {e}"})
+    m = _meta(files_dir)
+    m[role + "_magic"] = sig.hex()
+    _save_meta(files_dir, m)
+    if role == "fallback":
+        _refresh_live(files_dir)
+    return json.dumps({"ok": True, "magic": show_magic(sig), "restart": role == "main"})
 
 
 def remove(files_dir, role):
@@ -93,13 +205,16 @@ def remove(files_dir, role):
     m = _meta(files_dir)
     m.pop(role, None)
     m.pop(role + "_version", None)
+    m.pop(role + "_magic", None)
     _save_meta(files_dir, m)
+    if role == "fallback":
+        _refresh_live(files_dir)
     return json.dumps({"ok": True, "restart": role == "main"})
 
 
 def boot(files_dir):
     """Called before the app layer is imported. Puts a custom main script in place of kiln_v14."""
-    global _note
+    global _note, _main_loaded
     if not files_dir:
         return
     _, main_p, _, _ = _paths(files_dir)
@@ -108,6 +223,7 @@ def boot(files_dir):
             mod = _load(main_p, "kiln_custom_main")
             _check_main(mod)
             sys.modules["kiln_v14"] = mod
+            _main_loaded = True
         except BaseException as e:
             sys.modules.pop("kiln_custom_main", None)
             _note = f"Custom main script not used ({e}). Built-in v14 is running."

@@ -9,6 +9,7 @@ def init(helper_path, files_dir=""):
     import kiln_app          # imports kiln (which loads the helper) and the bridge
     import kiln_bridge
     kiln_app.fallback = kiln_scripts.load_fallback(files_dir)
+    kiln_app.set_signatures(*kiln_scripts.signatures(files_dir))
     parts = []
     n = kiln_bridge.accel_note()
     if n:

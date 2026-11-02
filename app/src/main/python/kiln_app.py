@@ -28,21 +28,48 @@ def version():
 
 # ---------------------------------------------------------------- browsing
 
-def _sniff(path):
+# The first bytes that mark a file as one of ours. The main script's come first, then the
+# fallback's (both set at start-up from the scripts' signatures; see kiln_scripts).
+main_sig = _MAGIC
+fb_sig = None
+_sniff_len = 5
+_sniff_min = _MIN_ARCHIVE
+
+
+def set_signatures(main, fb):
+    global main_sig, fb_sig, _sniff_len, _sniff_min
+    main_sig = main or _MAGIC
+    fb_sig = fb or None
+    _sniff_len = max(5, len(main_sig) + 1, len(fb_sig) if fb_sig else 0)
+    _sniff_min = min(_main_min(), len(fb_sig) if fb_sig else 1 << 30)
+
+
+def _main_min():
+    return _MIN_ARCHIVE if main_sig == _MAGIC else len(main_sig)
+
+
+def _sniff(path, size):
     """-> ('archive', encrypted) | ('old', False) | None, from the first bytes of a file.
     Reads straight from the descriptor: a buffered open() would pull in a whole 8 KB block."""
+    if size < _sniff_min:
+        return None
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
         return None
     try:
-        head = os.read(fd, 5)
+        head = os.read(fd, _sniff_len)
     except OSError:
         return None
     finally:
         os.close(fd)
-    if head[:4] == _MAGIC and len(head) == 5:
-        return "archive", bool(head[4] & kiln.FLAG_ENCRYPTED)
+    if head.startswith(main_sig) and size >= _main_min():
+        if main_sig == _MAGIC:
+            # only this format's flag byte is known; others are asked for a password when opened
+            return ("archive", bool(head[4] & kiln.FLAG_ENCRYPTED)) if len(head) >= 5 else None
+        return "archive", False
+    if fb_sig and head.startswith(fb_sig):
+        return "archive", False
     if head[:4] in (b"KLN9", b"KLN2"):
         return "old", False
     return None
@@ -66,10 +93,9 @@ def _entry(e, show_all, show_hidden):
         if e.is_file():
             st = e.stat()
             kind, enc = "file", False
-            if st.st_size >= _MIN_ARCHIVE:
-                sn = _sniff(e.path)
-                if sn:
-                    kind, enc = sn
+            sn = _sniff(e.path, st.st_size)
+            if sn:
+                kind, enc = sn
             if kind == "file" and not show_all:
                 return None
             return {"n": e.name, "k": kind, "s": st.st_size,
@@ -151,10 +177,9 @@ def search(path, query, show_all, show_hidden=False):
                     elif hit and e.is_file():
                         st = e.stat()
                         kind, enc = "file", False
-                        if st.st_size >= _MIN_ARCHIVE:
-                            sn = _sniff(e.path)
-                            if sn:
-                                kind, enc = sn
+                        sn = _sniff(e.path, st.st_size)
+                        if sn:
+                            kind, enc = sn
                         if kind == "file" and not show_all:
                             continue
                         items.append({"n": relname, "k": kind, "s": st.st_size,
@@ -225,7 +250,7 @@ def _open_main(path, password):
                 except OSError:
                     pass
             return _j(ok=True, kind="set", encrypted=True, entries=ents, packed=packed)
-        sn = _sniff(path)
+        sn = _sniff(path, os.path.getsize(path))
         if sn is None:
             return _j(ok=False, error="this file isn't a Kiln archive")
         if sn[0] == "old":
@@ -242,6 +267,8 @@ def _open_main(path, password):
         return _j(ok=True, kind="archive", encrypted=enc, entries=ents, packed=packed)
     except kiln.KilnError as e:
         msg = str(e)
+        if msg == "enter a password" and not password:     # a format whose lock we can't see
+            return _j(ok=False, need_password=True)
         return _j(ok=False, error=msg, bad_password="wrong password" in msg)
     except Exception as e:                       # corrupt files must never crash the app
         return _j(ok=False, error=f"couldn't read this archive: {e}")
@@ -677,6 +704,47 @@ def _selftest_total():
         return 0
 
 
+_BENCH_ROW = re.compile(r"^(\S.*?)\s+(\d+)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)s$")
+_BENCH_HEAD = re.compile(r"^input:\s*(\d+) file\(s\),\s*(.+)$")
+_WAV_HEAD = re.compile(r"^(float|PCM),\s*(\d+)-bit,\s*(\d+) ch,\s*(\d+) Hz,\s*(\d+(?:\.\d+)?) s$")
+
+
+def _bench_view(lines):
+    """The benchmark table as data (None if the script printed something we don't know)."""
+    m = _BENCH_HEAD.match(lines[0].strip()) if lines else None
+    rows = []
+    for ln in lines[1:]:
+        r = _BENCH_ROW.match(ln.strip())
+        if r:
+            rows.append({"name": r.group(1), "size": int(r.group(2)),
+                         "ratio": float(r.group(3)), "secs": float(r.group(4))})
+    if not m or not rows:
+        return None
+    return {"type": "bench", "files": int(m.group(1)), "input": m.group(2), "rows": rows}
+
+
+def _wav_view(lines):
+    """The WAV report as data (None for 'not a WAV' and anything we don't recognise)."""
+    m = _WAV_HEAD.match(lines[0].strip()) if lines else None
+    if not m:
+        return None
+    v = {"type": "wav", "kind": m.group(1), "bits": int(m.group(2)), "ch": int(m.group(3)),
+         "rate": int(m.group(4)), "secs": float(m.group(5)),
+         "details": [], "verdict": "", "good": False, "note": "", "filter": ""}
+    for ln in lines[1:]:
+        t = ln.strip()
+        if t.startswith("verdict:"):
+            v["verdict"] = t[len("verdict:"):].strip()
+            v["good"] = "stores it as integers" in t
+        elif t.startswith("filter kiln will use:"):
+            v["filter"] = t.split(":", 1)[1].strip()
+        elif t.startswith("The integer filter"):
+            v["note"] = t
+        elif t:
+            v["details"].append(t)
+    return v
+
+
 def tool(name, arg, progress):
     """Self-test, benchmark or WAV info. -> {ok, text}  (or cancelled=True when stopped)"""
     args = [name] + ([arg] if arg else [])
@@ -689,4 +757,9 @@ def tool(name, arg, progress):
     if rc == 130:
         return _j(ok=False, cancelled=True, text="Cancelled")
     text = "\n".join(x.rstrip() for x in sink.lines)
-    return _j(ok=rc == 0, text=text or ("Done" if rc == 0 else "The tool failed"))
+    view = None
+    if rc == 0 and name == "bench":
+        view = _bench_view(sink.lines)
+    elif rc == 0 and name == "wavcheck":
+        view = _wav_view(sink.lines)
+    return _j(ok=rc == 0, text=text or ("Done" if rc == 0 else "The tool failed"), view=view)

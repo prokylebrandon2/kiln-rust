@@ -17,6 +17,8 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -226,5 +228,88 @@ final class Ui {
             int max = limit >= 0 ? limit : (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
             super.onMeasure(w, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST));
         }
+    }
+
+    // ---- small cards used by the info screens (About, Archive info, Benchmark, WAV info)
+
+    /** A rounded card of label/value rows with thin lines between. A third item, "stack", puts the
+     *  value under its label (for long things such as a path). */
+    static LinearLayout detailCard(Context c, java.util.List<String[]> rows) {
+        LinearLayout card = new LinearLayout(c);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(c, 14), dp(c, 4), dp(c, 14), dp(c, 4));
+        card.setBackground(shape(c, c.getColor(R.color.k_chip), 0, 14));
+        for (int i = 0; i < rows.size(); i++) {
+            String[] r = rows.get(i);
+            boolean stack = r.length > 2 && "stack".equals(r[2]);
+            if (i > 0) card.addView(rule(c));
+            LinearLayout row = new LinearLayout(c);
+            row.setPadding(0, dp(c, 11), 0, dp(c, 11));
+            TextView k = label(c, r[0], 14, false, true);
+            TextView v = label(c, r[1], 14, true, false);
+            if (stack) {
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.addView(k);
+                v.setTextIsSelectable(true);
+                LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                vp.topMargin = dp(c, 3);
+                row.addView(v, vp);
+            } else {
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.addView(k, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                v.setGravity(Gravity.END);
+                LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                vp.leftMargin = dp(c, 16);
+                row.addView(v, vp);
+            }
+            card.addView(row);
+        }
+        return card;
+    }
+
+    /** A thin separator line. */
+    static View rule(Context c) {
+        View ln = new View(c);
+        ln.setBackgroundColor(line(c));
+        ln.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        return ln;
+    }
+
+    /** A big number over a small label, in a rounded tile. */
+    static View statTile(Context c, String big, String small) {
+        LinearLayout t = new LinearLayout(c);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(c, 6), dp(c, 12), dp(c, 6), dp(c, 12));
+        t.setBackground(shape(c, c.getColor(R.color.k_chip), 0, 14));
+        TextView b = label(c, big, 18, true, false);
+        b.setGravity(Gravity.CENTER);
+        b.setSingleLine(true);
+        t.addView(b);
+        TextView sm = label(c, small, 12, false, true);
+        sm.setGravity(Gravity.CENTER);
+        t.addView(sm);
+        return t;
+    }
+
+    /** Layout for one tile in a row of equal tiles; `gap` leaves room beside it. */
+    static LinearLayout.LayoutParams tileLp(Context c, boolean leftGap, boolean rightGap) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.setMargins(leftGap ? dp(c, 4) : 0, 0, rightGap ? dp(c, 4) : 0, 0);
+        return lp;
+    }
+
+    /** A thin horizontal bar, 0..1. */
+    static ProgressBar meter(Context c, double frac, boolean accent) {
+        ProgressBar bar = new ProgressBar(c, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        bar.setProgress((int) Math.max(Math.round(Math.min(frac, 1.0) * 1000), 8));   // never looks empty
+        bar.setProgressTintList(ColorStateList.valueOf(accent ? accent(c) : text2(c)));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(line(c)));
+        bar.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(c, 8)));
+        return bar;
     }
 }

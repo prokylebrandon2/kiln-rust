@@ -23,6 +23,7 @@ import android.view.ViewGroup;
 import android.content.res.ColorStateList;
 import android.text.TextUtils;
 import android.widget.CompoundButton;
+import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -171,20 +172,25 @@ public class SettingsActivity extends Activity {
         LinearLayout sr = card();
         String mainName = scripts.optString("main", "");
         String fbName = scripts.optString("fallback", "");
+        String mainMagic = scripts.optString("main_magic", "");
+        String fbMagic = scripts.optString("fallback_magic", "");
         choiceRow(sr, "Main script", mainName.isEmpty() ? "Built-in v14" : mainName,
-                "Used for everything. Applies the next time Kiln starts.", () -> scriptSheet("main", mainName));
+                "Used for everything. Applies the next time Kiln starts."
+                        + (mainMagic.isEmpty() ? "" : "\nRecognises files starting with " + mainMagic),
+                () -> scriptSheet("main", mainName));
         choiceRow(sr, "Fallback script", fbName.isEmpty() ? "None" : fbName,
-                "Opens archives the main script can't read (browse, extract and check only).",
+                "Opens archives the main script can't read (browse, extract and check only)."
+                        + (fbName.isEmpty() || fbMagic.isEmpty() ? "" : "\nRecognises files starting with " + fbMagic),
                 () -> scriptSheet("fallback", fbName));
 
         heading("TOOLS");
         LinearLayout tl = card();
         choiceRow(tl, "Self-test", "Run", "Checks packing, extracting and encryption on this phone.",
-                () -> runTool("selftest", null, "Self-test"));
+                () -> runTool("selftest", null, "Self-test", ""));
         choiceRow(tl, "Benchmark a file", "Choose...", "Compares Kiln with zlib, bz2 and lzma.",
-                () -> pickFile((f, n) -> runTool("bench", f.getPath(), "Benchmark")));
+                () -> pickFile((f, n) -> runTool("bench", f.getPath(), "Benchmark", n)));
         choiceRow(tl, "WAV info", "Choose...", "Shows whether a .wav is float or integer audio.",
-                () -> pickFile((f, n) -> runTool("wavcheck", f.getPath(), "WAV info")));
+                () -> pickFile((f, n) -> runTool("wavcheck", f.getPath(), "WAV info", n)));
 
         heading("ADVANCED");
         LinearLayout ad = card();
@@ -322,8 +328,12 @@ public class SettingsActivity extends Activity {
                 + "app uses; it's checked when you choose it, and the app returns to v14 if it fails to load."
                 : "Used only for archives the main script can't open. It can browse, extract and check "
                 + "them, but not edit them.");
-        sh.option(R.drawable.ic_open, "Choose a .py file...", false, () -> pickFile((f, n) -> installScript(role, f, n)));
+        sh.option(R.drawable.ic_open, "Choose a .py file...", false,
+                () -> pickFile((f, n) -> installScript(role, f, n, "")));
         if (!current.isEmpty()) {
+            final String sig = scripts.optString(role + "_magic", "");
+            sh.option(R.drawable.ic_edit, "Signature: " + (sig.isEmpty() ? "not set" : sig) + " (change)", false,
+                    () -> changeMagic(role, sig, null));
             sh.option(R.drawable.ic_close, isMain ? "Switch back to built-in v14" : "Remove the fallback", false, () -> {
                 py("remove", "kiln_scripts", getFilesDir().getPath(), role);
                 loadScripts();
@@ -333,30 +343,262 @@ public class SettingsActivity extends Activity {
         sh.button("Cancel", Ui.TEXT, null).show();
     }
 
-    private void installScript(final String role, final File f, final String name) {
+    private void installScript(final String role, final File f, final String name, final String magic) {
         final Sheet busy = new Sheet(this, "Checking script...").cancelable(false);
         busy.show();
         new Thread(() -> {
-            final String r = py("install", "kiln_scripts", getFilesDir().getPath(), role, f.getPath(), name);
-            f.delete();
+            final String r = py("install", "kiln_scripts", getFilesDir().getPath(), role, f.getPath(), name, magic);
             runOnUiThread(() -> {
                 busy.dismiss();
                 try {
                     JSONObject o = new JSONObject(r);
                     if (o.optBoolean("ok")) {
+                        f.delete();
                         Toast.makeText(this, "Using " + name + " (v" + o.optString("version") + ")",
                                 Toast.LENGTH_SHORT).show();
                         loadScripts();
                         if (role.equals("main")) restartNote();
+                    } else if (o.optBoolean("need_magic")) {
+                        // the script doesn't say which files it handles (or the typed signature was wrong)
+                        askMagic(name, o.optString("message"), magic,
+                                m -> installScript(role, f, name, m), f::delete);
                     } else {
+                        f.delete();
                         new Sheet(this, "Can't use this script").text(o.optString("message"))
                                 .button("OK", Ui.FILLED, null).show();
                     }
                 } catch (Exception e) {
+                    f.delete();
                     new Sheet(this, "Can't use this script").text(r).button("OK", Ui.FILLED, null).show();
                 }
             });
         }).start();
+    }
+
+    /** Ask for the first bytes of the files a script handles. */
+    private void askMagic(String name, String message, String initial,
+                          final java.util.function.Consumer<String> ok, final Runnable cancel) {
+        final EditText ed = Ui.field(this, "KLNA   or   0x4B4C4E41", false);
+        ed.setText(initial == null ? "" : initial);
+        ed.setSelection(ed.length());
+        TextView hint = Ui.label(this, "The first bytes of the files this script reads, as text "
+                + "(KLNA) or hex (0x4B4C4E41). Up to 16 bytes. The file list uses this to tell which "
+                + "files are archives.", 12, false, true);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hp.topMargin = Ui.dp(this, 10);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(ed);
+        box.addView(hint, hp);
+        new Sheet(this, "Signature for " + name).keyboard()
+                .text(message == null || message.isEmpty() ? "Which files does this script handle?" : message)
+                .content(box)
+                .button("Cancel", Ui.TEXT, () -> {
+                    if (cancel != null) cancel.run();
+                    return true;
+                })
+                .button("Use it", Ui.FILLED, () -> {
+                    String t = ed.getText().toString().trim();
+                    if (t.isEmpty()) {
+                        ed.setError("Enter the signature");
+                        return false;
+                    }
+                    ok.accept(t);
+                    return true;
+                }).show();
+        ed.requestFocus();
+    }
+
+    /** Change the signature of the script that's already installed. */
+    private void changeMagic(final String role, String current, String message) {
+        askMagic(role.equals("main") ? "main script" : "fallback script", message, current, m -> {
+            new Thread(() -> {
+                final String r = py("set_magic", "kiln_scripts", getFilesDir().getPath(), role, m);
+                runOnUiThread(() -> {
+                    try {
+                        JSONObject o = new JSONObject(r);
+                        if (o.optBoolean("ok")) {
+                            loadScripts();
+                            if (role.equals("main")) restartNote();
+                        } else {
+                            changeMagic(role, m, o.optString("message"));
+                        }
+                    } catch (Exception e) {
+                        new Sheet(this, "Couldn't change it").text(r).button("OK", Ui.FILLED, null).show();
+                    }
+                });
+            }).start();
+        }, null);
+    }
+
+    // ---- nicer results for Benchmark and WAV info
+
+    private TextView smallTag(String t) {
+        TextView tag = Ui.label(this, t, 11, true, false);
+        tag.setTextColor(Ui.accent(this));
+        tag.setPadding(Ui.dp(this, 7), Ui.dp(this, 2), Ui.dp(this, 7), Ui.dp(this, 2));
+        tag.setBackground(Ui.shape(this, Ui.bg(this), 0, 8));
+        return tag;
+    }
+
+    private TextView subjectLine(String subject, String second) {
+        TextView t = Ui.label(this, (subject.isEmpty() ? "" : subject + "\n") + second, 13, false, true);
+        t.setLineSpacing(0, 1.15f);
+        return t;
+    }
+
+    private void showBench(String title, String subject, JSONObject v) {
+        org.json.JSONArray rows = v.optJSONArray("rows");
+        if (rows == null) return;
+        long min = Long.MAX_VALUE, max = 1;
+        double fast = Double.MAX_VALUE, slow = 0;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            min = Math.min(min, r.optLong("size"));
+            max = Math.max(max, r.optLong("size"));
+            fast = Math.min(fast, r.optDouble("secs"));
+            slow = Math.max(slow, r.optDouble("secs"));
+        }
+        boolean showSmall = rows.length() > 1 && min < max;
+        boolean showFast = rows.length() > 1 && slow - fast >= 0.05;
+        int files = v.optInt("files", 1);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+        list.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            boolean best = showSmall && r.optLong("size") == min;
+            boolean quick = showFast && r.optDouble("secs") == fast;
+            if (i > 0) list.addView(Ui.rule(this));
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(0, Ui.dp(this, 12), 0, Ui.dp(this, 12));
+            LinearLayout top = new LinearLayout(this);
+            top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(Ui.label(this, r.optString("name"), 15, true, false));
+            if (best) {
+                TextView tag = smallTag("Smallest");
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tp.leftMargin = Ui.dp(this, 8);
+                top.addView(tag, tp);
+            }
+            if (quick) {
+                TextView tag = smallTag("Fastest");
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tp.leftMargin = Ui.dp(this, 6);
+                top.addView(tag, tp);
+            }
+            View gap = new View(this);
+            top.addView(gap, new LinearLayout.LayoutParams(0, 1, 1f));
+            TextView pct = Ui.label(this, String.format(java.util.Locale.US, "%.1f%%", r.optDouble("ratio")),
+                    15, true, false);
+            if (best) pct.setTextColor(Ui.accent(this));
+            top.addView(pct);
+            item.addView(top);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 8));
+            bp.topMargin = Ui.dp(this, 8);
+            item.addView(Ui.meter(this, (double) r.optLong("size") / max, best), bp);
+            TextView sub = Ui.label(this, Fmt.size(r.optLong("size")) + "  \u00b7  "
+                    + String.format(java.util.Locale.US, "%.1f s", r.optDouble("secs")), 12, false, true);
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            sp.topMargin = Ui.dp(this, 6);
+            item.addView(sub, sp);
+            list.addView(item);
+        }
+        TextView note = Ui.label(this, "Percentages are the packed size as a share of the input. "
+                + "Bars compare the sizes against each other.", 12, false, true);
+        new Sheet(this, title)
+                .content(subjectLine(subject, "Input: " + v.optString("input")
+                        + (files > 1 ? "  \u00b7  " + files + " files" : "")))
+                .space(12).content(list).space(12).content(note).space(4)
+                .button("Close", Ui.FILLED, null).show();
+    }
+
+    private static String rateText(int hz) {
+        double k = hz / 1000.0;
+        return (k == Math.floor(k) ? String.valueOf((int) k) : String.format(java.util.Locale.US, "%.1f", k)) + " kHz";
+    }
+
+    private static String lengthText(double secs) {
+        if (secs < 60) return String.format(java.util.Locale.US, "%.1f s", secs);
+        int t = (int) Math.round(secs);
+        return t / 60 + ":" + (t % 60 < 10 ? "0" : "") + t % 60;
+    }
+
+    private void showWav(String title, String subject, JSONObject v) {
+        boolean flt = "float".equals(v.optString("kind"));
+        int ch = v.optInt("ch");
+        LinearLayout row1 = new LinearLayout(this);
+        row1.addView(Ui.statTile(this, (flt ? "Float " : "PCM ") + v.optInt("bits") + "-bit", "format"),
+                Ui.tileLp(this, false, true));
+        row1.addView(Ui.statTile(this, rateText(v.optInt("rate")), "sample rate"), Ui.tileLp(this, true, false));
+        LinearLayout row2 = new LinearLayout(this);
+        row2.addView(Ui.statTile(this, ch == 1 ? "Mono" : ch == 2 ? "Stereo" : ch + " channels", "channels"),
+                Ui.tileLp(this, false, true));
+        row2.addView(Ui.statTile(this, lengthText(v.optDouble("secs")), "length"), Ui.tileLp(this, true, false));
+
+        Sheet sh = new Sheet(this, title);
+        if (!subject.isEmpty()) {
+            TextView t = Ui.label(this, subject, 13, false, true);
+            t.setSingleLine(true);
+            t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            sh.content(t).space(10);
+        }
+        sh.content(row1).space(8).content(row2);
+
+        String verdict = v.optString("verdict");
+        if (!verdict.isEmpty()) {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
+            box.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+            TextView h = Ui.label(this, "VERDICT", 11, true, true);
+            box.addView(h);
+            TextView t = Ui.label(this, verdict, 14, true, false);
+            if (v.optBoolean("good")) t.setTextColor(Ui.accent(this));
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tp.topMargin = Ui.dp(this, 4);
+            box.addView(t, tp);
+            String note = v.optString("note");
+            if (!note.isEmpty()) {
+                TextView n = Ui.label(this, note, 12, false, true);
+                LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                np.topMargin = Ui.dp(this, 6);
+                box.addView(n, np);
+            }
+            sh.space(14).content(box);
+        }
+
+        org.json.JSONArray det = v.optJSONArray("details");
+        if (det != null && det.length() > 0) {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(Ui.dp(this, 14), Ui.dp(this, 6), Ui.dp(this, 14), Ui.dp(this, 6));
+            box.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+            for (int i = 0; i < det.length(); i++) {
+                if (i > 0) box.addView(Ui.rule(this));
+                TextView t = Ui.label(this, det.optString(i), 13, false, false);
+                t.setPadding(0, Ui.dp(this, 9), 0, Ui.dp(this, 9));
+                box.addView(t);
+            }
+            sh.space(14).content(Ui.label(this, "ANALYSIS", 11, true, true)).space(6).content(box);
+        }
+
+        String filter = v.optString("filter");
+        if (!filter.isEmpty()) {
+            java.util.List<String[]> rows = new java.util.ArrayList<>();
+            rows.add(new String[]{"Filter kiln will use", filter, "stack"});
+            sh.space(14).content(Ui.detailCard(this, rows));
+        }
+        sh.space(4).button("Close", Ui.FILLED, null).show();
     }
 
     private void restartNote() {
@@ -402,7 +644,7 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    private void runTool(final String tool, final String arg, final String title) {
+    private void runTool(final String tool, final String arg, final String title, final String subject) {
         final ToolProgress tp = new ToolProgress(this);
         toolP = tp;
         toolLine = Ui.label(this, tool.equals("selftest") ? "Starting..." : "Working...", 13, false, true);
@@ -440,15 +682,18 @@ public class SettingsActivity extends Activity {
             String r = py("tool", "kiln_app", tool, arg == null ? "" : arg, tp);
             boolean cancelled = false;
             String text;
+            JSONObject viewObj = null;
             try {
                 JSONObject o = new JSONObject(r);
                 cancelled = o.optBoolean("cancelled");
                 text = o.optString("text", o.optString("message", r));
+                viewObj = o.optJSONObject("view");
             } catch (Exception e) {
                 text = r;
             }
             final String shown = text;
             final boolean was = cancelled;
+            final JSONObject view = viewObj;
             runOnUiThread(() -> {
                 toolBar = null;
                 toolLine = null;
@@ -457,6 +702,19 @@ public class SettingsActivity extends Activity {
                 busy.dismiss();
                 if (was) {
                     Toast.makeText(this, title + " cancelled", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (view != null && "bench".equals(view.optString("type"))) {
+                    showBench(title, subject, view);
+                    return;
+                }
+                if (view != null && "wav".equals(view.optString("type"))) {
+                    showWav(title, subject, view);
+                    return;
+                }
+                if (tool.equals("wavcheck")) {                   // not a WAV it can describe: say so plainly
+                    new Sheet(this, title).text((subject.isEmpty() ? "" : subject + "\n\n") + shown)
+                            .button("Close", Ui.FILLED, null).show();
                     return;
                 }
                 TextView tv = Ui.label(this, shown, 12, false, false);

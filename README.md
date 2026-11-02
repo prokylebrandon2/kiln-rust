@@ -161,3 +161,6 @@ and custom/fallback scripts.
 - Pick an icon for any folder (select it, menu > "Change icon...") or for a bookmark (tap its icon, or long-press the row).
   Choices are kept per path and follow the folder when it is renamed in Kiln. "Use default" restores the standard look.
 - Bookmarks now show their folder's icon.
+
+## 3.25
+- Bookmarks no longer work out how much each folder holds (no background scan, no size label).

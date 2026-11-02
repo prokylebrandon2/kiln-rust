@@ -1679,16 +1679,15 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(6), dp(6), dp(6), dp(6));
         card.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 18));
-        final List<Object[]> sizeJobs = new ArrayList<>();        // {TextView, File}: folder sizes to fill in
         volAt = -10000;
-        card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false, root, null));
+        card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false, root));
         for (File[] v : volumes()) {                              // USB drives and SD cards: listed while plugged in
-            card.addView(markRow(R.drawable.ic_usb, v[1].getName(), v[0].getPath(), false, v[0], null));
+            card.addView(markRow(R.drawable.ic_usb, v[1].getName(), v[0].getPath(), false, v[0]));
         }
         for (String bp : saved) {
             File f = new File(bp);
             card.addView(markRow(dirIcon(f), f.getName().isEmpty() ? bp : f.getName(), bp, true,
-                    null, sizeJobs));
+                    null));
         }
         if (!isStorageRoot(cwd)) {
             View d = new View(this);
@@ -1723,19 +1722,6 @@ public class MainActivity extends Activity {
         marks.setOutsideTouchable(true);
         marks.setAnimationStyle(0);
         marks.showAsDropDown(titleBox, -titleBox.getLeft() - dp(4), 0);
-        final java.util.concurrent.atomic.AtomicBoolean stopSizes = new java.util.concurrent.atomic.AtomicBoolean();
-        marks.setOnDismissListener(() -> stopSizes.set(true));
-        if (!sizeJobs.isEmpty()) {
-            new Thread(() -> {                                    // how much each bookmarked folder holds
-                for (Object[] j : sizeJobs) {
-                    if (stopSizes.get()) return;
-                    final long n = dirSize((File) j[1], stopSizes, 0);
-                    if (stopSizes.get()) return;
-                    sizeCache.put(((File) j[1]).getPath(), n);
-                    ui.post(() -> ((TextView) j[0]).setText(Fmt.size(n)));
-                }
-            }).start();
-        }
         if (Defaults.animOn(this)) {
             wrap.setAlpha(0f);
             wrap.setScaleY(0.9f);
@@ -1905,24 +1891,9 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private final Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();   // bookmarked folder -> last size seen
-
-    /** Bytes under a folder (stops early when `stop` is set). */
-    private static long dirSize(File d, java.util.concurrent.atomic.AtomicBoolean stop, int depth) {
-        long t = 0;
-        File[] kids = d.listFiles();
-        if (kids == null || depth > 40) return 0;
-        for (File k : kids) {
-            if (stop.get()) return t;
-            t += k.isDirectory() ? dirSize(k, stop, depth + 1) : k.length();
-        }
-        return t;
-    }
-
     /** One line of the bookmarks list. Storages show free/total on the right; a bookmarked folder
-     *  shows how much it holds (worked out in the background: see sizeJobs). */
-    private View markRow(int icon, String name, final String path, boolean removable, File storage,
-                         List<Object[]> sizeJobs) {
+     *  shows nothing there (its size is never worked out: that meant walking the whole folder). */
+    private View markRow(int icon, String name, final String path, boolean removable, File storage) {
         LinearLayout row = rowBase();
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(36), dp(36));
         ip.rightMargin = dp(12);
@@ -1958,10 +1929,6 @@ public class MainActivity extends Activity {
         if (storage != null) {
             long[] sp = spaceOf(storage);
             if (sp != null) right.setText(Fmt.size(sp[0]) + " free\nof " + Fmt.size(sp[1]));
-        } else if (sizeJobs != null) {
-            Long known = sizeCache.get(path);
-            right.setText(known != null ? Fmt.size(known) : "...");
-            sizeJobs.add(new Object[]{right, new File(path)});
         }
         row.addView(right, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));

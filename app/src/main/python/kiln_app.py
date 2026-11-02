@@ -255,8 +255,11 @@ class _Sink:
     The name shown is the file being worked on right now (kiln tells us when each one starts),
     and the fraction is by bytes whenever the total is known, so the bar moves steadily rather
     than jumping once per finished file."""
-    def __init__(self, progress, total, use_bytes, total_bytes=0, each=False):
+    def __init__(self, progress, total, use_bytes, total_bytes=0, each=False, blend=False):
         self.progress, self.total, self.use_bytes = progress, total, use_bytes
+        # blend: a set of separate archives. Progress = finished archives + how far into the current
+        # one. The first byte reports belong to reading the index, so they are skipped.
+        self.blend, self.index_pending = blend, blend
         self.done, self.file, self.bfrac = 0, "", None
         self.lines, self.last = [], 0.0
         self.total_bytes, self.each = total_bytes, each
@@ -290,6 +293,8 @@ class _Sink:
             frac = self.bfrac
         elif self.each and self.total_bytes:
             frac = min((self.base + (self.bfrac or 0) * self.cur) / self.total_bytes, 1.0)
+        elif self.blend and self.total:
+            frac = min((self.done + (self.bfrac or 0)) / self.total, 1.0)
         elif self.total:
             frac = min(self.done / self.total, 1.0)
         else:
@@ -301,12 +306,18 @@ class _Sink:
         self.lines.append(text)
         if text.startswith("  "):
             self.done += 1
+            if self.blend:
+                self.bfrac = 0                # the next archive starts from zero
             if not self.file:                # kiln didn't announce a file: fall back to the line
                 self.file = text.strip().split(": ")[0]
             self._emit(self.done == self.total)
 
     def on_bytes(self, done, total):
         self._check()
+        if self.index_pending:                # reading the index, not checking files yet
+            if total and done >= total:
+                self.index_pending = False
+            return
         self.bfrac = min(done / total, 1.0) if total else None
         self._emit()
 
@@ -321,8 +332,9 @@ class _Sink:
         return self.lines[-1] if self.lines else "the operation failed"
 
 
-def _run(args, password, total, progress, use_bytes, total_bytes=0, each=False, keep_sink=None):
-    sink = _Sink(progress, total, use_bytes, total_bytes, each)
+def _run(args, password, total, progress, use_bytes, total_bytes=0, each=False, keep_sink=None,
+         blend=False):
+    sink = _Sink(progress, total, use_bytes, total_bytes, each, blend)
     if keep_sink is not None:
         keep_sink.append(sink)
     rc = bridge.run(args, password, sink, hook=sink.on_bytes)
@@ -351,7 +363,15 @@ def extract(path, password, members_json, dest, overwrite, total, progress):
 
 
 def test(path, password, progress):
-    return _run(["test", path], password, 0, progress, not os.path.isdir(path))
+    if os.path.isdir(path):
+        # a set of archives: one line per archive, so the count gives a real bar
+        try:
+            n = sum(1 for f in os.listdir(path)
+                    if f != kiln.INDEX_NAME and os.path.isfile(os.path.join(path, f)))
+        except OSError:
+            n = 0
+        return _run(["test", path], password, n, progress, False, blend=n > 0)
+    return _run(["test", path], password, 0, progress, True)
 
 
 def decrypt_in_place(path, password, total, progress):

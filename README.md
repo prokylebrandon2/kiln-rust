@@ -205,3 +205,8 @@ and custom/fallback scripts.
 
 - Dialogs: when two buttons' labels don't fit side by side (e.g. "I understand, turn on"), they now stack, main action on top, instead of wrapping and getting clipped.
 - All buttons have a little vertical padding, so a wrapped label is never cut off.
+
+## 4.0.4
+
+- Check on a set of archives (a folder with `_index.kln`) now shows a real progress bar: finished archives plus how far into the current one. Before, it only showed a moving bar.
+- Check on a single archive already reported progress by bytes; unchanged.

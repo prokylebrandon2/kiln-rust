@@ -35,6 +35,11 @@ final class Defaults {
     static void setUpRow(Context c, boolean v) { p(c).edit().putBoolean("up_row", v).apply(); }
     static void setPreviews(Context c, boolean v) { p(c).edit().putBoolean("previews", v).apply(); }
 
+    // ---- elevated access to protected folders: 0 off, 1 root (su), 2 Shizuku
+
+    static int privMode(Context c) { return Math.max(0, Math.min(2, p(c).getInt("priv_mode", 0))); }
+    static void setPrivMode(Context c, int v) { p(c).edit().putInt("priv_mode", v).apply(); }
+
     // ---- delete the original files once they are safely in the archive (off by default)
 
     static boolean deleteAfterPack(Context c) { return p(c).getBoolean("delete_after_pack", false); }

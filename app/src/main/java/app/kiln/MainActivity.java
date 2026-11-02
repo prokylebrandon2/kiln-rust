@@ -212,6 +212,11 @@ public class MainActivity extends Activity {
         upRowOn = Defaults.upRow(this);
         previewsOn = Defaults.previews(this);
         installCrashLog();
+        Priv.init(this);
+        new Thread(Priv::clearStage).start();               // staged copies from an earlier run
+        Priv.setListener(() -> ui.post(() -> {
+            if (marks != null && marks.isShowing()) marks.dismiss();
+        }));
         buildUi();
         startPython();
         ui.post(this::showLastCrash);
@@ -269,6 +274,15 @@ public class MainActivity extends Activity {
         if (changed && adapter != null) adapter.notifyDataSetChanged();
         refreshPermission();
         checkEditedFile();
+        if (Priv.hasWatched()) {                               // a protected file was edited in another app
+            new Thread(() -> {
+                final List<String> sent = Priv.syncWatched();
+                if (!sent.isEmpty()) ui.post(() -> {
+                    needRefresh = true;
+                    toast("Saved " + sent.get(0) + (sent.size() > 1 ? " and " + (sent.size() - 1) + " more" : ""));
+                });
+            }).start();
+        }
         volAt = -10000;                                       // re-check which drives are plugged in
         if (arc == null && loadedOnce && hasStorage() && !cwd.isDirectory()) {
             File r = storageRootOf(cwd);                      // the drive was unplugged: go home
@@ -859,7 +873,12 @@ public class MainActivity extends Activity {
         pullSize.setText("Size: ...");
         new Thread(() -> {                                   // the folder's size climbs as it is counted
             final long[] tot = {0};
-            walkSize(at, stop, tot, 0);
+            if (Priv.wants(at.getPath())) {
+                long v = Priv.du(at.getPath());
+                if (v >= 0) tot[0] = v;
+            } else {
+                walkSize(at, stop, tot, 0);
+            }
             if (!stop.get()) ui.post(() -> {
                 if (!stop.get()) pullSize.setText("Size: " + Fmt.size(tot[0]));
             });
@@ -1607,7 +1626,7 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             JSONObject r;
             try {
-                r = call("search", path, q, all, hid);
+                r = Priv.wants(path) ? Priv.search(path, q, hid) : call("search", path, q, all, hid);
             } catch (Exception e) {
                 r = errObj(String.valueOf(e.getMessage()));
             }
@@ -1683,6 +1702,11 @@ public class MainActivity extends Activity {
         card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false, root));
         for (File[] v : volumes()) {                              // USB drives and SD cards: listed while plugged in
             card.addView(markRow(R.drawable.ic_usb, v[1].getName(), v[0].getPath(), false, v[0]));
+        }
+        if (Priv.mode(this) != Priv.OFF) {                    // beyond what Android lets an app open
+            card.addView(markRow(R.drawable.ic_d_phone, "Root (/)", "/", false, null));
+            card.addView(markRow(R.drawable.ic_d_android, "Android/data",
+                    new File(root, "Android/data").getPath(), false, null));
         }
         for (String bp : saved) {
             File f = new File(bp);
@@ -1767,6 +1791,7 @@ public class MainActivity extends Activity {
      *  its own home: no ".." row, and Back from here asks to exit instead of going somewhere else. */
     private boolean isStorageRoot(File d) {
         if (d.equals(root)) return true;
+        if (d.getPath().equals("/")) return true;            // Root (/) when Root or Shizuku is on
         for (File[] v : volumes()) if (v[0].equals(d)) return true;
         return false;
     }
@@ -1796,6 +1821,7 @@ public class MainActivity extends Activity {
 
     private String storageName(File r) {
         if (r.equals(root)) return "Internal storage";
+        if (r.getPath().equals("/")) return "Root (/)";
         for (File[] v : volumes()) if (v[0].equals(r)) return v[1].getName();
         return r.getName();
     }
@@ -1965,7 +1991,7 @@ public class MainActivity extends Activity {
 
     private void goTo(final String path) {
         File f = new File(path);
-        if (!f.isDirectory()) {
+        if (!f.isDirectory() && !(Priv.restricted(path) && Priv.mode(this) != Priv.OFF)) {
             toast("That folder isn't there any more");
             return;
         }
@@ -2102,7 +2128,11 @@ public class MainActivity extends Activity {
             JSONObject r;
             try {
                 r = null;
-                if (sniffSig != null) {
+                if (Priv.restricted(path) && Priv.mode(MainActivity.this) != Priv.OFF) {
+                    String why = Priv.denyReason(path);                  // Root or Shizuku does the listing
+                    r = why != null ? errObj(why)
+                            : Priv.scan(path, hidden, sniffSig, sniffMin, sniffBuiltin, sniffEnc, sniffIndex);
+                } else if (sniffSig != null) {
                     try {
                         r = scanFast(path, all, hidden);
                     } catch (Throwable ignored) {
@@ -2112,6 +2142,10 @@ public class MainActivity extends Activity {
                 if (r == null) r = call("scan", path, all, hidden);
             } catch (Exception e) {
                 r = errObj(String.valueOf(e.getMessage()));
+            }
+            if (!r.optBoolean("ok") && Priv.restricted(path) && Priv.mode(MainActivity.this) == Priv.OFF) {
+                r = errObj(r.optString("error", "Couldn't read this folder")
+                        + "\nTurn on Root or Shizuku in Settings > Access to open it.");
             }
             final JSONObject res = r;
             ui.post(() -> {
@@ -2311,6 +2345,7 @@ public class MainActivity extends Activity {
             if (it.kind.equals("dir") && (force || it.count < 0)) need.add(it.name);
         }
         if (need.isEmpty()) return;
+        if (Priv.restricted(path) && Priv.mode(this) != Priv.OFF) return;   // counting would run a command per folder
         new Thread(() -> {
             final Map<String, Integer> got = new HashMap<>();
             List<java.util.concurrent.Callable<Void>> jobs = new ArrayList<>();
@@ -2519,8 +2554,37 @@ public class MainActivity extends Activity {
                 message("Older format", "This archive was made by an older Kiln (format 9 or earlier) "
                         + "that this app can't open.");
                 break;
-            default: openFile(new File(cwd, it.name), it); break;
+            default: openRegular(new File(cwd, it.name), it); break;
         }
+    }
+
+    /** A file in a protected folder is copied to the cache first; everything else opens as before. */
+    private void openRegular(final File f, final Item it) {
+        if (!Priv.wants(f.getPath())) {
+            openFile(f, it);
+            return;
+        }
+        stageThen(f, st -> openFile(st, it));
+    }
+
+    private void stageThen(final File f, final OnFile cb) {
+        final ProgressUi pu = new ProgressUi("Preparing...", null);
+        new Thread(() -> {
+            File st = null;
+            String err = null;
+            try {
+                st = Priv.stage(f.getPath());
+            } catch (Exception e) {
+                err = String.valueOf(e.getMessage());
+            }
+            final File got = st;
+            final String why = err;
+            ui.post(() -> {
+                pu.close();
+                if (got == null) message("Couldn't open " + f.getName(), why);
+                else cb.got(got);
+            });
+        }).start();
     }
 
     private List<File> selectedFiles() {
@@ -2616,6 +2680,7 @@ public class MainActivity extends Activity {
 
     private Intent viewIntent(File f, boolean edit) {
         Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", f);
+        if (edit) Priv.watch(f.getPath());                     // a staged copy: written back when we return
         Intent i = new Intent(edit ? Intent.ACTION_EDIT : Intent.ACTION_VIEW);
         i.setDataAndType(uri, mimeOf(f));
         i.setClipData(ClipData.newRawUri("", uri));
@@ -2768,15 +2833,18 @@ public class MainActivity extends Activity {
         final ProgressUi pu = new ProgressUi(pw.isEmpty() ? "Opening..." : "Unlocking...", null);
         new Thread(() -> {
             JSONObject r;
+            File use = f;
             try {
-                r = call("open_archive", f.getPath(), pw);
+                if (Priv.wants(f.getPath())) use = Priv.stage(f.getPath());   // work on a copy in the cache
+                r = call("open_archive", use.getPath(), pw);
             } catch (Exception e) {
                 r = errObj(String.valueOf(e.getMessage()));
             }
             final JSONObject res = r;
+            final File opened = use;
             ui.post(() -> {
                 pu.close();
-                onOpened(f, pw, res, after);
+                onOpened(opened, pw, res, after);
             });
         }).start();
     }
@@ -2794,6 +2862,8 @@ public class MainActivity extends Activity {
         Arc a = new Arc();
         a.file = f;
         a.home = f.equals(incomingFile) ? incomingHome : null;
+        String real = Priv.originOf(f.getPath());              // opened from a protected folder
+        if (real != null) a.home = new File(real).getParentFile();
         a.password = pw;
         a.isSet = "set".equals(r.optString("kind"));
         a.encrypted = r.optBoolean("encrypted");
@@ -3122,7 +3192,18 @@ public class MainActivity extends Activity {
             if (after != null) after.run();
             return;
         }
-        runOp("Saving...", true, p -> ecall("save", a.sid, p), r -> {
+        runOp("Saving...", true, p -> {
+            JSONObject sr = ecall("save", a.sid, p);
+            String real = Priv.originOf(a.file.getPath());
+            if (real != null && sr.optBoolean("ok")) {            // write the saved copy back to the real place
+                try {
+                    Priv.push(a.file, real);
+                } catch (Exception e) {
+                    sr = errObj("Saved here, but couldn't write it back: " + e.getMessage());
+                }
+            }
+            return sr;
+        }, r -> {
             if (r.optBoolean("cancelled")) {
                 toast("Cancelled");
             } else if (r.optBoolean("ok")) {
@@ -3649,7 +3730,8 @@ public class MainActivity extends Activity {
         final boolean mv = clipMove;
         final File dest = cwd;
         final String json = pathsJson(srcs);
-        bg(p -> call("fs_plan", json, dest.getPath(), mv), r -> {
+        bg(p -> Priv.involves(json, dest.getPath()) ? Priv.plan(json, dest.getPath(), mv)
+                : call("fs_plan", json, dest.getPath(), mv), r -> {
             if (!r.optBoolean("ok")) {
                 message("Can't " + (mv ? "move" : "copy"), r.optString("error", r.optString("message")));
                 return;
@@ -3673,7 +3755,8 @@ public class MainActivity extends Activity {
 
     private void runTransfer(final String json, final File dest, final boolean mv, final String policy) {
         runOp(mv ? "Moving..." : "Copying...", true,
-                p -> call("fs_transfer", json, dest.getPath(), mv, policy, p), r -> {
+                p -> Priv.involves(json, dest.getPath()) ? Priv.transfer(json, dest.getPath(), mv, policy)
+                        : call("fs_transfer", json, dest.getPath(), mv, policy, p), r -> {
                     clip.clear();
                     if (r.optBoolean("cancelled")) toast("Cancelled");
                     else if (r.optBoolean("ok")) toast(r.optString("message"));
@@ -3688,7 +3771,8 @@ public class MainActivity extends Activity {
         String what = victims.size() == 1 ? "\"" + victims.get(0).getName() + "\""
                 : plural(victims.size(), "item", "items");
         confirm("Delete " + what + "?", "This can't be undone.", "Delete", Ui.DANGER, () ->
-                runOp("Deleting...", true, p -> call("fs_delete", pathsJson(victims), p), r -> {
+                runOp("Deleting...", true, p -> Priv.involves(pathsJson(victims), "") ? Priv.delete(pathsJson(victims))
+                        : call("fs_delete", pathsJson(victims), p), r -> {
                     if (r.optBoolean("cancelled")) toast("Cancelled");
                     else if (!r.optBoolean("ok")) message("Couldn't delete everything", r.optString("message"));
                     loadDir(cwd);
@@ -3702,6 +3786,12 @@ public class MainActivity extends Activity {
                 .option(R.drawable.ic_new_folder, "Folder", false, this::newFolderHere)
                 .option(R.drawable.ic_new_file, "Text file", false, () ->
                         nameSheet("New text file", "untitled.txt", "Create", n -> {
+                            if (Priv.wants(cwd.getPath())) {
+                                String er = Priv.createFile(new File(cwd, n).getPath());
+                                if (er != null) return er;
+                                loadDir(cwd);
+                                return null;
+                            }
                             File nf = new File(cwd, n);
                             if (nf.exists()) return "That name is taken";
                             try {
@@ -3718,6 +3808,12 @@ public class MainActivity extends Activity {
     /** Makes a folder in the folder being shown. Also works while items are being held to paste. */
     private void newFolderHere() {
         nameSheet("New folder", "", "Create", n -> {
+            if (Priv.wants(cwd.getPath())) {
+                String er = Priv.mkdirs(new File(cwd, n).getPath());
+                if (er != null) return er;
+                loadDir(cwd);
+                return null;
+            }
             File nf = new File(cwd, n);
             if (nf.exists()) return "That name is taken";
             if (!nf.mkdirs()) return "Couldn't create it";
@@ -3753,6 +3849,14 @@ public class MainActivity extends Activity {
         if (sel.size() != 1) return;
         final String old = sel.iterator().next();
         nameSheet("Rename", old, "Rename", n -> {
+            if (Priv.wants(cwd.getPath())) {
+                File pf = new File(cwd, old), pt = new File(cwd, n);
+                String er = Priv.rename(pf.getPath(), pt.getPath());
+                if (er != null) return er;
+                Defaults.moveFolderIcons(this, pf.getPath(), pt.getPath());
+                loadDir(cwd);
+                return null;
+            }
             File target = new File(cwd, n);
             if (target.exists()) return "That name is taken";
             File from = new File(cwd, old);
@@ -3897,8 +4001,24 @@ public class MainActivity extends Activity {
         final Arc a = arc;
         final int total = countFor(keys);
         runOp("Extracting...", true,
-                p -> call("extract", a.file.getPath(), a.password, membersJson(keys), dest,
-                        overwrite, total, p),
+                p -> {
+                    if (!Priv.wants(dest)) {
+                        return call("extract", a.file.getPath(), a.password, membersJson(keys), dest,
+                                overwrite, total, p);
+                    }
+                    File tmp = Priv.newTemp();                    // extract here, then copy into the protected folder
+                    try {
+                        JSONObject xr = call("extract", a.file.getPath(), a.password, membersJson(keys),
+                                tmp.getPath(), true, total, p);
+                        if (xr.optBoolean("ok")) {
+                            String er = Priv.pushInto(tmp, dest, overwrite);
+                            if (er != null) xr = errObj("Couldn't copy into " + dest + ": " + er);
+                        }
+                        return xr;
+                    } finally {
+                        Priv.deleteTree(tmp);
+                    }
+                },
                 r -> {
                     String msg = r.optString("message");
                     if (r.optBoolean("ok")) {
@@ -4250,6 +4370,11 @@ public class MainActivity extends Activity {
     private void runPack(final List<File> sources, final File dest, final boolean encrypt,
                          final boolean separate, final boolean noCompress,
                          final boolean overwrite, final String pw, final boolean wipeSrc) {
+        if (Priv.involves(pathsJson(sources), dest.getPath())) {
+            message("Can't pack here yet", "Packing from or into protected folders isn't supported yet. "
+                    + "Copy the files to Internal storage first, or extract into the protected folder instead.");
+            return;
+        }
         runOp("Packing...", true, p -> call("pack", pathsJson(sources), dest.getPath(), encrypt,
                 separate, noCompress, overwrite, pw, wipeSrc, p), r -> {
             if (r.optBoolean("ok")) {
@@ -4442,7 +4567,7 @@ public class MainActivity extends Activity {
                     if (!v[0].equals(cur[0])) entries.add(new Pick(Pick.VOL, v[0], v[1].getName()));
                 }
             }
-            File[] kids = cur[0].listFiles();
+            File[] kids = Priv.wants(cur[0].getPath()) ? Priv.kids(cur[0]) : cur[0].listFiles();
             List<File> dirs = new ArrayList<>(), files = new ArrayList<>();
             if (kids != null) {
                 for (File k : kids) {
@@ -4466,6 +4591,13 @@ public class MainActivity extends Activity {
             if (e.type == Pick.NEW) {
                 nameSheet("New folder", "", "Create", n -> {
                     File nf = new File(cur[0], n);
+                    if (Priv.wants(nf.getPath())) {
+                        String er = Priv.mkdirs(nf.getPath());
+                        if (er != null) return er;
+                        cur[0] = new Priv.PFile(nf.getPath(), true);
+                        fill[0].run();
+                        return null;
+                    }
                     if (nf.exists()) return "That name is taken";
                     if (!nf.mkdirs()) return "Couldn't create it";
                     cur[0] = nf;

@@ -268,6 +268,16 @@ public class TextActivity extends Activity {
                     .button("OK", Ui.FILLED, null).show();
             return;
         }
+        String real = Priv.originOf(file.getPath());          // a copy of a protected file: write it back
+        if (real != null) {
+            try {
+                Priv.push(file, real);
+            } catch (IOException e) {
+                new Sheet(this, "Couldn't save").text("Saved a copy, but writing it to " + real + " failed: "
+                        + e.getMessage()).button("OK", Ui.FILLED, null).show();
+                return;
+            }
+        }
         saved = text;
         dirty = false;
         refreshSub();

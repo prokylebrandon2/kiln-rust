@@ -164,3 +164,25 @@ and custom/fallback scripts.
 
 ## 3.25
 - Bookmarks no longer work out how much each folder holds (no background scan, no size label).
+
+## 4.0 - Root and Shizuku access
+
+- **Settings > Access > Protected folders:** Off / Root / Shizuku. Root asks the superuser app for permission;
+  Shizuku needs the Shizuku app running, and Kiln asks it for permission from the same card.
+- When it is on, the bookmarks list gets **Root (/)** and **Android/data**, and any folder Android hides
+  from apps (`/`, `/data`, other apps' data, `Android/data`, `Android/obb`) opens like a normal folder.
+  `/` is a top of its own (no ".." row; Back asks to exit).
+- **Works in protected folders:** browse, search, new folder / text file, rename, copy, move and delete (also
+  between a protected folder and normal storage), pull-down size. Every plain file is listed there (Kiln
+  looks inside up to 80 files per folder to spot archives).
+- **Files and archives:** a file you open from a protected folder is copied to Kiln's cache, opened, and
+  written back when you save (Kiln's editor), or when you come back from "Edit with..." in another app.
+  Archives are opened from a cache copy; Save writes the result back. Extracting into a protected folder
+  extracts to the cache first, then copies in.
+- **Not yet:** packing from or into protected folders, Properties for protected items, folder item counts,
+  thumbnails there. Search in protected folders matches names only and doesn't look inside archives.
+- Implementation: `Priv.java` (commands + staging), `PrivService.java` + `IPrivService.aidl` (the Shizuku user
+  service), dependencies `dev.rikka.shizuku:api` and `:provider` (Maven Central).
+- Shizuku runs as the `shell` user (or root if started with root): it reaches `Android/data` but not other
+  apps' `/data/data`. Root reaches everything. Files made by root outside shared storage get the parent
+  folder's owner and SELinux label.

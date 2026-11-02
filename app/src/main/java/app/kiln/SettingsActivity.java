@@ -45,6 +45,7 @@ public class SettingsActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        Priv.init(this);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setBackgroundColor(Ui.bg(this));
@@ -195,6 +196,22 @@ public class SettingsActivity extends Activity {
         choiceRow(tl, "WAV info", "Choose...", "Shows whether a .wav is float or integer audio.",
                 () -> pickFile((f, n) -> runTool("wavcheck", f.getPath(), "WAV info", n)));
 
+        heading("ACCESS");
+        LinearLayout ac = card();
+        final String[] modeNames = {"Off", "Root", "Shizuku"};
+        choiceRow(ac, "Protected folders", modeNames[Defaults.privMode(this)],
+                "Open \"/\", other apps' data and Android/data using root or Shizuku.", this::accessSheet);
+        if (Defaults.privMode(this) != Priv.OFF) {
+            TextView st = Ui.label(this, "Status: " + Priv.status(), 13, false, true);
+            st.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
+            ac.addView(st);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            bp.bottomMargin = Ui.dp(this, 6);
+            ac.addView(Ui.button(this, Defaults.privMode(this) == Priv.ROOT ? "Check root access"
+                    : "Check / grant Shizuku", Ui.OUTLINE, v -> checkAccess()), bp);
+        }
+
         heading("ADVANCED");
         LinearLayout ad = card();
         choiceRow(ad, "Parallel jobs", String.valueOf(Defaults.jobs(this)),
@@ -277,6 +294,78 @@ public class SettingsActivity extends Activity {
 
     private java.io.File cacheDir() {
         return new java.io.File(getCacheDir(), "preview");
+    }
+
+    // ---- protected folders (root / Shizuku)
+
+    private void accessSheet() {
+        Sheet sh = new Sheet(this, "Protected folders");
+        sh.text("Lets Kiln browse and change folders Android keeps from apps. Anything done here is real: "
+                + "deleting or moving system files can break apps or the phone.");
+        sh.radio("Off", "Normal access only", Defaults.privMode(this) == Priv.OFF, () -> {
+            Priv.setMode(Priv.OFF);
+            render();
+        });
+        sh.radio("Root", "Needs a rooted phone; a superuser prompt appears", Defaults.privMode(this) == Priv.ROOT, () -> {
+            Priv.setMode(Priv.ROOT);
+            render();
+            checkAccess();
+        });
+        sh.radio("Shizuku", "Needs the Shizuku app running; reaches Android/data and more",
+                Defaults.privMode(this) == Priv.SHIZUKU, () -> {
+                    Priv.setMode(Priv.SHIZUKU);
+                    render();
+                    checkAccess();
+                });
+        sh.button("Cancel", Ui.TEXT, null).show();
+    }
+
+    /** Tests the chosen way in, asking for permission if that is what is missing. */
+    private void checkAccess() {
+        final int m = Defaults.privMode(this);
+        if (m == Priv.ROOT) {
+            Toast.makeText(this, "Asking for root...", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                final boolean ok = Priv.probeRoot();
+                runOnUiThread(() -> {
+                    Toast.makeText(this, ok ? "Root access works" : Priv.status(), Toast.LENGTH_LONG).show();
+                    render();
+                });
+            }).start();
+        } else if (m == Priv.SHIZUKU) {
+            if (!Priv.shizukuRunning()) {
+                Sheet sh = new Sheet(this, "Shizuku isn't running");
+                sh.text(Priv.shizukuInstalled()
+                        ? "Open Shizuku and start it (with Wireless debugging, or with root), then come back."
+                        : "Install Shizuku from its project page or app store, start it, then come back.");
+                sh.button("Close", Ui.TEXT, null);
+                if (Priv.shizukuInstalled()) {
+                    sh.button("Open Shizuku", Ui.FILLED, () -> {
+                        try {
+                            startActivity(getPackageManager().getLaunchIntentForPackage("moe.shizuku.privileged.api"));
+                        } catch (Exception e) {
+                            Toast.makeText(this, "Couldn't open Shizuku", Toast.LENGTH_SHORT).show();
+                        }
+                        return true;
+                    });
+                }
+                sh.show();
+                render();
+                return;
+            }
+            Priv.requestShizuku(granted -> runOnUiThread(() -> {
+                Toast.makeText(this, granted ? "Shizuku is allowed" : "Shizuku permission was refused",
+                        Toast.LENGTH_SHORT).show();
+                ui().postDelayed(this::render, 600);              // the service takes a moment to come up
+            }));
+        }
+    }
+
+    private android.os.Handler uiHandler;
+
+    private android.os.Handler ui() {
+        if (uiHandler == null) uiHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        return uiHandler;
     }
 
     private void loadCacheSize() {

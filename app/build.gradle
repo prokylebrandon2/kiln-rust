@@ -11,10 +11,12 @@ android {
         applicationId "app.kiln"
         minSdk 30            // Android 11+: simple "all files access" permission
         targetSdk 34
-        versionCode 28
-        versionName "3.25"
+        versionCode 29
+        versionName "4.0"
         ndk { abiFilters "arm64-v8a", "x86_64" }
     }
+
+    buildFeatures { aidl true }      // IPrivService: the Shizuku user service
 
     // kiln loads its C helper with ctypes, which needs a real file on disk.
     packagingOptions { jniLibs { useLegacyPackaging true } }
@@ -28,6 +30,8 @@ android {
 dependencies {
     implementation "androidx.core:core:1.13.1"   // FileProvider: lets other apps open files
     implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"   // pull down to refresh
+    implementation "dev.rikka.shizuku:api:13.1.5"        // Shizuku: browse protected folders
+    implementation "dev.rikka.shizuku:provider:13.1.5"
 }
 
 chaquopy {

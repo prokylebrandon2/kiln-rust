@@ -4154,14 +4154,34 @@ public class MainActivity extends Activity {
 
         List<String[]> rows = new ArrayList<>();
         // kiln's success line: "Checked 12 file(s), 3.4 MB in 0.8s - all checksums OK"
-        java.util.regex.Matcher m = ok ? java.util.regex.Pattern
-                .compile("(\\d+) file\\(s\\), (.+?) in ([\\d.]+)s").matcher(msg) : null;
-        if (m != null && m.find()) {
+        String nFiles = null, size = null, secs = null;
+        if (ok) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("(\\d+) file\\(s\\), (.+?) in ([\\d.]+)s").matcher(msg);
+            if (m.find()) {
+                nFiles = m.group(1);
+                size = m.group(2);
+                secs = m.group(3);
+            } else {
+                // a folder of separate archives says "verified 14 file(s) from <path> in 5.5s": no size
+                // in it, so the size comes from the archive's own listing
+                m = java.util.regex.Pattern.compile("(\\d+) file\\(s\\) from .+ in ([\\d.]+)s",
+                        java.util.regex.Pattern.DOTALL).matcher(msg);
+                if (m.find()) {
+                    long total = 0;
+                    for (Ent e : a.ents) total += e.s;
+                    nFiles = m.group(1);
+                    size = Fmt.size(total);
+                    secs = m.group(2);
+                }
+            }
+        }
+        if (nFiles != null) {
             LinearLayout stats = new LinearLayout(this);
-            int n = Integer.parseInt(m.group(1));
+            int n = Integer.parseInt(nFiles);
             stats.addView(statTile(String.valueOf(n), n == 1 ? "file checked" : "files checked"), statLp(false));
-            stats.addView(statTile(m.group(2), "of data"), statLp(true));
-            stats.addView(statTile(m.group(3) + " s", "took"), statLp(false));
+            stats.addView(statTile(size, "of data"), statLp(true));
+            stats.addView(statTile(secs + " s", "took"), statLp(false));
             sh.content(stats).space(16);
             rows.add(new String[]{"Result", "Every checksum matches"});
         } else if (ok) {

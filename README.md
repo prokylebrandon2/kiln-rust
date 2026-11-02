@@ -210,3 +210,7 @@ and custom/fallback scripts.
 
 - Check on a set of archives (a folder with `_index.kln`) now shows a real progress bar: finished archives plus how far into the current one. Before, it only showed a moving bar.
 - Check on a single archive already reported progress by bytes; unchanged.
+
+## 4.0.5
+
+- Check on a folder of separate archives now shows the same result sheet as a normal archive (files checked, size, time) instead of Kiln's raw output line with the path.

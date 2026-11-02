@@ -131,3 +131,12 @@ and custom/fallback scripts.
 
 - The Pack result is a card like Check's: a header (archive, lock or set icon), tiles for how many files or archives were made, the stored size and the time, a bar showing how much space was saved, and a details card (location, layout, encryption).
 - Pressing Back in the home folder no longer leaves Kiln at once: it shows "Tap Back again to exit", and a second press within two seconds exits.
+
+## 3.20
+
+- **Pull-down info:** dragging the list down at the top reveals type, free/total space, folder name, folder size (counted live) and a usage bar. Pull-to-refresh still runs on release. In an open archive it shows the archive's name, size and file count.
+- **Smoother progress that names the current file:** the box shows the file being packed or extracted right now. The bar eases toward each report and keeps moving at the measured speed between reports. "One archive per file" follows total bytes instead of jumping per file. The notification updates at most twice a second.
+- **Flash drives and SD cards are storages of their own:** a drive's top folder acts as a home (no ".." row; Back shows "Tap Back again to exit"). The title shows the drive's name. Kiln still opens to Internal storage. The folder chooser lists the other storages at a storage's top. If a drive is unplugged while you are in it, Kiln goes home.
+- **Delete source files after packing:** Settings > Packing (off by default) and a tick box in the Pack dialog. Only files confirmed inside a finished archive are removed, and only when the whole job succeeds; skipped files stay, and empty folders are tidied. The result card shows how many were deleted.
+- **Bookmarks show space:** storages show free/total; bookmarked folders show how much they hold (counted in the background).
+- Pack result no longer says "random names" for unencrypted one-archive-per-file packs.

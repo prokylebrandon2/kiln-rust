@@ -169,6 +169,13 @@ public class SettingsActivity extends Activity {
                     sh.button("Cancel", Ui.TEXT, null).show();
                 });
 
+        heading("PACKING");
+        LinearLayout pk = card();
+        toggle(pk, "Delete source files after packing",
+                "Removes the original files once they are safely in the archive. Pack still shows "
+                        + "a tick box each time.",
+                Defaults.deleteAfterPack(this), (b, on) -> Defaults.setDeleteAfterPack(this, on));
+
         heading("SCRIPTS");
         LinearLayout sr = card();
         String mainName = scripts.optString("main", "");

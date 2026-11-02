@@ -105,6 +105,8 @@ def run(args, password, sink, hook=None):
         kiln.start_mp3_ahead = lambda *a, **k: None
         _hook = hook
         kiln.Progress = _HookedProgress if hook else _Progress
+        kiln.FILE_HOOK = getattr(sink, "file_started", None)
+        kiln.FILES_DONE_HOOK = getattr(sink, "files_done", None)
         code = 0
         try:
             kiln.require_accel()
@@ -123,6 +125,8 @@ def run(args, password, sink, hook=None):
             out.flush()
             _hook = None
             kiln.Progress = _Progress
+            kiln.FILE_HOOK = None
+            kiln.FILES_DONE_HOOK = None
             kiln.stop_mp3_ahead()
             (sys.argv, sys.stdout, sys.stderr,
              kiln.get_password, kiln.start_mp3_ahead) = saved
@@ -141,6 +145,8 @@ def call(fn, sink, hook=None):
         kiln.start_mp3_ahead = lambda *a, **k: None
         _hook = hook
         kiln.Progress = _HookedProgress if hook else _Progress
+        kiln.FILE_HOOK = getattr(sink, "file_started", None)
+        kiln.FILES_DONE_HOOK = getattr(sink, "files_done", None)
         code, res = 0, None
         try:
             kiln.require_accel()
@@ -157,6 +163,8 @@ def call(fn, sink, hook=None):
             out.flush()
             _hook = None
             kiln.Progress = _Progress
+            kiln.FILE_HOOK = None
+            kiln.FILES_DONE_HOOK = None
             kiln.stop_mp3_ahead()
             sys.stdout, sys.stderr, kiln.get_password, kiln.start_mp3_ahead = saved
         return code, res

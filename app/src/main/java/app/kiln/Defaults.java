@@ -32,6 +32,13 @@ final class Defaults {
     static void setUpRow(Context c, boolean v) { p(c).edit().putBoolean("up_row", v).apply(); }
     static void setPreviews(Context c, boolean v) { p(c).edit().putBoolean("previews", v).apply(); }
 
+    // ---- delete the original files once they are safely in the archive (off by default)
+
+    static boolean deleteAfterPack(Context c) { return p(c).getBoolean("delete_after_pack", false); }
+    static void setDeleteAfterPack(Context c, boolean v) {
+        p(c).edit().putBoolean("delete_after_pack", v).apply();
+    }
+
     // ---- parallel jobs for packing (1 is safest inside an app)
 
     static int jobs(Context c) { return Math.max(1, Math.min(8, p(c).getInt("jobs", 1))); }

@@ -250,15 +250,34 @@ def _open_main(path, password):
 # ---------------------------------------------------------------- running commands
 
 class _Sink:
-    """Turns kiln's printed lines and byte counters into progress events and a final message."""
-    def __init__(self, progress, total, use_bytes):
+    """Turns kiln's printed lines and byte counters into progress events and a final message.
+
+    The name shown is the file being worked on right now (kiln tells us when each one starts),
+    and the fraction is by bytes whenever the total is known, so the bar moves steadily rather
+    than jumping once per finished file."""
+    def __init__(self, progress, total, use_bytes, total_bytes=0, each=False):
         self.progress, self.total, self.use_bytes = progress, total, use_bytes
         self.done, self.file, self.bfrac = 0, "", None
         self.lines, self.last = [], 0.0
+        self.total_bytes, self.each = total_bytes, each
+        self.base = self.cur = 0          # bytes in finished files / size of the current one
+        self.packed = []                  # full paths of files now safely inside a finished archive
+
+    def files_done(self, paths):
+        self.packed.extend(paths)
 
     def _check(self):
         if self.progress is not None and self.progress.cancelled():
             raise bridge.Cancelled()
+
+    def file_started(self, name, size):
+        self._check()
+        if self.each:
+            self.base += self.cur           # the previous archive is finished
+            self.bfrac = 0
+        self.cur = size or 0
+        self.file = name
+        self._emit(True)
 
     def _emit(self, force=False):
         if self.progress is None:
@@ -269,6 +288,8 @@ class _Sink:
         self.last = now
         if self.use_bytes and self.bfrac is not None:
             frac = self.bfrac
+        elif self.each and self.total_bytes:
+            frac = min((self.base + (self.bfrac or 0) * self.cur) / self.total_bytes, 1.0)
         elif self.total:
             frac = min(self.done / self.total, 1.0)
         else:
@@ -280,7 +301,8 @@ class _Sink:
         self.lines.append(text)
         if text.startswith("  "):
             self.done += 1
-            self.file = text.strip().split(": ")[0]
+            if not self.file:                # kiln didn't announce a file: fall back to the line
+                self.file = text.strip().split(": ")[0]
             self._emit(self.done == self.total)
 
     def on_bytes(self, done, total):
@@ -299,8 +321,10 @@ class _Sink:
         return self.lines[-1] if self.lines else "the operation failed"
 
 
-def _run(args, password, total, progress, use_bytes):
-    sink = _Sink(progress, total, use_bytes)
+def _run(args, password, total, progress, use_bytes, total_bytes=0, each=False, keep_sink=None):
+    sink = _Sink(progress, total, use_bytes, total_bytes, each)
+    if keep_sink is not None:
+        keep_sink.append(sink)
     rc = bridge.run(args, password, sink, hook=sink.on_bytes)
     if rc == 130:
         return _j(ok=False, cancelled=True, message="Cancelled")
@@ -484,7 +508,35 @@ def preview(path, password, member, cache_dir, size=0, progress=None):
     return res
 
 
-def pack(items_json, dest, encrypt, each, store, overwrite, password, progress):
+def _delete_sources(packed, items, dest):
+    """Remove the originals that are now inside a finished archive, then any folder this left
+    empty. Only files kiln reports as packed are touched, never the output itself."""
+    out = os.path.abspath(dest)
+    inside = out + os.sep
+    deleted = failed = 0
+    for f in packed:
+        a = os.path.abspath(f)
+        if a == out or a.startswith(inside) or not os.path.isfile(a) or os.path.islink(a):
+            continue
+        try:
+            os.remove(a)
+            deleted += 1
+        except OSError:
+            failed += 1
+    for it in items:                                  # tidy folders the packing emptied
+        if os.path.isdir(it) and not os.path.islink(it):
+            for dp, _dn, _fn in os.walk(it, topdown=False):
+                a = os.path.abspath(dp)
+                if a == out or a.startswith(inside) or out.startswith(a + os.sep):
+                    continue                          # the output lives here
+                try:
+                    os.rmdir(dp)
+                except OSError:
+                    pass
+    return deleted, failed
+
+
+def pack(items_json, dest, encrypt, each, store, overwrite, password, delete_src, progress):
     items = json.loads(items_json)
     try:
         files = kiln.collect(items)
@@ -495,8 +547,11 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, progress):
     existed = os.path.lexists(dest)
     args = ["pack"] + (["-e"] if encrypt else []) + (["-s"] if encrypt and store else []) \
         + (["-i"] if each else []) + (["-f"] if overwrite else []) + ["--", dest] + items
-    res = _run(args, password, len(files), progress, not each)
-    if not json.loads(res).get("ok") and not existed:      # don't leave half-written output
+    keep = []
+    res = _run(args, password, len(files), progress, not each,
+               sum(f["size"] for f in files), each, keep)
+    out = json.loads(res)
+    if not out.get("ok") and not existed:      # don't leave half-written output
         for leftover in (dest, dest + ".tmp"):
             if os.path.isdir(leftover):
                 shutil.rmtree(leftover, ignore_errors=True)
@@ -505,6 +560,12 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, progress):
                     os.remove(leftover)
                 except OSError:
                     pass
+    elif out.get("ok") and delete_src and keep and os.path.lexists(dest):
+        # only after the whole job succeeded, and only files kiln says are inside an archive
+        # (anything skipped, unreadable or left over because its archive already existed stays)
+        deleted, failed = _delete_sources(keep[0].packed, items, dest)
+        out["deleted"], out["delete_failed"] = deleted, failed
+        res = _j(**out)
     return res
 
 

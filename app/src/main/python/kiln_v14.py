@@ -313,6 +313,22 @@ def fmt_size(n):
         n /= 1024
 
 
+FILE_HOOK = None      # the app sets this to f(name, size): called as each file starts packing/extracting
+
+
+def file_started(name, size):
+    if FILE_HOOK is not None:
+        FILE_HOOK(name, size)
+
+
+FILES_DONE_HOOK = None  # f([full paths]): called when an archive is finished and in place
+
+
+def files_done(paths):
+    if FILES_DONE_HOOK is not None:
+        FILES_DONE_HOOK(paths)
+
+
 class Progress:
     def __init__(self, total, label, enabled=True):
         self.total = max(total, 1)
@@ -2006,6 +2022,7 @@ def cmd_pack(args):
                     continue
                 fh.close()
                 enc.maybe_checkpoint(len(table))
+                file_started(e["rel"], e["size"])
                 size, crc, filt, sl = pack_file(enc, e)
                 table.append(dict(e, size=size, crc=crc, filt=filt, slen=sl))
             enc.finish()
@@ -2017,6 +2034,7 @@ def cmd_pack(args):
             out.write(struct.pack(">QQ4s", table_off,
                                   0 if cipher else sum(e["size"] for e in table), MAGIC))
         os.replace(tmp, args.archive)
+        files_done([t["full"] for t in table])
     except BaseException:
         prog.close()
         if pool:
@@ -2063,6 +2081,7 @@ class Extractor:
                 d = os.path.dirname(d)
             os.makedirs(os.path.dirname(self.dest), exist_ok=True)
             self.made.extend(reversed(missing))
+            file_started(e["rel"], slen(e))
             existed = os.path.lexists(self.dest)
             self.fh = open(self.dest, "wb")
             if not existed:

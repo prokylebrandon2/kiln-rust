@@ -23,6 +23,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.ViewGroup;
@@ -267,7 +268,12 @@ public class MainActivity extends Activity {
         if (changed && adapter != null) adapter.notifyDataSetChanged();
         refreshPermission();
         checkEditedFile();
-        if (needRefresh && arc == null && loadedOnce) {
+        volAt = -10000;                                       // re-check which drives are plugged in
+        if (arc == null && loadedOnce && hasStorage() && !cwd.isDirectory()) {
+            File r = storageRootOf(cwd);                      // the drive was unplugged: go home
+            loadDir(r.isDirectory() ? r : root);
+            toast("That storage isn't available any more");
+        } else if (needRefresh && arc == null && loadedOnce) {
             needRefresh = false;
             loadDir(cwd, true);
         }
@@ -288,8 +294,8 @@ public class MainActivity extends Activity {
                 int i = p.lastIndexOf('/');
                 arcBackTo(i < 0 ? "" : p.substring(0, i + 1));
             }
-        } else if (!cwd.equals(root) && cwd.getParentFile() != null) {
-            loadDir(isTopLevel(cwd) ? root : cwd.getParentFile());
+        } else if (!isStorageRoot(cwd) && cwd.getParentFile() != null) {
+            loadDir(cwd.getParentFile());               // a flash drive's top is a home of its own
         } else if (pickArc != null) {
             endPick(false);
         } else {
@@ -505,7 +511,11 @@ public class MainActivity extends Activity {
             if (i >= 0 && i < rows.size()) toggle(rows.get(i).key);
             return true;
         });
-        swipe = new SwipeRefreshLayout(this);
+        list.setBackgroundColor(Ui.bg(this));            // covers the info panel until you pull
+        buildPullPanel();
+        body.addView(pullPanel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(PULL_H), Gravity.TOP));
+        swipe = new PullSwipe(this);
         swipe.addView(list, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         swipe.setColorSchemeColors(Ui.accent(this));
@@ -599,7 +609,7 @@ public class MainActivity extends Activity {
     /** The ".." row shows when there's somewhere to go up to. */
     private boolean upShown() {
         if (upFrozen != null) return upFrozen;
-        return upRowOn && (arc != null || !cwd.equals(root)) && hasStorage()
+        return upRowOn && (arc != null || !isStorageRoot(cwd)) && hasStorage()
                 && !(searching && !query.isEmpty());
     }
 
@@ -756,6 +766,162 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ------------------------------------------------------------------ pull-down info
+    // Dragging the list down at the top reveals a strip behind it (type, free space, name, size and
+    // a usage bar, like ZArchiver) while the usual pull-to-refresh still runs on release.
+
+    private static final int PULL_H = 84;
+    private LinearLayout pullPanel;
+    private TextView pullType, pullFree, pullName, pullSize;
+    private ProgressBar pullBar;
+    private boolean pullShown;
+    private java.util.concurrent.atomic.AtomicBoolean pullStop = new java.util.concurrent.atomic.AtomicBoolean(true);
+
+    private void buildPullPanel() {
+        pullPanel = new LinearLayout(this);
+        pullPanel.setOrientation(LinearLayout.VERTICAL);
+        pullPanel.setBackgroundColor(Ui.surface(this));
+        pullPanel.setPadding(dp(16), dp(10), dp(16), 0);
+        pullPanel.setVisibility(View.INVISIBLE);
+        LinearLayout grid = new LinearLayout(this);
+        LinearLayout l = new LinearLayout(this), r = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        r.setOrientation(LinearLayout.VERTICAL);
+        pullType = Ui.label(this, "", 13, false, false);
+        pullFree = Ui.label(this, "", 13, false, false);
+        pullName = Ui.label(this, "", 13, false, false);
+        pullSize = Ui.label(this, "", 13, false, false);
+        for (TextView t : new TextView[]{pullType, pullFree, pullName, pullSize}) {
+            t.setSingleLine(true);
+            t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        }
+        l.addView(pullType);
+        l.addView(pullFree);
+        r.addView(pullName);
+        r.addView(pullSize);
+        grid.addView(l, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        rp.leftMargin = dp(12);
+        grid.addView(r, rp);
+        pullPanel.addView(grid);
+        pullBar = Ui.meter(this, 0, true);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+        bp.topMargin = dp(10);
+        pullPanel.addView(pullBar, bp);
+    }
+
+    /** Fills the strip for wherever you are: a folder, or the archive that is open. */
+    private void fillPull() {
+        pullStop.set(true);
+        final java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        pullStop = stop;
+        final File at = arc != null ? arc.file.getParentFile() : cwd;
+        long[] sp = at != null ? spaceOf(at) : null;
+        pullFree.setText(sp != null ? "Free: " + Fmt.size(sp[0]) + " / " + Fmt.size(sp[1]) : "");
+        pullBar.setProgress(sp != null && sp[1] > 0
+                ? (int) Math.max(8, Math.round(1000.0 * (sp[1] - sp[0]) / sp[1])) : 0);
+        if (arc != null) {
+            pullType.setText(arc.isSet ? "Type: Archive set" : "Type: Kiln archive");
+            pullName.setText("Archive: " + arc.file.getName());
+            pullSize.setText("Size: " + Fmt.size(arc.file.length()) + " \u00b7 "
+                    + plural(arc.ents.size(), "file", "files"));
+            return;
+        }
+        pullType.setText("Type: " + (isStorageRoot(cwd) ? "Storage" : "Folder"));
+        pullName.setText((isStorageRoot(cwd) ? "Storage: " + storageName(cwd) : "Folder: " + cwd.getName()));
+        pullSize.setText("Size: ...");
+        new Thread(() -> {                                   // the folder's size climbs as it is counted
+            final long[] tot = {0};
+            walkSize(at, stop, tot, 0);
+            if (!stop.get()) ui.post(() -> {
+                if (!stop.get()) pullSize.setText("Size: " + Fmt.size(tot[0]));
+            });
+        }).start();
+    }
+
+    private void walkSize(File d, java.util.concurrent.atomic.AtomicBoolean stop, long[] tot, int depth) {
+        File[] kids = d.listFiles();
+        if (kids == null || depth > 40) return;
+        for (File k : kids) {
+            if (stop.get()) return;
+            if (k.isDirectory()) walkSize(k, stop, tot, depth + 1);
+            else tot[0] += k.length();
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - pullPost >= 120) {
+                pullPost = now;
+                final long v = tot[0];
+                ui.post(() -> {
+                    if (!stop.get()) pullSize.setText("Size: " + Fmt.size(v) + "...");
+                });
+            }
+        }
+    }
+
+    private long pullPost;
+
+    private void pullMove(float dy) {
+        if (!sel.isEmpty() || !hasStorage()) return;
+        float reveal = Math.max(0f, Math.min(dy * 0.6f, dp(PULL_H)));
+        if (reveal > 0f && !pullShown) {
+            pullShown = true;
+            list.animate().cancel();
+            pullPanel.animate().cancel();
+            fillPull();
+            pullPanel.setVisibility(View.VISIBLE);
+        }
+        if (pullShown) {
+            list.setTranslationY(reveal);
+            pullPanel.setAlpha(Math.min(1f, reveal / (dp(PULL_H) * 0.5f)));
+        }
+    }
+
+    private void pullEnd() {
+        if (!pullShown) return;
+        pullShown = false;
+        boolean full = list.getTranslationY() >= dp(PULL_H) * 0.9f;
+        list.animate().translationY(0f).setStartDelay(full ? 250 : 0)
+                .setDuration(Defaults.anim(this, 220)).withEndAction(() -> {
+                    list.animate().setStartDelay(0);
+                    pullPanel.setVisibility(View.INVISIBLE);
+                    pullStop.set(true);
+                }).start();
+    }
+
+    /** Pull-to-refresh that also reports how far the list is dragged, so the strip can be shown. */
+    private final class PullSwipe extends SwipeRefreshLayout {
+        private boolean atTop;
+        private float baseY;
+
+        PullSwipe(android.content.Context c) { super(c); }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_MOVE:
+                    if (e.getPointerCount() == 1 && list != null) {
+                        if (!list.canScrollVertically(-1)) {
+                            if (!atTop) {
+                                atTop = true;
+                                baseY = e.getY();
+                            }
+                            pullMove(e.getY() - baseY);
+                        } else {
+                            atTop = false;
+                        }
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    atTop = false;
+                    pullEnd();
+                    break;
+                default:
+                    break;
+            }
+            return super.dispatchTouchEvent(e);
+        }
+    }
+
     private void onPull() {
         if (app == null || !hasStorage()) {
             swipe.setRefreshing(false);
@@ -789,7 +955,7 @@ public class MainActivity extends Activity {
                     ? plural(arc.ents.size(), "file", "files") + (arc.encrypted ? " \u00b7 encrypted" : "")
                     : "/" + arc.prefix) + (arc.dirty ? " \u00b7 unsaved changes" : ""));
         } else {
-            boolean atRoot = cwd.equals(root);
+            boolean atRoot = isStorageRoot(cwd);
             if (atRoot) {
                 setLeft(R.drawable.ic_kiln, false);          // home: the Kiln mark fills the corner
                 if (!leftWasHome) glowMark();
@@ -798,7 +964,7 @@ public class MainActivity extends Activity {
             }
             leftWasHome = atRoot;
             title.setText(pickArc != null ? "Add to " + pickArc.file.getName()
-                    : atRoot ? "Kiln" : cwd.getName());
+                    : atRoot ? (cwd.equals(root) ? "Kiln" : storageName(cwd)) : cwd.getName());
             sub.setText(cwd.getPath());
         }
         banner.setVisibility(plainSet && arc == null ? View.VISIBLE : View.GONE);
@@ -864,7 +1030,7 @@ public class MainActivity extends Activity {
             info.setPadding(dp(12), dp(8), dp(12), dp(2));
             info.addView(Ui.label(this, (clipMove ? "Moving " : "Copying ")
                     + plural(clip.size(), "item", "items"), 15, true, false));
-            info.addView(Ui.label(this, "Into " + (cwd.equals(root) ? "Internal storage" : cwd.getName()),
+            info.addView(Ui.label(this, "Into " + (isStorageRoot(cwd) ? storageName(cwd) : cwd.getName()),
                     12, false, true));
             bottomBar.addView(info);
             LinearLayout row = new LinearLayout(this);
@@ -967,7 +1133,7 @@ public class MainActivity extends Activity {
         if (!sel.isEmpty()) {
             sel.clear();
             redraw();
-        } else if (arc == null && !searching && cwd.equals(root)) {
+        } else if (arc == null && !searching && isStorageRoot(cwd)) {
             glowMark();                                      // at home the mark isn't "up": tap for About
             aboutDialog();
         } else {
@@ -1458,15 +1624,18 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(6), dp(6), dp(6), dp(6));
         card.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 18));
-        card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false));
-        for (File[] v : removableVolumes()) {                     // USB drives and SD cards: listed while plugged in
-            card.addView(markRow(R.drawable.ic_archive, v[1].getName(), v[0].getPath(), false));
+        final List<Object[]> sizeJobs = new ArrayList<>();        // {TextView, File}: folder sizes to fill in
+        volAt = -10000;
+        card.addView(markRow(R.drawable.ic_home, "Internal storage", root.getPath(), false, root, null));
+        for (File[] v : volumes()) {                              // USB drives and SD cards: listed while plugged in
+            card.addView(markRow(R.drawable.ic_usb, v[1].getName(), v[0].getPath(), false, v[0], null));
         }
         for (String bp : saved) {
             File f = new File(bp);
-            card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true));
+            card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true,
+                    null, sizeJobs));
         }
-        if (!cwd.equals(root)) {
+        if (!isStorageRoot(cwd)) {
             View d = new View(this);
             d.setBackgroundColor(Ui.line(this));
             LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
@@ -1499,6 +1668,19 @@ public class MainActivity extends Activity {
         marks.setOutsideTouchable(true);
         marks.setAnimationStyle(0);
         marks.showAsDropDown(titleBox, -titleBox.getLeft() - dp(4), 0);
+        final java.util.concurrent.atomic.AtomicBoolean stopSizes = new java.util.concurrent.atomic.AtomicBoolean();
+        marks.setOnDismissListener(() -> stopSizes.set(true));
+        if (!sizeJobs.isEmpty()) {
+            new Thread(() -> {                                    // how much each bookmarked folder holds
+                for (Object[] j : sizeJobs) {
+                    if (stopSizes.get()) return;
+                    final long n = dirSize((File) j[1], stopSizes, 0);
+                    if (stopSizes.get()) return;
+                    sizeCache.put(((File) j[1]).getPath(), n);
+                    ui.post(() -> ((TextView) j[0]).setText(Fmt.size(n)));
+                }
+            }).start();
+        }
         if (Defaults.animOn(this)) {
             wrap.setAlpha(0f);
             wrap.setScaleY(0.9f);
@@ -1527,10 +1709,56 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    /** True for folders that act as a top of the tree: Back from here goes to Internal storage. */
-    private boolean isTopLevel(File d) {
-        for (File[] v : removableVolumes()) if (v[0].equals(d)) return true;
+    private List<File[]> volCache = new ArrayList<>();
+    private long volAt = -10000;
+
+    /** Removable volumes, looked up at most every few seconds (this is asked for on every redraw). */
+    private List<File[]> volumes() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - volAt > 3000) {
+            volCache = removableVolumes();
+            volAt = now;
+        }
+        return volCache;
+    }
+
+    /** True for the top of any storage: Internal storage or a flash drive / SD card. Each one is
+     *  its own home: no ".." row, and Back from here asks to exit instead of going somewhere else. */
+    private boolean isStorageRoot(File d) {
+        if (d.equals(root)) return true;
+        for (File[] v : volumes()) if (v[0].equals(d)) return true;
         return false;
+    }
+
+    /** The storage a folder lives on (Internal storage if it matches none). */
+    private File storageRootOf(File f) {
+        File best = root;
+        String fp = f.getPath() + "/";
+        int len = fp.startsWith(root.getPath() + "/") ? root.getPath().length() : -1;
+        for (File[] v : volumes()) {
+            String vp = v[0].getPath();
+            if (fp.startsWith(vp + "/") && vp.length() > len) {
+                best = v[0];
+                len = vp.length();
+            }
+        }
+        return best;
+    }
+
+    private String storageName(File r) {
+        if (r.equals(root)) return "Internal storage";
+        for (File[] v : volumes()) if (v[0].equals(r)) return v[1].getName();
+        return r.getName();
+    }
+
+    /** {free, total} bytes of the storage holding f, or null. */
+    private static long[] spaceOf(File f) {
+        try {
+            android.os.StatFs st = new android.os.StatFs(f.getPath());
+            return new long[]{st.getAvailableBytes(), st.getTotalBytes()};
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private View iconTile(int icon) {
@@ -1551,7 +1779,24 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private View markRow(int icon, String name, final String path, boolean removable) {
+    private final Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();   // bookmarked folder -> last size seen
+
+    /** Bytes under a folder (stops early when `stop` is set). */
+    private static long dirSize(File d, java.util.concurrent.atomic.AtomicBoolean stop, int depth) {
+        long t = 0;
+        File[] kids = d.listFiles();
+        if (kids == null || depth > 40) return 0;
+        for (File k : kids) {
+            if (stop.get()) return t;
+            t += k.isDirectory() ? dirSize(k, stop, depth + 1) : k.length();
+        }
+        return t;
+    }
+
+    /** One line of the bookmarks list. Storages show free/total on the right; a bookmarked folder
+     *  shows how much it holds (worked out in the background: see sizeJobs). */
+    private View markRow(int icon, String name, final String path, boolean removable, File storage,
+                         List<Object[]> sizeJobs) {
         LinearLayout row = rowBase();
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(36), dp(36));
         ip.rightMargin = dp(12);
@@ -1568,6 +1813,19 @@ public class MainActivity extends Activity {
         col.addView(n);
         col.addView(pt);
         row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView right = Ui.label(this, "", 12, false, true);
+        right.setGravity(Gravity.END);
+        right.setPadding(dp(8), 0, 0, 0);
+        if (storage != null) {
+            long[] sp = spaceOf(storage);
+            if (sp != null) right.setText(Fmt.size(sp[0]) + " free\nof " + Fmt.size(sp[1]));
+        } else if (sizeJobs != null) {
+            Long known = sizeCache.get(path);
+            right.setText(known != null ? Fmt.size(known) : "...");
+            sizeJobs.add(new Object[]{right, new File(path)});
+        }
+        row.addView(right, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         if (removable) {
             ImageButton x = Ui.iconButton(this, R.drawable.ic_close, v -> {
                 Defaults.removeBookmark(this, path);
@@ -3115,23 +3373,82 @@ public class MainActivity extends Activity {
             sh.show();
         }
 
+        // The engine reports only when a chunk is finished, which can be seconds apart on a phone.
+        // So the bar eases toward each report and, between reports, creeps forward at the speed
+        // measured so far (slowing as it nears where the next report is expected, never past it).
+        private double target, shown, rate, ceiling;     // fractions 0..1; rate = fraction per ms
+        private long lastReport = android.os.SystemClock.uptimeMillis(), lastTick = lastReport;
+        private boolean closed, indet = true, ticking;
+        private String lastFile = "";
+        private final Runnable tick = new Runnable() {
+            @Override public void run() {
+                if (closed) return;
+                long now = android.os.SystemClock.uptimeMillis();
+                long dt = Math.min(now - lastTick, 100);
+                lastTick = now;
+                if (shown < target) {                                // catch up to the last report
+                    shown += (target - shown) * Math.min(1.0, dt / 140.0);
+                    if (target - shown < 0.0004) shown = target;
+                } else if (target < 1.0 && rate > 0 && ceiling > target) {   // creep toward the next
+                    double room = ceiling - target;
+                    double p = Math.min(1.0, (shown - target) / room);
+                    shown = Math.min(ceiling - room * 0.02, shown + rate * 0.9 * (1.0 - p) * dt);
+                }
+                if (!indet) paint();
+                ui.postDelayed(this, 33);
+            }
+        };
+
+        private void paint() {
+            bar.setProgress((int) Math.round(shown * 1000));
+            int pc = target >= 1.0 && shown >= 0.999 ? 100 : (int) Math.floor(shown * 100);
+            pct.setText(Math.min(100, pc) + "%");
+        }
+
         void update(double frac, String file) {
-            if (!file.isEmpty()) line.setText(file);
+            if (!file.isEmpty() && !file.equals(lastFile)) {
+                lastFile = file;
+                line.setText(file);
+            }
             if (frac < 0) {
-                bar.setIndeterminate(true);
-                pct.setText("");
-            } else {
+                if (!indet) {
+                    indet = true;
+                    bar.setIndeterminate(true);
+                    pct.setText("");
+                }
+                return;
+            }
+            if (indet) {
+                indet = false;
                 bar.setIndeterminate(false);
-                bar.setProgress((int) Math.round(frac * 1000));
-                pct.setText(Math.min(100, (int) Math.round(frac * 100)) + "%");
+            }
+            long now = android.os.SystemClock.uptimeMillis();
+            if (frac > target) {
+                double step = frac - target;
+                double r = step / Math.max(now - lastReport, 1);
+                rate = rate == 0 ? r : rate * 0.5 + r * 0.5;
+                ceiling = Math.min(1.0, frac + step);
+                target = frac;
+                lastReport = now;
+            }
+            if (!ticking) {
+                ticking = true;
+                lastTick = now;
+                ui.post(tick);
             }
         }
 
         void close() {
+            closed = true;
+            ui.removeCallbacks(tick);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             sheet.dismiss();
         }
     }
+
+    private long notifAt;
+    private int notifPct = -2;
+    private String notifText = "";
 
     void onProgress(String json) {
         try {
@@ -3142,8 +3459,17 @@ public class MainActivity extends Activity {
                 if (currentProgress != null) currentProgress.update(frac, file);
             });
             if (svcOn) {
-                OpService.progress(this, file.isEmpty() ? "Working..." : file,
-                        frac >= 0 ? (int) Math.round(frac * 100) : -1);
+                // the notification is rebuilt on every call: only send real changes, at most
+                // twice a second, so it can't slow the work down or flicker
+                final int pc = frac >= 0 ? (int) Math.round(frac * 100) : -1;
+                final String txt = file.isEmpty() ? "Working..." : file;
+                long now = android.os.SystemClock.uptimeMillis();
+                if ((pc != notifPct || !txt.equals(notifText)) && (now - notifAt >= 500 || pc >= 100)) {
+                    notifAt = now;
+                    notifPct = pc;
+                    notifText = txt;
+                    OpService.progress(this, txt, pc);
+                }
             }
         } catch (JSONException ignored) {
         }
@@ -3159,6 +3485,9 @@ public class MainActivity extends Activity {
         final Progress p = new Progress(this);
         final ProgressUi pu = new ProgressUi(heading, cancellable ? p : null);
         currentProgress = pu;
+        notifAt = 0;
+        notifPct = -2;
+        notifText = "";
         final boolean[] finished = {false};
         // only protect jobs that last: starting the service for a 50 ms job isn't worth it
         final Runnable startSvc = () -> {
@@ -3656,7 +3985,7 @@ public class MainActivity extends Activity {
     private void packDialog(final List<File> sources) {
         if (sources.isEmpty()) return;
         String base = sources.size() == 1 ? Fmt.stripExt(sources.get(0).getName())
-                : (cwd.equals(root) ? "archive" : cwd.getName());
+                : (isStorageRoot(cwd) ? "archive" : cwd.getName());
         final EditText name = Ui.field(this, "Name", false);
         name.setText(base + ".kln");
         final EditText where = Ui.field(this, "Save in", false);
@@ -3667,6 +3996,8 @@ public class MainActivity extends Activity {
         final CheckBox show = Ui.check(this, "Show passwords", false);
         final CheckBox store = Ui.check(this, "Don't compress (faster for photos, music, video)", false);
         final CheckBox each = Ui.check(this, "Separate archive for each file", false);
+        final CheckBox wipe = Ui.check(this, "Delete original files after packing",
+                Defaults.deleteAfterPack(this));
         final TextView note = Ui.label(this, "", 12, false, true);
         Button browse = Ui.button(this, "Browse", Ui.OUTLINE, v -> pickFolder(
                 new File(where.getText().toString()), picked -> where.setText(picked.getPath())));
@@ -3701,7 +4032,7 @@ public class MainActivity extends Activity {
                 : "Pack " + plural(sources.size(), "item", "items"));
         s.content(name).space(8).content(where).space(8).content(browse).space(8)
                 .content(enc).content(p1).space(8).content(p2).content(show)
-                .content(store).content(each).content(note)
+                .content(store).content(each).content(wipe).content(note)
                 .button("Cancel", Ui.TEXT, null)
                 .button("Create", Ui.FILLED, () -> {
                     String n = name.getText().toString().trim();
@@ -3729,11 +4060,12 @@ public class MainActivity extends Activity {
                     final File dest = new File(dir, n);
                     final boolean separate = each.isChecked();
                     final boolean noCompress = store.isChecked();
+                    final boolean wipeSrc = wipe.isChecked();
                     if (dest.exists()) {
                         confirm("Replace \"" + n + "\"?", "It already exists.", "Replace", Ui.DANGER,
-                                () -> runPack(sources, dest, encrypt, separate, noCompress, true, pw));
+                                () -> runPack(sources, dest, encrypt, separate, noCompress, true, pw, wipeSrc));
                     } else {
-                        runPack(sources, dest, encrypt, separate, noCompress, false, pw);
+                        runPack(sources, dest, encrypt, separate, noCompress, false, pw, wipeSrc);
                     }
                     return true;
                 }).show();
@@ -3741,13 +4073,14 @@ public class MainActivity extends Activity {
 
     private void runPack(final List<File> sources, final File dest, final boolean encrypt,
                          final boolean separate, final boolean noCompress,
-                         final boolean overwrite, final String pw) {
+                         final boolean overwrite, final String pw, final boolean wipeSrc) {
         runOp("Packing...", true, p -> call("pack", pathsJson(sources), dest.getPath(), encrypt,
-                separate, noCompress, overwrite, pw, p), r -> {
+                separate, noCompress, overwrite, pw, wipeSrc, p), r -> {
             if (r.optBoolean("ok")) {
                 sel.clear();
                 loadDir(cwd);
-                packResult(dest, r.optString("message"), encrypt, separate, noCompress);
+                packResult(dest, r.optString("message"), encrypt, separate, noCompress,
+                        wipeSrc ? r.optInt("deleted", 0) : -1, r.optInt("delete_failed", 0));
             } else if (r.optBoolean("cancelled")) {
                 toast("Cancelled");
             } else {
@@ -3757,7 +4090,8 @@ public class MainActivity extends Activity {
     }
 
     /** The result of Pack: a header, three number tiles, how much space it saved, and the details. */
-    private void packResult(File dest, String msg, boolean encrypt, boolean separate, boolean noCompress) {
+    private void packResult(File dest, String msg, boolean encrypt, boolean separate, boolean noCompress,
+                            int deleted, int deleteFailed) {
         int tone = Ui.accent(this);
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
@@ -3823,18 +4157,25 @@ public class MainActivity extends Activity {
             rows.add(new String[]{"Result", msg.isEmpty() ? "Done" : msg, "stack"});
         }
         rows.add(new String[]{"Location", dest.getPath(), "stack"});
-        rows.add(new String[]{"Layout", separate ? "One archive per file, random names" : "Single archive"});
+        rows.add(new String[]{"Layout", separate ? (encrypt ? "One archive per file, random names"
+            : "One archive per file") : "Single archive"});
         rows.add(new String[]{"Encryption", encrypt ? "AES-256-GCM" : "None"});
         if (noCompress) rows.add(new String[]{"Compression", "Stored only"});
+        if (deleted >= 0) {                              // -1: the option was off
+            rows.add(new String[]{"Originals", plural(deleted, "file deleted", "files deleted")
+                    + (deleteFailed > 0 ? ", " + deleteFailed + " couldn't be deleted" : "")});
+        }
         sh.content(detailCard(rows)).space(4).button("OK", Ui.FILLED, null).show();
     }
 
     /** One line of the folder chooser. */
     private static final class Pick {
-        static final int NEW = 0, UP = 1, DIR = 2, FILE = 3;
+        static final int NEW = 0, UP = 1, DIR = 2, FILE = 3, VOL = 4;
         final int type;
         final File f;
-        Pick(int type, File f) { this.type = type; this.f = f; }
+        final String label;
+        Pick(int type, File f) { this(type, f, null); }
+        Pick(int type, File f, String label) { this.type = type; this.f = f; this.label = label; }
     }
 
     /** Folder chooser: tap a folder to enter it, then "Select this folder". Files show dimmed. */
@@ -3899,6 +4240,10 @@ public class MainActivity extends Activity {
                         Thumbs.showIcon(icon, R.drawable.ic_folder, accent);
                         name.setText(e.f.getName());
                         break;
+                    case Pick.VOL:
+                        Thumbs.showIcon(icon, e.f.equals(root) ? R.drawable.ic_home : R.drawable.ic_usb, accent);
+                        name.setText(e.label);
+                        break;
                     default:
                         Thumbs.bind(icon, e.f, Thumbs.iconFor(e.f.getName()),
                                 Ui.text2(MainActivity.this), previewsOn);
@@ -3914,7 +4259,13 @@ public class MainActivity extends Activity {
             entries.clear();
             entries.add(new Pick(Pick.NEW, null));
             File parent = cur[0].getParentFile();
-            if (parent != null && !cur[0].equals(root)) entries.add(new Pick(Pick.UP, parent));
+            if (parent != null && !isStorageRoot(cur[0])) entries.add(new Pick(Pick.UP, parent));
+            if (isStorageRoot(cur[0])) {                       // the other storages sit beside this one
+                if (!cur[0].equals(root)) entries.add(new Pick(Pick.VOL, root, "Internal storage"));
+                for (File[] v : volumes()) {
+                    if (!v[0].equals(cur[0])) entries.add(new Pick(Pick.VOL, v[0], v[1].getName()));
+                }
+            }
             File[] kids = cur[0].listFiles();
             List<File> dirs = new ArrayList<>(), files = new ArrayList<>();
             if (kids != null) {

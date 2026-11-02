@@ -186,3 +186,17 @@ and custom/fallback scripts.
 - Shizuku runs as the `shell` user (or root if started with root): it reaches `Android/data` but not other
   apps' `/data/data`. Root reaches everything. Files made by root outside shared storage get the parent
   folder's owner and SELinux label.
+
+## 4.0.1
+
+- Every Root/Shizuku command now has a time limit (copies, moves and deletes excepted), so a stuck one shows an error instead of loading forever.
+- Device nodes, sockets and pipes (e.g. in `/dev`) are listed instead of hidden; they can't be opened.
+- No size count or search inside `/dev`, `/proc` and `/sys`.
+- The hardcoded Android/data bookmark is gone; "Root (/)" stays while Root or Shizuku is on.
+
+## 4.0.2
+
+- Protected folders are **read-only by default**: no Delete, Move, Rename, New, pasting into them, editing or saving back, extracting into them, or changing an archive opened from one. Browsing, searching, opening, and copying files *out* still work.
+- **Shizuku is always read-only.**
+- **Root:** Settings > Access > "Allow changes (dangerous)" turns these back on, after a warning. Off by default.
+- The same rule is enforced inside `Priv` itself, so a missed button can't change anything either.

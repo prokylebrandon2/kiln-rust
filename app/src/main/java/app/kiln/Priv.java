@@ -348,8 +348,31 @@ final class Priv {
         }
     }
 
-    /** Runs a shell script with elevated rights. Throws if no way in is switched on. */
-    static Res run(String script) throws IOException {
+    /** Runs a shell script with elevated rights, killed after 60 s. Throws if no way in is switched on. */
+    static Res run(String script) throws IOException { return run(script, 60); }
+
+    /**
+     * Same, with a time limit: a command that hangs (a device node, a stuck mount) is killed and
+     * reported instead of leaving Kiln loading forever. Falls back to no limit if the phone has no
+     * `timeout` command.
+     */
+    static Res run(String script, int seconds) throws IOException {
+        Res r = runRaw("timeout -s KILL " + seconds + " sh -c " + q(script));
+        if (r.code == 127 && r.err.contains("timeout")) return runRaw(script);   // no `timeout` here
+        if (r.code == 137 || r.code == 124) {
+            Res t = new Res();
+            t.code = 124;
+            t.err = "timed out after " + seconds + " s";
+            t.out = r.out;
+            return t;
+        }
+        return r;
+    }
+
+    /** For copies, moves and deletes: these can legitimately take long, so no time limit. */
+    static Res runLong(String script) throws IOException { return runRaw(script); }
+
+    private static Res runRaw(String script) throws IOException {
         try {
             switch (mode()) {
                 case ROOT:
@@ -400,6 +423,28 @@ final class Priv {
         return true;                                           // "/", /data, /system, /storage itself...
     }
 
+    static final String LOCKED = "Changing protected folders is turned off. "
+            + "(Only Root can turn it on: Settings > Access.)";
+
+    /** Delete, move, rename, create and write-back in protected folders: Root with the switch on. */
+    static boolean canModify() {
+        return app != null && mode() == ROOT && Defaults.privUnsafe(app);
+    }
+
+    /** True when `path` is protected and this way in may only look and copy out. */
+    static boolean readOnly(String path) {
+        return mode() != OFF && restricted(path) && !canModify();
+    }
+
+    private static boolean anyRestricted(String jsonPaths) {
+        try {
+            JSONArray a = new JSONArray(jsonPaths);
+            for (int i = 0; i < a.length(); i++) if (restricted(a.optString(i))) return true;
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     /** True when `path` needs the elevated route and it is ready. */
     static boolean wants(String path) { return active() && restricted(path); }
 
@@ -443,8 +488,9 @@ final class Priv {
         try {
             String cmd = "cd -- " + q(dir) + " || exit 2\n"
                     + "[ -f " + q("./" + indexName) + " ] && echo '#set'\n"
-                    + "stat -L -c '" + FMT + "' -- ./* ./.[!.]* ./..?* 2>/dev/null\n";
-            Res r = run(cmd);
+                    + "stat -c '" + FMT + "' -- ./* ./.[!.]* ./..?* 2>/dev/null\n";
+            Res r = run(cmd, 25);
+            if (r.code == 124 && r.out.isEmpty()) return err("Listing " + dir + " " + r.err + ".");
             if (r.out.isEmpty() && r.code == 2) return err("can't open " + dir + ": " + errOf(r));
             boolean isSet = false;
             List<JSONObject> dirs = new ArrayList<>(), files = new ArrayList<>();
@@ -467,6 +513,9 @@ final class Priv {
                     o.put("n", name).put("k", "file").put("s", size).put("m", mtime).put("e", false);
                     files.add(o);
                     if (sig != null && size >= minSize) candidates.add(name);
+                } else {                                   // device node, socket, pipe: shown, but not openable
+                    o.put("n", name).put("k", "file").put("s", 0).put("m", mtime).put("e", false);
+                    files.add(o);
                 }
             }
             if (!candidates.isEmpty() && candidates.size() <= 80) sniff(dir, files, candidates, sig, builtin, encMask);
@@ -501,7 +550,7 @@ final class Priv {
                 b.append("printf '%s\\t' ").append(q(n)).append("; head -c ").append(want).append(" -- ")
                         .append(q("./" + n)).append(" | od -An -tx1 | tr -d ' \\n'; echo\n");
             }
-            Res r = run(b.toString());
+            Res r = run(b.toString(), 15);
             StringBuilder want0 = new StringBuilder();
             for (byte x : sig) want0.append(String.format("%02x", x & 0xff));
             String sigHex = want0.toString();
@@ -576,8 +625,9 @@ final class Priv {
             }
             if (terms == 0) return new JSONObject().put("ok", true).put("path", base)
                     .put("items", new JSONArray()).put("truncated", false);
-            String cmd = "find " + q(base) + " -mindepth 1" + f + " -exec stat -L -c '" + FMT + "' {} + 2>/dev/null | head -n 1001\n";
-            Res r = run(cmd);
+            String cmd = "find " + q(base) + " -mindepth 1 \\( -path /proc -o -path /sys -o -path /dev \\) -prune -o"
+                    + " \\(" + f + " -exec stat -c '" + FMT + "' {} + \\) 2>/dev/null | head -n 1001\n";
+            Res r = run(cmd, 40);
             String prefix = base.endsWith("/") ? base : base + "/";
             JSONArray arr = new JSONArray();
             boolean truncated = false;
@@ -608,13 +658,20 @@ final class Priv {
 
     /** Total size in bytes of a folder or file (du); -1 if unknown. */
     static long du(String path) {
+        if (virtual(path)) return -1;                          // /dev, /proc, /sys: nothing real to add up
         try {
-            Res r = run("du -sk -- " + q(path) + " 2>/dev/null");
+            Res r = run("du -sk -- " + q(path) + " 2>/dev/null", 20);
             String[] t = r.out.trim().split("\\s+");
             return t.length > 0 ? parse(t[0]) * 1024 : -1;
         } catch (Exception e) {
             return -1;
         }
+    }
+
+    /** Folders that aren't real storage: counting or searching them is slow or never ends. */
+    static boolean virtual(String p) {
+        return p.equals("/dev") || p.startsWith("/dev/") || p.equals("/proc") || p.startsWith("/proc/")
+                || p.equals("/sys") || p.startsWith("/sys/");
     }
 
     static boolean exists(String path) {
@@ -640,6 +697,7 @@ final class Priv {
     }
 
     static String mkdirs(String path) {
+        if (!canModify()) return LOCKED;
         try {
             if (exists(path)) return "That name is taken";
             Res r = run("mkdir -p -- " + q(path) + "\n" + ownFix(path));
@@ -650,6 +708,7 @@ final class Priv {
     }
 
     static String createFile(String path) {
+        if (!canModify()) return LOCKED;
         try {
             if (exists(path)) return "That name is taken";
             Res r = run(": > " + q(path) + "\n" + ownFix(path));
@@ -660,6 +719,7 @@ final class Priv {
     }
 
     static String rename(String from, String to) {
+        if (!canModify()) return LOCKED;
         try {
             if (exists(to)) return "That name is taken";
             Res r = run("mv -- " + q(from) + " " + q(to));
@@ -694,6 +754,7 @@ final class Priv {
 
     /** Checks a copy or move first, like the Python fs_plan. */
     static JSONObject plan(String srcsJson, String dest, boolean move) {
+        if (!canModify() && (restricted(dest) || (move && anyRestricted(srcsJson)))) return err(LOCKED);
         try {
             JSONArray a = new JSONArray(srcsJson);
             Set<String> have = names(dest);
@@ -728,6 +789,7 @@ final class Priv {
 
     /** Copies or moves with shell cp / mv. policy: replace, skip or keep. */
     static JSONObject transfer(String srcsJson, String dest, boolean move, String policy) {
+        if (!canModify() && (restricted(dest) || (move && anyRestricted(srcsJson)))) return result(false, LOCKED, 0, 0);
         try {
             JSONArray a = new JSONArray(srcsJson);
             Set<String> have = names(dest);
@@ -761,7 +823,7 @@ final class Priv {
             }
             if (todo == 0) return result(true, skipped > 0 ? "Skipped " + skipped + " item(s)" : "Nothing to do", 0, skipped);
             for (String t : targets) b.append(ownFix(t));
-            Res r = run(b.toString());
+            Res r = runLong(b.toString());
             List<String> failed = new ArrayList<>();
             for (String l : r.err.split("\n")) {
                 if (l.startsWith("FAIL\t")) failed.add(l.substring(5));
@@ -780,11 +842,12 @@ final class Priv {
     }
 
     static JSONObject delete(String pathsJson) {
+        if (!canModify()) return result(false, LOCKED, 0, 0);
         try {
             JSONArray a = new JSONArray(pathsJson);
             StringBuilder b = new StringBuilder("rm -rf --");
             for (int i = 0; i < a.length(); i++) b.append(' ').append(q(a.getString(i)));
-            Res r = run(b.toString());
+            Res r = runLong(b.toString());
             int left = 0;
             for (int i = 0; i < a.length(); i++) if (exists(a.getString(i))) left++;
             if (left > 0) return result(false, left + " item(s) couldn't be deleted:\n" + errOf(r), a.length() - left, 0);
@@ -808,7 +871,10 @@ final class Priv {
 
     /** Copies a protected file into Kiln's cache and returns the copy (reused while the file is unchanged). */
     static File stage(String path) throws IOException {
-        Res st = run("stat -L -c '%s" + TAB + "%Y' -- " + q(path));
+        Res kind = run("stat -L -c '%F' -- " + q(path), 15);
+        if (kind.code != 0) throw new IOException(errOf(kind));
+        if (!kind.out.trim().startsWith("regular")) throw new IOException("This isn't a regular file (" + kind.out.trim() + "), so it can't be opened.");
+        Res st = run("stat -L -c '%s" + TAB + "%Y' -- " + q(path), 15);
         if (st.code != 0) throw new IOException(errOf(st));
         String sig = st.out.trim();
         File dir = new File(stageRoot(), hash(path));
@@ -821,7 +887,7 @@ final class Priv {
             return dst;
         }
         dst.delete();
-        Res r = run("cp -f -- " + q(path) + " " + q(dst.getPath()) + " && chmod 666 " + q(dst.getPath()));
+        Res r = runLong("cp -f -- " + q(path) + " " + q(dst.getPath()) + " && chmod 666 " + q(dst.getPath()));
         if (r.code != 0 || !dst.isFile()) throw new IOException(errOf(r));
         try (java.io.FileOutputStream o = new java.io.FileOutputStream(meta)) {
             o.write(sig.getBytes("UTF-8"));
@@ -835,7 +901,8 @@ final class Priv {
 
     /** Writes a staged copy back over the original, keeping the original's owner and permissions. */
     static void push(File staged, String origin) throws IOException {
-        Res r = run("if [ -e " + q(origin) + " ]; then cat " + q(staged.getPath()) + " > " + q(origin)
+        if (!canModify()) throw new IOException(LOCKED);
+        Res r = runLong("if [ -e " + q(origin) + " ]; then cat " + q(staged.getPath()) + " > " + q(origin)
                 + "; else cp -f -- " + q(staged.getPath()) + " " + q(origin) + "; " + ownFix(origin).replace("\n", "; ")
                 + " true; fi");
         if (r.code != 0) throw new IOException(errOf(r));
@@ -858,8 +925,9 @@ final class Priv {
 
     /** Copies everything in a cache folder into a protected folder. Returns an error text or null. */
     static String pushInto(File tmp, String dest, boolean overwrite) {
+        if (!canModify()) return LOCKED;
         try {
-            Res r = run("mkdir -p -- " + q(dest) + " && cp -a" + (overwrite ? "" : "n") + " " + q(tmp.getPath() + "/.")
+            Res r = runLong("mkdir -p -- " + q(dest) + " && cp -a" + (overwrite ? "" : "n") + " " + q(tmp.getPath() + "/.")
                     + " " + q(dest + "/") + "\n" + ownFix(dest));
             return r.code == 0 ? null : errOf(r);
         } catch (Exception e) {
@@ -885,7 +953,7 @@ final class Priv {
     // ---- files handed to another app for editing: written back when Kiln comes to the front
 
     static void watch(String stagedPath) {
-        if (!origins.containsKey(stagedPath)) return;
+        if (!origins.containsKey(stagedPath) || !canModify()) return;
         File f = new File(stagedPath);
         watched.put(stagedPath, f.length() + "|" + f.lastModified());
     }
@@ -910,4 +978,7 @@ final class Priv {
     }
 
     static boolean hasWatched() { return !watched.isEmpty(); }
+
+    /** A cache copy of a protected file that may not be written back. */
+    static boolean lockedCopy(String path) { return origins.containsKey(path) && !canModify(); }
 }

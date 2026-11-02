@@ -1058,7 +1058,9 @@ public class MainActivity extends Activity {
                 arcPasteBar(accent);
             } else {
                 if (arc.dirty) bottomBar.addView(saveRow());
-                if (selecting) {
+                if (selecting && lockedArc()) {
+                    tiles(tile(R.drawable.ic_extract, "Extract", accent, this::extractSelected));
+                } else if (selecting) {
                     tiles(tile(R.drawable.ic_extract, "Extract", accent, this::extractSelected),
                             tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> arcSetClip(false)),
                             tile(R.drawable.ic_move, "Move", Ui.text(this), () -> arcSetClip(true)),
@@ -1066,11 +1068,13 @@ public class MainActivity extends Activity {
                 } else {
                     tiles(tile(R.drawable.ic_extract, "Extract all", accent,
                                     () -> extractDialog(new ArrayList<String>())),
-                            tile(R.drawable.ic_add, "Add", accent, this::arcNewSheet),
+                            lockedArc() ? new View(this) : tile(R.drawable.ic_add, "Add", accent, this::arcNewSheet),
                             tile(R.drawable.ic_check, "Check", Ui.text(this), this::runTest),
                             tile(R.drawable.ic_archive, "Info", Ui.text(this), this::infoDialog));
                 }
             }
+        } else if (selecting && Priv.readOnly(cwd.getPath())) {          // look and copy out only
+            tiles(tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> setClip(false)));
         } else if (selecting) {
             tiles(tile(R.drawable.ic_copy, "Copy", Ui.text(this), () -> setClip(false)),
                     tile(R.drawable.ic_move, "Move", Ui.text(this), () -> setClip(true)),
@@ -1088,9 +1092,11 @@ public class MainActivity extends Activity {
             LinearLayout row = new LinearLayout(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(2), dp(4), dp(4), dp(2));
-            View nf = tile(R.drawable.ic_new_folder, "New folder", accent, this::newFolderHere);
-            row.addView(nf, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            if (!Priv.readOnly(cwd.getPath())) {
+                View nf = tile(R.drawable.ic_new_folder, "New folder", accent, this::newFolderHere);
+                row.addView(nf, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
             row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
             row.addView(Ui.button(this, "Cancel", Ui.TEXT, v -> {
                 clip.clear();
@@ -1107,7 +1113,7 @@ public class MainActivity extends Activity {
         }
         showBar(show);
         fabWanted = arc == null && pickArc == null && arcClip.isEmpty() && !selecting && clip.isEmpty()
-                && app != null && hasStorage() && !searching;
+                && app != null && hasStorage() && !searching && !Priv.readOnly(cwd.getPath());
         showFab(fabWanted && !fabScrollHidden);
     }
 
@@ -1229,7 +1235,7 @@ public class MainActivity extends Activity {
         boolean selecting = !sel.isEmpty();
         if (arc != null) {
             if (selecting) {
-                if (sel.size() == 1) { l.add("Rename"); id.add(M_RENAME); }
+                if (sel.size() == 1 && !lockedArc()) { l.add("Rename"); id.add(M_RENAME); }
                 l.add("Properties"); id.add(M_PROPS);
                 l.add("Select all"); id.add(M_SELECT_ALL);
                 l.add("Clear selection"); id.add(M_CLEAR);
@@ -1247,7 +1253,7 @@ public class MainActivity extends Activity {
         } else if (selecting) {
             l.add("Select all"); id.add(M_SELECT_ALL);
             l.add("Properties"); id.add(M_PROPS);
-            if (sel.size() == 1 && !sel.iterator().next().contains("/")) { l.add("Rename"); id.add(M_RENAME); }
+            if (sel.size() == 1 && !sel.iterator().next().contains("/") && !Priv.readOnly(cwd.getPath())) { l.add("Rename"); id.add(M_RENAME); }
             if (sel.size() == 1 && selectedDir() != null) { l.add("Change icon..."); id.add(M_ICON); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
@@ -1705,8 +1711,6 @@ public class MainActivity extends Activity {
         }
         if (Priv.mode(this) != Priv.OFF) {                    // beyond what Android lets an app open
             card.addView(markRow(R.drawable.ic_d_phone, "Root (/)", "/", false, null));
-            card.addView(markRow(R.drawable.ic_d_android, "Android/data",
-                    new File(root, "Android/data").getPath(), false, null));
         }
         for (String bp : saved) {
             File f = new File(bp);
@@ -2651,18 +2655,19 @@ public class MainActivity extends Activity {
             s.option(R.drawable.ic_image, "View in Kiln", false, () -> showImage(f, false));
         } else if (kind == 1 && small) {
             s.option(R.drawable.ic_open, "View in Kiln", false, () -> openText(f, false));
-            s.option(R.drawable.ic_edit, "Edit in Kiln", false, () -> openText(f, true));
+            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit in Kiln", false, () -> openText(f, true));
         } else if (kind == 0 && small) {
             s.option(R.drawable.ic_open, "View as text in Kiln", false, () -> openText(f, false));
-            s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, () -> openText(f, true));
+            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, () -> openText(f, true));
         }
         s.divider();
         s.option(R.drawable.ic_open, "Open with...", false, () -> appChooser(f, false));
-        s.option(R.drawable.ic_edit, "Edit with...", false, () -> appChooser(f, true));
+        if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit with...", false, () -> appChooser(f, true));
         s.button("Cancel", Ui.TEXT, null).show();
     }
 
     private void openText(File f, boolean edit) {
+        if (edit && Priv.lockedCopy(f.getPath())) edit = false;      // protected files are view-only
         needRefresh = edit;
         Intent i = new Intent(this, TextActivity.class);
         i.putExtra("path", f.getPath());
@@ -2679,6 +2684,7 @@ public class MainActivity extends Activity {
     }
 
     private Intent viewIntent(File f, boolean edit) {
+        if (edit && Priv.lockedCopy(f.getPath())) edit = false;
         Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", f);
         if (edit) Priv.watch(f.getPath());                     // a staged copy: written back when we return
         Intent i = new Intent(edit ? Intent.ACTION_EDIT : Intent.ACTION_VIEW);
@@ -2888,6 +2894,11 @@ public class MainActivity extends Activity {
         buildArcRows();
         list.setSelectionFromTop(0, 0);
         if (after != null) after.run();
+    }
+
+    /** An archive opened from a protected folder, with changing turned off: no add, move, delete or rename. */
+    private boolean lockedArc() {
+        return arc != null && Priv.lockedCopy(arc.file.getPath());
     }
 
     private File incomingFile, incomingHome;
@@ -3726,6 +3737,10 @@ public class MainActivity extends Activity {
     }
 
     private void paste() {
+        if (Priv.readOnly(cwd.getPath())) {
+            message("Can't paste here", Priv.LOCKED);
+            return;
+        }
         final List<File> srcs = new ArrayList<>(clip);
         final boolean mv = clipMove;
         final File dest = cwd;
@@ -3998,6 +4013,10 @@ public class MainActivity extends Activity {
     }
 
     private void runExtract(final List<String> keys, final String dest, final boolean overwrite) {
+        if (Priv.readOnly(dest)) {
+            message("Can't extract here", Priv.LOCKED);
+            return;
+        }
         final Arc a = arc;
         final int total = countFor(keys);
         runOp("Extracting...", true,

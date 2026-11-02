@@ -208,6 +208,33 @@ public class SettingsActivity extends Activity {
             LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             bp.bottomMargin = Ui.dp(this, 6);
+            if (Defaults.privMode(this) == Priv.ROOT) {
+                toggle(ac, "Allow changes (dangerous)",
+                        "Delete, move, rename, create and edit in protected folders. A mistake here can "
+                                + "break apps or stop the phone from starting.",
+                        Defaults.privUnsafe(this), (b, on) -> {
+                            if (!on) {
+                                Defaults.setPrivUnsafe(this, false);
+                                return;
+                            }
+                            b.setChecked(false);                       // only turned on if they confirm
+                            new Sheet(this, "Allow changes?")
+                                    .text("With this on, Kiln can delete, move and overwrite system and app files "
+                                            + "as root. Deleting the wrong file can brick your phone, and there is "
+                                            + "no undo or recycle bin. Only continue if you know what you are doing.")
+                                    .button("Cancel", Ui.TEXT, null)
+                                    .button("I understand, turn on", Ui.DANGER, () -> {
+                                        Defaults.setPrivUnsafe(this, true);
+                                        render();
+                                        return true;
+                                    }).show();
+                        });
+            } else {
+                TextView ro = Ui.label(this, "Protected folders are read-only with Shizuku: you can browse, "
+                        + "open and copy files out, but not change them.", 12, false, true);
+                ro.setPadding(0, 0, 0, Ui.dp(this, 8));
+                ac.addView(ro);
+            }
             ac.addView(Ui.button(this, Defaults.privMode(this) == Priv.ROOT ? "Check root access"
                     : "Check / grant Shizuku", Ui.OUTLINE, v -> checkAccess()), bp);
         }

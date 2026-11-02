@@ -1587,6 +1587,17 @@ public class MainActivity extends Activity {
                 app = py.getModule("kiln_app");
                 edit = py.getModule("kiln_edit");
                 app.callAttr("set_jobs", Defaults.jobs(MainActivity.this));
+                try {
+                    JSONObject sp = new JSONObject(app.callAttr("scan_params").toString());
+                    byte[] sg = hexBytes(sp.getString("sig"));
+                    sniffMin = sp.getInt("min");
+                    sniffEnc = sp.getInt("enc");
+                    sniffBuiltin = sp.getBoolean("builtin");
+                    sniffIndex = sp.getString("index");
+                    sniffSig = sg;                                   // last: it switches the fast scan on
+                } catch (Throwable ignored) {
+                    sniffSig = null;                                 // keep using the Python scan
+                }
                 ui.post(() -> {
                     if (!note.isEmpty()) Toast.makeText(MainActivity.this, note, Toast.LENGTH_LONG).show();
                     refreshPermission();
@@ -1684,7 +1695,15 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             JSONObject r;
             try {
-                r = call("scan", path, all, hidden);
+                r = null;
+                if (sniffSig != null) {
+                    try {
+                        r = scanFast(path, all, hidden);
+                    } catch (Throwable ignored) {
+                        r = null;                                    // fall back to the Python scan
+                    }
+                }
+                if (r == null) r = call("scan", path, all, hidden);
             } catch (Exception e) {
                 r = errObj(String.valueOf(e.getMessage()));
             }
@@ -1744,7 +1763,7 @@ public class MainActivity extends Activity {
         StringBuilder b = new StringBuilder(its.size() * 40).append(set).append('\n');
         for (Item it : its) {
             b.append(it.name).append('|').append(it.kind).append('|').append(it.size).append('|')
-                    .append(it.mtime).append('|').append(it.count).append('|').append(it.enc).append('\n');
+                    .append(it.mtime).append('|').append(it.enc).append('\n');   // counts arrive separately
         }
         return b.toString();
     }
@@ -1753,6 +1772,179 @@ public class MainActivity extends Activity {
         if (arc != null) return "This folder is empty.";
         return showAll ? "This folder is empty."
                 : "No Kiln archives here.\nOpen the menu to show all files.";
+    }
+
+    // ---- fast folder scan (Java): list, tell archives from other files, count folder items later
+
+    private volatile byte[] sniffSig;                         // null until Python says what to look for
+    private int sniffMin = 25, sniffEnc = 1;
+    private boolean sniffBuiltin = true;
+    private String sniffIndex = "_index.kln";
+    private static final java.util.concurrent.ExecutorService POOL =
+            java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+                Thread t = new Thread(r, "kiln-scan");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private static byte[] hexBytes(String h) {
+        byte[] b = new byte[h.length() / 2];
+        for (int i = 0; i < b.length; i++) b[i] = (byte) Integer.parseInt(h.substring(2 * i, 2 * i + 2), 16);
+        return b;
+    }
+
+    /** One entry as the same JSON the Python scan returns, or null to leave it out. Folder counts are -1 (filled in later). */
+    private JSONObject scanEntry(String dir, String name, boolean all) {
+        try {
+            String full = dir.endsWith("/") ? dir + name : dir + "/" + name;
+            android.system.StructStat st = android.system.Os.stat(full);
+            long mtime = st.st_mtime;
+            JSONObject o = new JSONObject();
+            if (android.system.OsConstants.S_ISDIR(st.st_mode)) {
+                boolean isSet = new File(full, sniffIndex).isFile();
+                o.put("n", name).put("k", isSet ? "set" : "dir").put("s", 0).put("m", mtime).put("c", -1);
+                return o;
+            }
+            if (!android.system.OsConstants.S_ISREG(st.st_mode)) return null;
+            String kind = "file";
+            boolean enc = false;
+            byte[] sig = sniffSig;
+            long size = st.st_size;
+            if (size >= sniffMin) {
+                byte[] head = new byte[Math.max(5, sig.length + 1)];
+                int n = 0;
+                java.io.FileDescriptor fd = null;
+                try {
+                    fd = android.system.Os.open(full, android.system.OsConstants.O_RDONLY, 0);
+                    n = android.system.Os.read(fd, head, 0, head.length);
+                } catch (Exception ignored) {
+                    n = 0;
+                } finally {
+                    if (fd != null) {
+                        try { android.system.Os.close(fd); } catch (Exception ignored) { }
+                    }
+                }
+                if (n >= sig.length && startsWith(head, sig)) {
+                    if (sniffBuiltin) {
+                        if (n >= 5) { kind = "archive"; enc = (head[4] & sniffEnc) != 0; }
+                    } else {
+                        kind = "archive";
+                    }
+                } else if (n >= 4 && head[0] == 'K' && head[1] == 'L' && head[2] == 'N'
+                        && (head[3] == '9' || head[3] == '2')) {
+                    kind = "old";
+                }
+            }
+            if (kind.equals("file") && !all) return null;
+            o.put("n", name).put("k", kind).put("s", size).put("m", mtime).put("e", enc);
+            return o;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean startsWith(byte[] a, byte[] p) {
+        if (a.length < p.length) return false;
+        for (int i = 0; i < p.length; i++) if (a[i] != p[i]) return false;
+        return true;
+    }
+
+    /** Lists a folder natively. Returns null when it can't (the Python scan then reports why). */
+    private JSONObject scanFast(final String path, final boolean all, boolean hidden) throws Exception {
+        String[] names = new File(path).list();
+        if (names == null) return null;
+        final List<String> keep = new ArrayList<>(names.length);
+        for (String n : names) {
+            if (hidden || !n.startsWith(".")) keep.add(n);       // hidden entries cost nothing
+        }
+        final JSONObject[] got = new JSONObject[keep.size()];
+        if (keep.size() >= 64) {                                   // storage waits: read several at once
+            List<java.util.concurrent.Callable<Void>> jobs = new ArrayList<>();
+            int chunk = (keep.size() + 3) / 4;
+            for (int s0 = 0; s0 < keep.size(); s0 += chunk) {
+                final int from = s0, to = Math.min(keep.size(), s0 + chunk);
+                jobs.add(() -> {
+                    for (int i = from; i < to; i++) got[i] = scanEntry(path, keep.get(i), all);
+                    return null;
+                });
+            }
+            for (java.util.concurrent.Future<Void> f : POOL.invokeAll(jobs)) f.get();
+        } else {
+            for (int i = 0; i < got.length; i++) got[i] = scanEntry(path, keep.get(i), all);
+        }
+        List<JSONObject> items = new ArrayList<>(got.length);
+        for (JSONObject o : got) if (o != null) items.add(o);
+        Collections.sort(items, (x, y) -> {
+            boolean fx = !x.optString("k").equals("archive") && !x.optString("k").equals("old")
+                    && !x.optString("k").equals("file");
+            boolean fy = !y.optString("k").equals("archive") && !y.optString("k").equals("old")
+                    && !y.optString("k").equals("file");
+            if (fx != fy) return fx ? -1 : 1;
+            return x.optString("n").compareToIgnoreCase(y.optString("n"));
+        });
+        JSONArray arr = new JSONArray();
+        for (JSONObject o : items) arr.put(o);
+        JSONObject r = new JSONObject();
+        r.put("ok", true).put("path", path).put("items", arr)
+                .put("is_set", new File(path, sniffIndex).isFile());
+        return r;
+    }
+
+    private final Map<String, Integer> countCache = new HashMap<>();     // "folder/sub" -> items in it
+
+    private void giveCount(Item it, Row row, int c) {
+        it.count = c;
+        row.size = Math.max(c, 0);
+        row.right = c < 0 ? "" : plural(c, "item", "items");
+    }
+
+    /** Folder item counts take a listing of each subfolder, so they arrive after the list is shown. */
+    private void loadCounts(final String path, final int gen, boolean force) {
+        final List<String> need = new ArrayList<>();
+        for (Item it : items) {
+            if (it.kind.equals("dir") && (force || it.count < 0)) need.add(it.name);
+        }
+        if (need.isEmpty()) return;
+        new Thread(() -> {
+            final Map<String, Integer> got = new HashMap<>();
+            List<java.util.concurrent.Callable<Void>> jobs = new ArrayList<>();
+            final java.util.concurrent.ConcurrentHashMap<String, Integer> out = new java.util.concurrent.ConcurrentHashMap<>();
+            int chunk = Math.max(16, (need.size() + 3) / 4);
+            for (int s0 = 0; s0 < need.size(); s0 += chunk) {
+                final int from = s0, to = Math.min(need.size(), s0 + chunk);
+                jobs.add(() -> {
+                    for (int i = from; i < to; i++) {
+                        String[] l = new File(path, need.get(i)).list();
+                        out.put(need.get(i), l == null ? 0 : l.length);
+                    }
+                    return null;
+                });
+            }
+            try {
+                for (java.util.concurrent.Future<Void> f : POOL.invokeAll(jobs)) f.get();
+            } catch (Exception e) {
+                return;
+            }
+            got.putAll(out);
+            ui.post(() -> {
+                if (gen != loadGen || arc != null || searching || !cwd.getPath().equals(path)) return;
+                boolean changed = false;
+                for (Row r : rows) {
+                    if (r.item == null || !r.item.kind.equals("dir")) continue;
+                    Integer c = got.get(r.item.name);
+                    if (c == null) continue;
+                    countCache.put(path + "/" + r.item.name, c);
+                    if (r.item.count != c) {
+                        giveCount(r.item, r, c);
+                        changed = true;
+                    }
+                }
+                if (countCache.size() > 20000) countCache.clear();
+                if (!changed) return;
+                if (sortKey == S_SIZE) sortRows();
+                adapter.notifyDataSetChanged();
+            });
+        }).start();
     }
 
     private void applyScan(JSONObject r) {
@@ -1770,6 +1962,13 @@ public class MainActivity extends Activity {
         List<Row> nr = new ArrayList<>();
         List<Item> ni = new ArrayList<>();
         parseItems(r, nr, ni);
+        for (int i = 0; i < ni.size() && i < nr.size(); i++) {      // counts seen before show at once
+            Item it = ni.get(i);
+            if (it.kind.equals("dir") && it.count < 0) {
+                Integer known = countCache.get(cwd.getPath() + "/" + it.name);
+                giveCount(it, nr.get(i), known == null ? -1 : known);
+            }
+        }
         String sig = sigOf(ni, isSet);
         boolean newDir = !cwd.getPath().equals(lastDir);
         lastDir = cwd.getPath();
@@ -1787,7 +1986,10 @@ public class MainActivity extends Activity {
         sn.items = new ArrayList<>(ni);
         sn.plainSet = isSet;
         sn.sig = sig;
-        if (same) return;                                      // nothing changed: the list isn't touched
+        if (same) {
+            loadCounts(cwd.getPath(), loadGen, false);
+            return;                                            // nothing changed: the list isn't touched
+        }
         plainSet = isSet;
         rows.clear();
         rows.addAll(nr);
@@ -1804,6 +2006,7 @@ public class MainActivity extends Activity {
         if (newDir) list.setSelectionFromTop(0, 0);            // a new folder always starts at the top
         redraw();
         if (replay) playRows();
+        loadCounts(cwd.getPath(), loadGen, replay);
     }
 
     /** Turns scan or search output into rows. Names from a search are paths below the folder. */
@@ -1832,10 +2035,10 @@ public class MainActivity extends Activity {
             switch (it.kind) {
                 case "dir":
                     row.folder = true;
-                    row.size = it.count;
+                    row.size = Math.max(it.count, 0);
                     row.icon = R.drawable.ic_folder;
                     row.sub = when;
-                    row.right = plural(it.count, "item", "items");
+                    row.right = it.count < 0 ? "" : plural(it.count, "item", "items");
                     break;
                 case "set":
                     row.folder = true;

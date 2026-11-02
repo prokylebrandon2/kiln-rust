@@ -105,3 +105,8 @@ and custom/fallback scripts.
 - The fallback script feature is removed. Any fallback script saved by an earlier version is deleted at start-up. Custom main scripts still work, with their signature.
 - Back in a folder now scrolls once and slides all visible rows in (the second scroll made lower rows skip the animation).
 - Check (inside an archive) shows a result card: verdict, files, data and time tiles, and details.
+
+## 3.16
+
+- Folder listing now runs in Java: entries are read and checked for the archive signature natively, several at a time in big folders (64+ entries). If anything goes wrong it falls back to the Python scan.
+- Folder item counts ("12 items") load right after the list appears instead of delaying it. Counts seen before show immediately.

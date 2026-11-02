@@ -71,6 +71,13 @@ def _sniff(path, size):
     return None
 
 
+def scan_params():
+    """What the Java side needs to recognise archives itself (it lists folders natively, which is
+    faster than a round trip through Python for every folder)."""
+    return _j(sig=main_sig.hex(), min=_main_min(), builtin=main_sig == _MAGIC,
+              enc=kiln.FLAG_ENCRYPTED, index=kiln.INDEX_NAME)
+
+
 def _entry(e, show_all, show_hidden):
     """One folder entry -> its row for the file manager, or None to leave it out."""
     try:

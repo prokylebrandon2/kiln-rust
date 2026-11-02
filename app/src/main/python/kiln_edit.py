@@ -60,9 +60,24 @@ def _guard(fn):
 
 # ------------------------------------------------------------------ session
 
+def _sweep_stale():
+    """Remove scratch folders left by sessions that were never closed (the app was killed)."""
+    live = {x.tmp for x in _sessions.values()}
+    base = tempfile.gettempdir()
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(base, n)
+        if n.startswith("kiln-edit-") and p not in live:
+            shutil.rmtree(p, ignore_errors=True)
+
+
 @_guard
 def begin(path, password):
     """Start a staged-edit session. -> {ok, sid, entries, dirty, encrypted, is_set}"""
+    _sweep_stale()
     sh = kiln.Shell()
     sh.jobs = bridge.JOBS             # 1 unless changed in Settings
     code, _ = bridge.call(lambda: sh.load(path, password or None), _Quiet())
@@ -276,27 +291,95 @@ def new_text(sid, member):
     return set_file(sid, _norm(member), empty)
 
 
+def _copy_to(src, dst, progress):
+    """Copy a (possibly large) file, checking for Cancel; a partial copy is deleted."""
+    total = os.path.getsize(src)
+    done, last = 0, 0.0
+    try:
+        with open(src, "rb") as fi, open(dst, "wb") as fo:
+            while True:
+                if progress is not None and progress.cancelled():
+                    raise bridge.Cancelled()
+                buf = fi.read(1 << 20)
+                if not buf:
+                    break
+                fo.write(buf)
+                done += len(buf)
+                now = time.time()
+                if progress is not None and now - last > 0.1:
+                    last = now
+                    progress.event(_j(frac=done / total if total else -1, file=os.path.basename(dst)))
+        try:
+            shutil.copystat(src, dst)
+        except OSError:
+            pass
+    except BaseException:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        raise
+
+
 @_guard
-def file_for(sid, member, cache_dir):
-    """A private copy of `member`'s current bytes in cache_dir, for viewing/editing."""
+def file_for(sid, member, cache_dir, progress=None, readonly=False):
+    """A private copy of `member`'s current bytes in cache_dir, for viewing/editing.
+
+    readonly=True (viewing): an unchanged file is taken from the shared preview cache, so opening
+    it again doesn't extract it again. readonly=False (editing) always gets its own copy."""
     s = _get(sid)
     e = next((x for x in s.sh.entries if x["rel"] == member), None)
     if e is None:
         raise kiln.KilnError("that file is no longer in the archive")
+    name = member.rsplit("/", 1)[-1]
+    if not e.get("full"):
+        old = s.sh.old_table[e["old"]]["rel"]
+        if readonly:
+            return app.preview(s.sh.path, s.pw, old, cache_dir, e.get("size", 0), progress)
+    elif readonly:                       # a staged file: look at it where it is, no second copy
+        key = app.cache_key(s.sh.path, member) + "-" + str(os.stat(e["full"]).st_mtime_ns)
+        d = os.path.join(cache_dir, key[:40])
+        out = os.path.join(d, name)
+        if os.path.isfile(out):
+            return _j(ok=True, file=out, cached=True)
+        os.makedirs(d, exist_ok=True)
+        try:
+            try:
+                os.link(e["full"], out)
+            except OSError:
+                _copy_to(e["full"], out, progress)
+        except bridge.Cancelled:
+            shutil.rmtree(d, ignore_errors=True)
+            return _j(ok=False, cancelled=True, message="Cancelled")
+        except BaseException:
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+        return _j(ok=True, file=out)
     d = os.path.join(cache_dir, uuid.uuid4().hex)
     os.makedirs(d, exist_ok=True)
-    out = os.path.join(d, member.rsplit("/", 1)[-1])
-    if e.get("full"):
-        shutil.copyfile(e["full"], out)
+    out = os.path.join(d, name)
+    try:
+        if e.get("full"):
+            _copy_to(e["full"], out, progress)
+            return _j(ok=True, file=out)
+        old = s.sh.old_table[e["old"]]["rel"]
+        res = json.loads(app.extract(s.sh.path, s.pw, json.dumps([{"p": old, "dir": False}]),
+                                     d + "/x", True, 1, progress))
+        if res.get("cancelled"):
+            shutil.rmtree(d, ignore_errors=True)
+            return _j(ok=False, cancelled=True, message="Cancelled")
+        if not res.get("ok"):
+            shutil.rmtree(d, ignore_errors=True)
+            return _j(ok=False, message=res.get("message") or "couldn't read the file")
+        shutil.move(os.path.join(d, "x", *old.split("/")), out)
+        shutil.rmtree(os.path.join(d, "x"), ignore_errors=True)
         return _j(ok=True, file=out)
-    old = s.sh.old_table[e["old"]]["rel"]
-    res = json.loads(app.extract(s.sh.path, s.pw, json.dumps([{"p": old, "dir": False}]),
-                                 d + "/x", True, 1, None))
-    if not res.get("ok"):
-        return _j(ok=False, message=res.get("message") or "couldn't read the file")
-    shutil.move(os.path.join(d, "x", *old.split("/")), out)
-    shutil.rmtree(os.path.join(d, "x"), ignore_errors=True)
-    return _j(ok=True, file=out)
+    except bridge.Cancelled:
+        shutil.rmtree(d, ignore_errors=True)
+        return _j(ok=False, cancelled=True, message="Cancelled")
+    except BaseException:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
 
 
 @_guard

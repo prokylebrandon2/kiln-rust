@@ -204,8 +204,8 @@ public class MainActivity extends Activity {
         sortAsc = prefs.getBoolean("sort_asc", true);
         showAll = prefs.getBoolean("show_all", true);
         showHidden = prefs.getBoolean("show_hidden", false);
-        deleteTree(new File(getCacheDir(), "preview"));
-        deleteTree(new File(getCacheDir(), "incoming"));
+        deleteTree(new File(getCacheDir(), "incoming"));      // scratch copies; the preview cache is kept
+        deleteTree(new File(getCacheDir(), "edit"));          // (and trimmed once Python is up)
         upRowOn = Defaults.upRow(this);
         previewsOn = Defaults.previews(this);
         installCrashLog();
@@ -1588,6 +1588,10 @@ public class MainActivity extends Activity {
                 edit = py.getModule("kiln_edit");
                 app.callAttr("set_jobs", Defaults.jobs(MainActivity.this));
                 try {
+                    app.callAttr("trim_cache", new File(getCacheDir(), "preview").getPath());
+                } catch (Throwable ignored) {
+                }
+                try {
                     JSONObject sp = new JSONObject(app.callAttr("scan_params").toString());
                     byte[] sg = hexBytes(sp.getString("sig"));
                     sniffMin = sp.getInt("min");
@@ -2433,20 +2437,38 @@ public class MainActivity extends Activity {
         if (n == null || n.isEmpty()) n = "archive.kln";
         n = n.replace('/', '_');
         final File dir = new File(getCacheDir(), "incoming");
+        File[] older = dir.listFiles();                           // copies of earlier ones are not needed
+        if (older != null) {
+            for (File o : older) {
+                if (arc == null || !o.equals(arc.file)) deleteTree(o);
+            }
+        }
         dir.mkdirs();
         final File out = new File(dir, n);
-        runOp("Opening...", false, p -> {
+        runOp("Opening...", true, p -> {
+            boolean good = false;
             try (InputStream in = getContentResolver().openInputStream(uri);
                  OutputStream os = new FileOutputStream(out)) {
                 if (in == null) throw new java.io.IOException("can't read that file");
                 byte[] buf = new byte[1 << 16];
                 int k;
-                while ((k = in.read(buf)) > 0) os.write(buf, 0, k);
+                while ((k = in.read(buf)) > 0) {
+                    if (p.cancelled()) break;
+                    os.write(buf, 0, k);
+                }
+                good = !p.cancelled();
+            } finally {
+                if (!good) out.delete();                          // never keep a half copy
             }
             JSONObject ok = new JSONObject();
-            ok.put("ok", true);
+            ok.put("ok", good);
+            ok.put("cancelled", !good);
             return ok;
         }, r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+                return;
+            }
             if (!r.optBoolean("ok")) {
                 message("Couldn't open the file", r.optString("message", r.optString("error")));
                 return;
@@ -2458,6 +2480,11 @@ public class MainActivity extends Activity {
     }
 
     private void closeArchive() {
+        if (arc != null && incomingFile != null && arc.file.equals(incomingFile)) {
+            final File gone = incomingFile;                       // the private copy of a file opened from
+            incomingFile = null;                                  // another app: free the space now
+            new Thread(() -> deleteTree(gone)).start();
+        }
         closeSession(arc);
         arcClip.clear();
         sel.clear();
@@ -2582,7 +2609,24 @@ public class MainActivity extends Activity {
             then.run();
             return;
         }
-        runOp("Preparing...", false, p -> ecall("begin", a.file.getPath(), a.password), r -> {
+        runOp("Preparing...", true, p -> {
+            JSONObject r = ecall("begin", a.file.getPath(), a.password);
+            if (p.cancelled() && r.optBoolean("ok")) {            // cancelled while it was loading
+                try {
+                    ecall("close", r.optString("sid"));
+                } catch (Exception ignored) {
+                }
+                JSONObject c = new JSONObject();
+                c.put("ok", false);
+                c.put("cancelled", true);
+                return c;
+            }
+            return r;
+        }, r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+                return;
+            }
             if (!r.optBoolean("ok")) {
                 message("Can't edit this archive", r.optString("message", r.optString("error")));
                 return;
@@ -2921,7 +2965,11 @@ public class MainActivity extends Activity {
             final Arc a = arc;
             final File cache = new File(getCacheDir(), "edit");
             cache.mkdirs();
-            runOp("Preparing...", false, p -> ecall("file_for", a.sid, member, cache.getPath()), r -> {
+            runOp("Preparing...", true, p -> ecall("file_for", a.sid, member, cache.getPath(), p, false), r -> {
+                if (r.optBoolean("cancelled")) {
+                    toast("Cancelled");
+                    return;
+                }
                 if (!r.optBoolean("ok")) {
                     message("Couldn't open", r.optString("message", r.optString("error")));
                     return;
@@ -3252,15 +3300,21 @@ public class MainActivity extends Activity {
         s.button("Cancel", Ui.TEXT, null).show();
     }
 
-    /** Extracts one file to the cache, then shows it (mode 0) or hands it to another app (1). */
+    /** Extracts one file to the cache (or finds it there already), then shows it (mode 0) or
+     *  hands it to another app (1). The extraction can be cancelled; nothing partial stays. */
     private void previewFile(final String member, final int mode) {
         final Arc a = arc;
+        final long size = sizeOf(member);
         final File cache = new File(getCacheDir(), "preview");
         cache.mkdirs();
-        runOp("Preparing...", false,
-                p -> a.sid != null ? ecall("file_for", a.sid, member, cache.getPath())
-                        : call("preview", a.file.getPath(), a.password, member, cache.getPath()),
+        runOp("Opening...", true,
+                p -> a.sid != null ? ecall("file_for", a.sid, member, cache.getPath(), p, true)
+                        : call("preview", a.file.getPath(), a.password, member, cache.getPath(), size, p),
                 r -> {
+                    if (r.optBoolean("cancelled")) {
+                        toast("Cancelled");
+                        return;
+                    }
                     if (!r.optBoolean("ok")) {
                         message("Couldn't open", r.optString("message"));
                         return;
@@ -3269,11 +3323,18 @@ public class MainActivity extends Activity {
                     if (mode == 1) {
                         openExternal(f, false);
                     } else if (kindOf(f.getName()) == 2) {
-                        showImage(f, true);
+                        showImage(f, false);                      // the cache keeps it for next time
                     } else {
                         openText(f, false);
                     }
                 });
+    }
+
+    /** Size of a file inside the open archive (0 if unknown). */
+    private long sizeOf(String member) {
+        if (arc == null) return 0;
+        for (Ent e : arc.ents) if (e.p.equals(member)) return e.s;
+        return 0;
     }
 
     private void extractDialog(final List<String> keys) {

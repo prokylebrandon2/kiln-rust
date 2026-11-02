@@ -110,3 +110,14 @@ and custom/fallback scripts.
 
 - Folder listing now runs in Java: entries are read and checked for the archive signature natively, several at a time in big folders (64+ entries). If anything goes wrong it falls back to the Python scan.
 - Folder item counts ("12 items") load right after the list appears instead of delaying it. Counts seen before show immediately.
+
+## 3.17
+
+- **Opening a big file from an archive no longer fills the cache twice.** A file you open is extracted once into the preview cache and found there on later opens (also after you restart Kiln). The cache is keyed by archive, its size and date, and the file, so a changed archive gets a fresh copy.
+- The preview cache is built under a temporary name and renamed when complete, so a cancel or a crash never leaves a half-extracted file that looks finished. It is kept under 1 GB (least recently used removed first, nothing older than a week). Settings > Storage shows its size and can clear it.
+- Opening a file checks the free storage first and says so if the file won't fit.
+- **Cancel everywhere it can matter:** opening a file from an archive, "Edit with...", preparing an archive for editing, and copying in a file opened from another app. Extraction, packing, check, save, copy, move and delete already had Cancel.
+- **Cleanup on cancel or error:** a half-written extracted file is deleted (before, it stayed on disk). A cancelled extraction removes the files and folders it created. A cancelled copy undoes itself. A cancelled or failed copy of a staged file leaves nothing behind.
+- Viewing an image from an archive no longer deletes its cached copy when you close the viewer.
+- A file opened from another app (a private copy in the cache) is deleted when you close the archive, and an earlier one is removed when you open the next.
+- Scratch folders from editing sessions that were cut short are cleaned up.

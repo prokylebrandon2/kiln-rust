@@ -2047,6 +2047,8 @@ class Extractor:
         self.i = self.got = self.crc = 0
         self.fh = None
         self.dest = None
+        self.created = []         # files this run made that did not exist before
+        self.made = []            # folders this run made, outermost first
         self._advance()
 
     def _begin(self):
@@ -2055,8 +2057,16 @@ class Extractor:
         self.unf = make_unfilter(e)
         if self.write and self.wanted[self.i]:
             self.dest = os.path.abspath(os.path.join(self.root, e["rel"]))
+            d, missing = os.path.dirname(self.dest), []
+            while d and not os.path.isdir(d) and os.path.dirname(d) != d:
+                missing.append(d)
+                d = os.path.dirname(d)
             os.makedirs(os.path.dirname(self.dest), exist_ok=True)
+            self.made.extend(reversed(missing))
+            existed = os.path.lexists(self.dest)
             self.fh = open(self.dest, "wb")
+            if not existed:
+                self.created.append(self.dest)
 
     def _end(self):
         e = self.table[self.i]
@@ -2113,8 +2123,35 @@ class Extractor:
             raise KilnError("archive is truncated (data ends early)")
 
     def abort(self):
+        """Stop. A file that was only half written is closed and deleted, never left behind."""
         if self.fh:
-            self.fh.close()
+            try:
+                self.fh.close()
+            except OSError:
+                pass
+            self.fh = None
+            if self.dest:
+                try:
+                    os.remove(self.dest)
+                except OSError:
+                    pass
+                self.dest = None
+
+    def rollback(self):
+        """After a cancel: remove everything this run created (files that were already there
+        and got replaced can't come back)."""
+        self.abort()
+        for p in reversed(self.created):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        for d in reversed(self.made):
+            try:
+                os.rmdir(d)               # only goes if it is empty now
+            except OSError:
+                pass
+        self.created, self.made = [], []
 
 
 def run_extract(args, write):
@@ -2164,6 +2201,10 @@ def run_extract(args, write):
                 ext.finish()
                 if f.tell() != table_off:
                     raise KilnError("corrupt data: stream doesn't end where the table starts")
+        except BaseException as ex:
+            if not isinstance(ex, KilnError):      # cancelled or interrupted: leave nothing behind
+                ext.rollback()
+            raise
         finally:
             ext.abort()
             prog.close()

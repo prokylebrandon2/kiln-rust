@@ -36,6 +36,7 @@ import java.util.Map;
 public class SettingsActivity extends Activity {
     private LinearLayout content;
     private JSONObject scripts = new JSONObject();
+    private long cacheBytes = -1;                  // size of the preview cache (-1 = not known yet)
     private interface Picked { void got(File f, String name); }
     private Picked picked;
     private static final int PICK = 71;
@@ -203,6 +204,22 @@ public class SettingsActivity extends Activity {
                     sh.button("Cancel", Ui.TEXT, null).show();
                 });
 
+        heading("STORAGE");
+        LinearLayout stc = card();
+        choiceRow(stc, "Preview cache", cacheBytes < 0 ? "..." : Fmt.size(cacheBytes),
+                "Files opened from archives are kept here so they open at once next time. "
+                        + "The oldest are removed automatically above 1 GB.", () ->
+                        new Sheet(this, "Clear the preview cache?")
+                                .text("Files you opened from archives will be extracted again the next time.")
+                                .button("Cancel", Ui.TEXT, null)
+                                .button("Clear", Ui.FILLED, () -> {
+                                    new Thread(() -> {
+                                        py("clear_cache", "kiln_app", cacheDir().getPath());
+                                        loadCacheSize();
+                                    }).start();
+                                    return true;
+                                }).show());
+
         heading("OPEN FILES WITH");
         LinearLayout d = card();
         Map<String, String> defs = Defaults.all(this);
@@ -248,6 +265,23 @@ public class SettingsActivity extends Activity {
         } catch (Throwable t) {
             return "{\"ok\":false,\"message\":" + JSONObject.quote(String.valueOf(t.getMessage())) + "}";
         }
+    }
+
+    private java.io.File cacheDir() {
+        return new java.io.File(getCacheDir(), "preview");
+    }
+
+    private void loadCacheSize() {
+        new Thread(() -> {
+            try {
+                final JSONObject o = new JSONObject(py("cache_size", "kiln_app", cacheDir().getPath()));
+                runOnUiThread(() -> {
+                    cacheBytes = o.optLong("bytes", -1);
+                    render();
+                });
+            } catch (Exception ignored) {
+            }
+        }).start();
     }
 
     private void loadScripts() {
@@ -726,6 +760,7 @@ public class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         loadScripts();
+        loadCacheSize();
     }
 
     @Override

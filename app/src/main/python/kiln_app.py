@@ -4,6 +4,7 @@ Everything here is testable without Android. The Java side passes a `progress` o
 event(json) and cancelled(); None is fine too."""
 import fnmatch
 import glob
+import hashlib
 import json
 import os
 import re
@@ -333,14 +334,154 @@ def decrypt_in_place(path, password, total, progress):
     return _run(["unpack", "-v", "-f", "-i", "--", path], password, total, progress, False)
 
 
-def preview(path, password, member, cache_dir):
-    """Extract one file into cache_dir for viewing. -> {"ok", "file"}"""
-    dest = os.path.join(cache_dir, uuid.uuid4().hex)
-    res = json.loads(extract(path, password, json.dumps([{"p": member, "dir": False}]),
-                             dest, True, 1, None))
-    if res.get("ok"):
-        res["file"] = os.path.join(dest, *member.split("/"))
-    return json.dumps(res, ensure_ascii=False)
+# ---------------------------------------------------------------- preview cache
+# A file opened from an archive is extracted once into cache_dir/<key>/<name>. The key comes from
+# the archive (path, size, modified time) and the member, so opening the same file again finds it
+# there instead of extracting it again. A copy is built in "<key>.part" and renamed when it is
+# complete, so a cancel or crash never leaves something that looks finished. The cache is kept
+# under a size limit by dropping the least recently used entries.
+
+CACHE_LIMIT = 1 << 30          # bytes of extracted files kept between uses
+CACHE_MAX_AGE = 7 * 86400      # and nothing older than a week
+_FREE_MARGIN = 64 << 20        # keep this much storage free when extracting
+
+
+def _tree_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def cache_key(path, member):
+    """Identifies `member` of the archive as it is on disk now (a changed archive = a new key)."""
+    st = os.stat(os.path.join(path, kiln.INDEX_NAME) if os.path.isdir(path) else path)
+    raw = f"{os.path.abspath(path)}\0{st.st_size}\0{st.st_mtime_ns}\0{member}"
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:24]
+
+
+def _rm(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def trim_cache(cache_dir, limit=None, keep=None):
+    """Drop unfinished copies, entries older than a week, then the least recently used ones
+    until the cache fits the limit. `keep` (a key) is never dropped. -> bytes left."""
+    limit = CACHE_LIMIT if limit is None else limit
+    try:
+        names = os.listdir(cache_dir)
+    except OSError:
+        return 0
+    rows, now = [], time.time()
+    for n in names:
+        p = os.path.join(cache_dir, n)
+        if n.endswith(".part"):
+            _rm(p)                      # an interrupted extraction
+            continue
+        try:
+            rows.append([os.stat(p).st_mtime, n, _tree_size(p) if os.path.isdir(p) else os.path.getsize(p)])
+        except OSError:
+            continue
+    rows.sort()
+    keep_rows = []
+    for r in rows:
+        if r[1] != keep and now - r[0] > CACHE_MAX_AGE:
+            _rm(os.path.join(cache_dir, r[1]))
+        else:
+            keep_rows.append(r)
+    total = sum(r[2] for r in keep_rows)
+    for r in keep_rows:                 # oldest first
+        if total <= limit:
+            break
+        if r[1] == keep:
+            continue
+        _rm(os.path.join(cache_dir, r[1]))
+        total -= r[2]
+    return total
+
+
+def cache_size(cache_dir):
+    return _j(ok=True, bytes=_tree_size(cache_dir) if os.path.isdir(cache_dir) else 0)
+
+
+def clear_cache(cache_dir):
+    try:
+        for n in os.listdir(cache_dir):
+            _rm(os.path.join(cache_dir, n))
+    except OSError:
+        pass
+    return _j(ok=True)
+
+
+def _enough_space(cache_dir, size):
+    try:
+        free = shutil.disk_usage(cache_dir).free
+    except OSError:
+        return None
+    if size and free < size + _FREE_MARGIN:
+        return (f"not enough free storage: this file needs {kiln.fmt_size(size)} "
+                f"and only {kiln.fmt_size(max(free, 0))} is free")
+    return None
+
+
+def cached_extract(path, password, member, cache_dir, size=0, progress=None):
+    """Extract one member into the cache, or find it there already. -> JSON {ok, file, cached}"""
+    os.makedirs(cache_dir, exist_ok=True)
+    try:
+        key = cache_key(path, member)
+    except OSError as e:
+        return _j(ok=False, message=f"can't read the archive: {e.strerror or e}")
+    final = os.path.join(cache_dir, key)
+    part = final + ".part"
+    target = os.path.join(final, *member.split("/"))
+    if os.path.isfile(target):
+        try:
+            os.utime(final, None)       # most recently used
+        except OSError:
+            pass
+        return _j(ok=True, file=target, cached=True, key=key)
+    _rm(final)                          # something half-there under this key: start clean
+    trim_cache(cache_dir, keep=key)     # make room first (also clears old unfinished copies)
+    low = _enough_space(cache_dir, size)
+    if low:
+        return _j(ok=False, message=low)
+    try:
+        res = json.loads(extract(path, password, json.dumps([{"p": member, "dir": False}]),
+                                 part, True, 1, progress))
+        if res.get("ok") and not os.path.isfile(os.path.join(part, *member.split("/"))):
+            res = {"ok": False, "message": "the file wasn't found in the archive"}
+        if res.get("ok"):
+            os.replace(part, final)
+            res["file"] = target
+            res["cached"] = False
+            res["key"] = key
+        return json.dumps(res, ensure_ascii=False)
+    except bridge.Cancelled:
+        return _j(ok=False, cancelled=True, message="Cancelled")
+    finally:
+        _rm(part)                       # nothing is left behind unless it finished
+
+
+def preview(path, password, member, cache_dir, size=0, progress=None):
+    """Extract one file into the cache for viewing (reused on later opens). -> {ok, file}"""
+    res = cached_extract(path, password, member, cache_dir, size, progress)
+    try:
+        r = json.loads(res)
+        if r.get("ok") and not r.get("cached"):        # a new file may have pushed us over the limit
+            trim_cache(cache_dir, keep=r.get("key"))
+    except Exception:
+        pass
+    return res
 
 
 def pack(items_json, dest, encrypt, each, store, overwrite, password, progress):
@@ -380,6 +521,7 @@ class _Job:
         self.done = self.skipped = 0
         self.dirs = 0                   # folders created / moved (files are counted in done)
         self.errors = []
+        self.made = []                  # what a copy created (files, then folders), to undo on cancel
         self.last = 0.0
 
     def check(self):
@@ -508,9 +650,15 @@ def _put(src, dst, move, policy, job):
                     _copy_file(src, dst, job)
                     os.remove(src)
             elif os.path.islink(src):
+                fresh = not os.path.lexists(dst)
                 os.symlink(os.readlink(src), dst)
+                if fresh:
+                    job.made.append(dst)
             else:
+                fresh = not os.path.lexists(dst)
                 _copy_file(src, dst, job)
+                if fresh:
+                    job.made.append(dst)
         except bridge.Cancelled:
             raise
         except OSError as e:
@@ -539,6 +687,8 @@ def _put(src, dst, move, policy, job):
             return
         except OSError:
             pass
+    if not os.path.isdir(dst):
+        job.made.append(dst)
     os.makedirs(dst, exist_ok=True)
     job.dirs += 1
     for child in sorted(os.listdir(src)):
@@ -569,6 +719,15 @@ def fs_transfer(srcs_json, dest, move, policy, progress):
                 target = _unique(target)
             _put(s, target, move, policy, job)
     except bridge.Cancelled:
+        if not move:                    # undo the copy: what was already copied would be clutter
+            for p in reversed(job.made):
+                try:
+                    if os.path.isdir(p) and not os.path.islink(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+                except OSError:
+                    pass
         return _j(ok=False, cancelled=True, message="Cancelled")
     verb = "Moved" if move else "Copied"
     files = job.done - job.skipped

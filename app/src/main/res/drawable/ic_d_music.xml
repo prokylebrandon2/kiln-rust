@@ -2,5 +2,5 @@
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"
     android:tint="?android:attr/textColorSecondary">
     <path android:fillColor="#FF000000" android:fillType="evenOdd"
-        android:pathData="M10,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z M13.3,10.2h1.4v6.4h-1.4z M14.7,10.2h2v1.8h-2z M9.9,16.6a1.7,1.7 0 1,0 3.4,0a1.7,1.7 0 1,0 -3.4,0z" />
+        android:pathData="M10,4H4C2.9,4 2,4.9 2,6v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z M10.1,9.65L16.4,8.65L16.4,15.25A1.9,1.5,0,1,1,12.6,15.25A1.9,1.5,0,0,1,15.1,13.83L15.1,10.15L11.4,10.74L11.4,16.25A1.9,1.5,0,1,1,7.6,16.25A1.9,1.5,0,0,1,10.1,14.83Z" />
 </vector>

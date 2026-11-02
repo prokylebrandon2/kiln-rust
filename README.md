@@ -155,3 +155,9 @@ and custom/fallback scripts.
 - **Standard Android folders have their own icons:** Download, DCIM (and Camera), Pictures (and Screenshots), Movies, Music (also Audiobooks, Podcasts, Recordings), Documents, Android, and Alarms / Notifications / Ringtones. They match only at the top of a storage, so your own folder called "Music" elsewhere stays plain.
 - The folder chooser uses the same icons.
 - Groundwork for checkpoint 2: `Icons.java` holds the list of folder icons (folder, download, camera, pictures, movies, music, documents, android, sounds, archives, favourite, heart, private, code, home, phone, SD card, USB), ready for choosing one per folder and per bookmark.
+
+## 3.24
+- Folder icons re-centred; music icon redrawn (generator: `tools/gen_folder_icons.py`, needs Pillow + cairosvg).
+- Pick an icon for any folder (select it, menu > "Change icon...") or for a bookmark (tap its icon, or long-press the row).
+  Choices are kept per path and follow the folder when it is renamed in Kiln. "Use default" restores the standard look.
+- Bookmarks now show their folder's icon.

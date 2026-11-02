@@ -127,7 +127,7 @@ public class MainActivity extends Activity {
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
-            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19;
+            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19, M_ICON = 20;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -1194,7 +1194,8 @@ public class MainActivity extends Activity {
             case M_EXTRACT_ALL: return R.drawable.ic_extract;
             case M_RENAME: return R.drawable.ic_edit;
             case M_TEST: return R.drawable.ic_check;
-            case M_PLAIN: return R.drawable.ic_folder;
+            case M_PLAIN:
+            case M_ICON: return R.drawable.ic_folder;
             case M_DECRYPT: return R.drawable.ic_lock;
             case M_OPTIONS: return R.drawable.ic_open;
             case M_INFO:
@@ -1228,6 +1229,7 @@ public class MainActivity extends Activity {
             l.add("Select all"); id.add(M_SELECT_ALL);
             l.add("Properties"); id.add(M_PROPS);
             if (sel.size() == 1 && !sel.iterator().next().contains("/")) { l.add("Rename"); id.add(M_RENAME); }
+            if (sel.size() == 1 && selectedDir() != null) { l.add("Change icon..."); id.add(M_ICON); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
             if (sel.size() == 1 && selectedSet() != null) { l.add("Browse as plain folder"); id.add(M_PLAIN); }
@@ -1304,6 +1306,16 @@ public class MainActivity extends Activity {
                 if (arc != null) arcRename(); else renameSheet();
                 break;
             case M_PROPS: propertiesSelected(); break;
+            case M_ICON: {
+                Item it = selectedDir();
+                if (it != null) {
+                    File f = new File(cwd, it.name);
+                    sel.clear();
+                    redraw();
+                    iconPicker(f.getPath(), f.getName(), this::refreshDirIcons);
+                }
+                break;
+            }
             case M_TEST: runTest(); break;
             case M_INFO: infoDialog(); break;
             case M_DECRYPT: decryptInPlace(); break;
@@ -1675,7 +1687,7 @@ public class MainActivity extends Activity {
         }
         for (String bp : saved) {
             File f = new File(bp);
-            card.addView(markRow(R.drawable.ic_bookmark, f.getName().isEmpty() ? bp : f.getName(), bp, true,
+            card.addView(markRow(dirIcon(f), f.getName().isEmpty() ? bp : f.getName(), bp, true,
                     null, sizeJobs));
         }
         if (!isStorageRoot(cwd)) {
@@ -1775,6 +1787,8 @@ public class MainActivity extends Activity {
 
     /** The icon for a folder: Android's standard folders (Download, DCIM, Music...) get their own. */
     private int dirIcon(File d) {
+        String picked = Defaults.folderIcon(this, d.getPath());
+        if (picked != null) return Icons.byKey(picked);
         File p = d.getParentFile();
         return Icons.forDir(d, p != null && isStorageRoot(p));
     }
@@ -1808,6 +1822,69 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** After an icon was picked: give the folders on screen their new icon without reloading the list. */
+    private void refreshDirIcons() {
+        for (Row r : rows) if (r.item != null && "dir".equals(r.item.kind)) r.icon = dirIcon(new File(cwd, r.item.name));
+        for (Row r : srcRows) if (r.item != null && "dir".equals(r.item.kind)) r.icon = dirIcon(new File(cwd, r.item.name));
+        redraw();
+    }
+
+    /** A grid of folder icons to choose from, for a folder or a bookmark. `done` runs after a change. */
+    private void iconPicker(final String path, String name, final Runnable done) {
+        final Sheet s = new Sheet(this, "Icon for " + name);
+        final String cur = Defaults.folderIcon(this, path);
+        final int cols = 4;
+        int accent = Ui.accent(this);
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout line = null;
+        int n = Icons.FOLDER_KEYS.length;
+        for (int i = 0; i < n; i++) {
+            if (i % cols == 0) {
+                line = new LinearLayout(this);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(line, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final String key = Icons.FOLDER_KEYS[i][0];
+            boolean on = key.equals(cur);
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+            cell.setPadding(dp(2), dp(8), dp(2), dp(6));
+            cell.setBackground(Ui.pressable(this, on ? getColor(R.color.k_chip) : 0, on ? accent : 0, 12));
+            ImageView iv = new ImageView(this);
+            iv.setImageResource(Icons.byKey(key));
+            Ui.tint(iv, accent);
+            cell.addView(iv, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            TextView t = Ui.label(this, Icons.FOLDER_KEYS[i][1], 11, on, !on);
+            t.setSingleLine(true);
+            t.setEllipsize(TextUtils.TruncateAt.END);
+            t.setGravity(Gravity.CENTER);
+            cell.addView(t, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            cell.setOnClickListener(v -> {
+                Defaults.setFolderIcon(this, path, key);
+                s.dismiss();
+                if (done != null) done.run();
+            });
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            cp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            line.addView(cell, cp);
+        }
+        for (int i = n % cols; i != 0 && i < cols; i++) {            // keep the last row's cells the same width
+            line.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        }
+        s.content(grid);
+        s.button("Use default", Ui.OUTLINE, () -> {
+            Defaults.setFolderIcon(this, path, null);
+            if (done != null) done.run();
+            return true;
+        });
+        s.button("Cancel", Ui.TEXT, null);
+        s.show();
     }
 
     private View iconTile(int icon) {
@@ -1849,7 +1926,20 @@ public class MainActivity extends Activity {
         LinearLayout row = rowBase();
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(36), dp(36));
         ip.rightMargin = dp(12);
-        row.addView(iconTile(icon), ip);
+        View tile = iconTile(icon);
+        row.addView(tile, ip);
+        if (removable) {                                      // a bookmark: its icon can be changed
+            final String shown = name;
+            View.OnClickListener pick = v -> {
+                if (marks != null) marks.dismiss();
+                iconPicker(path, shown, () -> {
+                    if (arc == null && cwd != null) refreshDirIcons();
+                    ui.post(this::showBookmarks);
+                });
+            };
+            tile.setOnClickListener(pick);
+            row.setOnLongClickListener(v -> { pick.onClick(v); return true; });
+        }
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         TextView n = Ui.label(this, name, 15, path.equals(cwd.getPath()), false);
@@ -2482,6 +2572,13 @@ public class MainActivity extends Activity {
     private Item selectedPlainFile() {
         for (Item it : items) {
             if (sel.contains(it.name) && it.kind.equals("file")) return it;
+        }
+        return null;
+    }
+
+    private Item selectedDir() {
+        for (Item it : items) {
+            if (sel.contains(it.name) && it.kind.equals("dir")) return it;
         }
         return null;
     }
@@ -3691,7 +3788,9 @@ public class MainActivity extends Activity {
         nameSheet("Rename", old, "Rename", n -> {
             File target = new File(cwd, n);
             if (target.exists()) return "That name is taken";
-            if (!new File(cwd, old).renameTo(target)) return "Couldn't rename";
+            File from = new File(cwd, old);
+            if (!from.renameTo(target)) return "Couldn't rename";
+            Defaults.moveFolderIcons(this, from.getPath(), target.getPath());
             loadDir(cwd);
             return null;
         });

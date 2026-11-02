@@ -5,8 +5,11 @@ import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -100,6 +103,59 @@ final class Defaults {
     static void removeBookmark(Context c, String path) {
         List<String> l = bookmarks(c);
         if (l.remove(path)) saveBookmarks(c, l);
+    }
+
+    // ---- folder icons: the icon a person picked for a folder or bookmark (path -> icon key)
+
+    private static Map<String, String> iconMap;
+
+    private static synchronized Map<String, String> icons(Context c) {
+        if (iconMap == null) {
+            iconMap = new HashMap<>();
+            try {
+                JSONObject o = new JSONObject(p(c).getString("folder_icons", "{}"));
+                Iterator<String> it = o.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    String v = o.optString(k, "");
+                    if (!v.isEmpty()) iconMap.put(k, v);
+                }
+            } catch (JSONException ignored) {
+            }
+        }
+        return iconMap;
+    }
+
+    private static void saveIcons(Context c) {
+        p(c).edit().putString("folder_icons", new JSONObject(icons(c)).toString()).apply();
+    }
+
+    /** The icon key picked for this folder, or null when it has none (it then gets its standard look). */
+    static synchronized String folderIcon(Context c, String path) {
+        return icons(c).get(path);
+    }
+
+    /** Remembers an icon for a folder; null or empty goes back to the standard look. */
+    static synchronized void setFolderIcon(Context c, String path, String key) {
+        if (key == null || key.isEmpty()) icons(c).remove(path); else icons(c).put(path, key);
+        saveIcons(c);
+    }
+
+    /** A folder was renamed or moved: its icon (and its subfolders' icons) follow it. */
+    static synchronized void moveFolderIcons(Context c, String from, String to) {
+        Map<String, String> m = icons(c);
+        Map<String, String> moved = new HashMap<>();
+        for (Iterator<Map.Entry<String, String>> it = m.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, String> e = it.next();
+            String k = e.getKey();
+            if (k.equals(from) || k.startsWith(from + "/")) {
+                moved.put(to + k.substring(from.length()), e.getValue());
+                it.remove();
+            }
+        }
+        if (moved.isEmpty()) return;
+        m.putAll(moved);
+        saveIcons(c);
     }
 
     // ---- default apps

@@ -1,0 +1,24 @@
+[package]
+name = "kiln-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "kiln_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crc32fast = "1"
+# NOTE: scrypt 0.11 has Params::new(log_n, r, p, len); if you pick another version adjust crypto.rs
+aes-gcm = "0.10"
+scrypt = { version = "0.11", default-features = false }
+unicode-normalization = "0.1"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"   # ffi.rs catches panics so a bug never kills the app

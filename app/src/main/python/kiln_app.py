@@ -14,6 +14,7 @@ import uuid
 
 import kiln_v14 as kiln
 import kiln_bridge as bridge
+import kiln_rs_engine as rs
 
 _MAGIC = b"KLNA"
 _MIN_ARCHIVE = 25          # header + footer: nothing smaller can be an archive
@@ -24,7 +25,8 @@ def _j(**kw):
 
 
 def version():
-    return _j(kiln=getattr(kiln, "VERSION", "?"), helper=bridge.accel_note())
+    return _j(kiln=getattr(kiln, "VERSION", "?"), helper=bridge.accel_note(),
+              engine="rust" if rs.active() else "python", engine_note=rs.note())
 
 
 # ---------------------------------------------------------------- browsing
@@ -202,9 +204,19 @@ def search(path, query, show_all, show_hidden=False):
 
 # ---------------------------------------------------------------- opening
 
+def _rust(op, args, progress=None):
+    """The Rust engine's JSON answer, or None = use Python (no engine, unsupported job, custom
+    main script, or the engine failed)."""
+    if main_sig != _MAGIC or not rs.active():
+        return None
+    r = rs.run(op, args, progress)
+    return None if r is None else json.dumps(r, ensure_ascii=False)
+
+
 def open_archive(path, password):
     """Table of contents of an archive file or random-name set."""
-    return _open_main(path, password)
+    r = _rust("open", {"path": path, "password": password or ""})
+    return r if r is not None else _open_main(path, password)
 
 
 def _open_main(path, password):
@@ -356,6 +368,10 @@ def _patterns(members):
 
 def extract(path, password, members_json, dest, overwrite, total, progress):
     """members_json: [{"p": path inside the archive, "dir": bool}, ...]; [] = everything."""
+    r = _rust("extract", {"path": path, "password": password or "", "members": json.loads(members_json),
+                          "dest": dest, "overwrite": bool(overwrite)}, progress)
+    if r is not None:
+        return r
     members = json.loads(members_json)
     args = ["unpack", "-v"] + (["-f"] if overwrite else []) + ["-o", dest, "--", path] \
         + _patterns(members)
@@ -363,6 +379,9 @@ def extract(path, password, members_json, dest, overwrite, total, progress):
 
 
 def test(path, password, progress):
+    r = _rust("test", {"path": path, "password": password or ""}, progress)
+    if r is not None:
+        return r
     if os.path.isdir(path):
         # a set of archives: one line per archive, so the count gives a real bar
         try:

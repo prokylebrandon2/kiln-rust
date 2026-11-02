@@ -6,12 +6,18 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import sys
+import uuid
 
 # What the app calls on the main script. A replacement must have all of these.
 REQUIRED = ['ACCEL_NOTE', 'FLAG_ENCRYPTED', 'INDEX_NAME', 'KilnError', 'MIN_PASSWORD', 'Shell', '_A', 'collect', 'get_password', 'main', 'open_archive', 'read_index_meta', 'require_accel', 'start_mp3_ahead', 'stop_mp3_ahead']
 
 _note = ""
+
+
+def _engine_path(files_dir):
+    return os.path.join(_paths(files_dir)[0], "engine.so")
 
 
 def _paths(files_dir):
@@ -113,11 +119,21 @@ def _check_main(mod):
         raise ValueError("it doesn't provide: " + ", ".join(missing))
 
 
+def _engine_active():
+    try:
+        import kiln_rs_engine
+        return kiln_rs_engine.active()
+    except Exception:
+        return False
+
+
 def status(files_dir):
     m = _meta(files_dir)
     main_sig = signatures(files_dir)
     return json.dumps({"ok": True, "main": m.get("main", ""), "main_version": m.get("main_version", ""),
                        "main_magic": show_magic(_meta_magic(m, "main") or main_sig) if m.get("main") else show_magic(DEFAULT_MAGIC),
+                       "engine": m.get("engine", ""), "engine_version": m.get("engine_version", ""),
+                       "engine_active": _engine_active(),
                        "note": _note}, ensure_ascii=False)
 
 
@@ -125,6 +141,8 @@ def install(files_dir, role, src, name, magic=""):
     """Checks the script loads, then keeps a private copy (role is always 'main').
     magic: what the person typed for its signature; blank = read the script's own MAGIC. If the
     script has none, nothing is installed and need_magic is returned so the app can ask."""
+    if role == "engine":
+        return install_engine(files_dir, src, name)
     d, main_p, _ = _paths(files_dir)
     os.makedirs(d, exist_ok=True)
     tmp = os.path.join(d, "candidate.py")
@@ -160,6 +178,38 @@ def install(files_dir, role, src, name, magic=""):
     return json.dumps({"ok": True, "version": ver, "magic": show_magic(sig), "restart": True})
 
 
+def install_engine(files_dir, src, name):
+    """A prebuilt Rust engine (.so). It is checked by loading it, then kept read-only (Android 14
+    refuses to load writable code files). It takes effect at once; no restart."""
+    import kiln_rs_engine
+    d = _paths(files_dir)[0]
+    os.makedirs(d, exist_ok=True)
+    # a fresh name every time: the dynamic loader remembers libraries by path, so a second candidate
+    # under the same name would silently be the first one again
+    tmp = os.path.join(d, "candidate-%s.so" % uuid.uuid4().hex[:12])
+    shutil.copyfile(src, tmp)
+    try:
+        os.chmod(tmp, stat.S_IRUSR)
+        ver = kiln_rs_engine.probe(tmp)
+    except BaseException as e:
+        try:
+            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
+            os.remove(tmp)
+        except OSError:
+            pass
+        return json.dumps({"ok": False, "message": f"This engine can't be used: {e}"})
+    dst = _engine_path(files_dir)
+    if os.path.exists(dst):
+        os.chmod(dst, stat.S_IRUSR | stat.S_IWUSR)
+    os.replace(tmp, dst)
+    os.chmod(dst, stat.S_IRUSR)
+    kiln_rs_engine.configure(dst)
+    m = _meta(files_dir)
+    m["engine"], m["engine_version"] = name, ver
+    _save_meta(files_dir, m)
+    return json.dumps({"ok": True, "version": ver, "restart": False, "engine": True})
+
+
 def set_magic(files_dir, role, text):
     """Change the signature of the installed main script."""
     try:
@@ -172,7 +222,25 @@ def set_magic(files_dir, role, text):
     return json.dumps({"ok": True, "magic": show_magic(sig), "restart": True})
 
 
+def remove_engine(files_dir):
+    import kiln_rs_engine
+    kiln_rs_engine.configure(None)
+    p = _engine_path(files_dir)
+    try:
+        os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)
+        os.remove(p)
+    except OSError:
+        pass
+    m = _meta(files_dir)
+    for k in ("engine", "engine_version"):
+        m.pop(k, None)
+    _save_meta(files_dir, m)
+    return json.dumps({"ok": True, "restart": False})
+
+
 def remove(files_dir, role):
+    if role == "engine":
+        return remove_engine(files_dir)
     _, main_p, _ = _paths(files_dir)
     if os.path.exists(main_p):
         os.remove(main_p)
@@ -197,12 +265,24 @@ def _drop_old_fallback(files_dir):
         _save_meta(files_dir, m)
 
 
+def _boot_engine(files_dir):
+    global _note
+    p = _engine_path(files_dir)
+    if not os.path.isfile(p):
+        return
+    import kiln_rs_engine
+    kiln_rs_engine.configure(p)
+    if kiln_rs_engine.note():
+        _note = (_note + " " + kiln_rs_engine.note()).strip()
+
+
 def boot(files_dir):
     """Called before the app layer is imported. Puts a custom main script in place of kiln_v14."""
     global _note, _main_loaded
     if not files_dir:
         return
     _drop_old_fallback(files_dir)
+    _boot_engine(files_dir)
     _, main_p, _ = _paths(files_dir)
     if os.path.isfile(main_p):
         try:
@@ -212,7 +292,7 @@ def boot(files_dir):
             _main_loaded = True
         except BaseException as e:
             sys.modules.pop("kiln_custom_main", None)
-            _note = f"Custom main script not used ({e}). Built-in v14 is running."
+            _note = (_note + f" Custom main script not used ({e}). Built-in v14 is running.").strip()
 
 
 def note():

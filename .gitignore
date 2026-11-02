@@ -5,3 +5,8 @@ app/build/
 app/src/main/jniLibs/
 *.iml
 .idea/
+
+rust/tests/corpus/
+rust/out/
+rust/kiln-rs/target/
+rust/kiln-rs/Cargo.lock

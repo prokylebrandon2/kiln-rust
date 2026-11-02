@@ -47,3 +47,43 @@ jobs:
         with:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
+
+  # The optional Rust engine (libkiln_rs.so). A separate job: the APK above never depends on it, and
+  # the app falls back to Python whenever the engine is missing or can't do something.
+  rust-engine:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Test corpus (made by the real Python engine)
+        working-directory: rust
+        run: |
+          pip install cryptography
+          python tools/make_corpus.py ../app/src/main/python/kiln_v14.py tests/corpus
+
+      - name: Rust tests
+        working-directory: rust/kiln-rs
+        run: cargo test --release
+
+      - name: Build libkiln_rs.so for Android
+        working-directory: rust/kiln-rs
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
+        run: |
+          cargo install cargo-ndk --locked
+          cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o ../out build --release
+          ls -l ../out/*/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-rust-engine
+          path: rust/out/*/libkiln_rs.so

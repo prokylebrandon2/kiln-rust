@@ -186,6 +186,14 @@ public class SettingsActivity extends Activity {
                 "Used for everything. Applies the next time Kiln starts."
                         + (mainMagic.isEmpty() ? "" : "\nRecognises files starting with " + mainMagic),
                 () -> scriptSheet("main", mainName));
+        String engName = scripts.optString("engine", "");
+        choiceRow(sr, "Rust engine",
+                engName.isEmpty() ? "Off (Python)"
+                        : engName + " v" + scripts.optString("engine_version", "?")
+                                + (scripts.optBoolean("engine_active") ? "" : " (not running)"),
+                "Optional, experimental. Reads archives with a prebuilt Rust library (.so). Applies at once. "
+                        + "Sets and WAV/MP3 files still use Python, and so does everything else if it fails.",
+                () -> engineSheet(engName));
 
         heading("TOOLS");
         LinearLayout tl = card();
@@ -492,8 +500,23 @@ public class SettingsActivity extends Activity {
         sh.button("Cancel", Ui.TEXT, null).show();
     }
 
+    private void engineSheet(String current) {
+        Sheet sh = new Sheet(this, "Rust engine");
+        sh.text("Choose the libkiln_rs.so built for this phone (arm64-v8a or x86_64). It is checked by "
+                + "loading it. Kiln keeps working with Python if the engine can't do something.");
+        sh.option(R.drawable.ic_open, "Choose a .so file...", false,
+                () -> pickFile((f, n) -> installScript("engine", f, n, "")));
+        if (!current.isEmpty()) {
+            sh.option(R.drawable.ic_close, "Switch back to Python", false, () -> {
+                py("remove", "kiln_scripts", getFilesDir().getPath(), "engine");
+                loadScripts();
+            });
+        }
+        sh.button("Cancel", Ui.TEXT, null).show();
+    }
+
     private void installScript(final String role, final File f, final String name, final String magic) {
-        final Sheet busy = new Sheet(this, "Checking script...").cancelable(false);
+        final Sheet busy = new Sheet(this, role.equals("engine") ? "Checking engine..." : "Checking script...").cancelable(false);
         busy.show();
         new Thread(() -> {
             final String r = py("install", "kiln_scripts", getFilesDir().getPath(), role, f.getPath(), name, magic);
@@ -513,12 +536,12 @@ public class SettingsActivity extends Activity {
                                 m -> installScript(role, f, name, m), f::delete);
                     } else {
                         f.delete();
-                        new Sheet(this, "Can't use this script").text(o.optString("message"))
+                        new Sheet(this, role.equals("engine") ? "Can't use this engine" : "Can't use this script").text(o.optString("message"))
                                 .button("OK", Ui.FILLED, null).show();
                     }
                 } catch (Exception e) {
                     f.delete();
-                    new Sheet(this, "Can't use this script").text(r).button("OK", Ui.FILLED, null).show();
+                    new Sheet(this, role.equals("engine") ? "Can't use this engine" : "Can't use this script").text(r).button("OK", Ui.FILLED, null).show();
                 }
             });
         }).start();

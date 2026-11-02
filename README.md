@@ -19,6 +19,12 @@ helper, so it does not need Termux, and it reads and writes the same archives.
 3. Download the `kiln-apk` artifact, unzip it, install `app-debug.apk`.
 4. Open Kiln and allow **All files access** when asked.
 
+## Rust engine (optional, experimental)
+`rust/` holds a Rust reader for `.kln` archives (open, test, extract; plain and encrypted). The
+**rust-engine** workflow job builds `libkiln_rs.so` (artifact `kiln-rust-engine`). In Settings ->
+Scripts -> **Rust engine**, choose the file for your phone's ABI. Anything it can't do (sets,
+WAV/MP3 files, a custom main script) still goes through Python. See `rust/HANDOFF.md`.
+
 ## Layout
 * `app/src/main/python/kiln_v14.py` - your script plus one change: `KILN_ACCEL_LIB` can name a
   prebuilt C helper (an app has no C compiler). The workflow builds that helper with the NDK.

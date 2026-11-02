@@ -63,8 +63,6 @@ def _guard(fn):
 @_guard
 def begin(path, password):
     """Start a staged-edit session. -> {ok, sid, entries, dirty, encrypted, is_set}"""
-    if path in app._legacy:
-        raise kiln.KilnError("this archive was opened with the fallback script, which can't edit")
     sh = kiln.Shell()
     sh.jobs = bridge.JOBS             # 1 unless changed in Settings
     code, _ = bridge.call(lambda: sh.load(path, password or None), _Quiet())

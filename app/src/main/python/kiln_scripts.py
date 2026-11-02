@@ -1,7 +1,7 @@
-"""Main and fallback kiln scripts supplied by the user (kept in the app's private storage).
+"""A custom main kiln script supplied by the user (kept in the app's private storage).
 
 The built-in kiln_v14 can't be removed. A custom main script replaces it at start-up (so the
-whole app uses it); a fallback script is used only for archives the main one can't read."""
+whole app uses it)."""
 import importlib.util
 import json
 import os
@@ -16,7 +16,7 @@ _note = ""
 
 def _paths(files_dir):
     d = os.path.join(files_dir, "scripts")
-    return d, os.path.join(d, "main.py"), os.path.join(d, "fallback.py"), os.path.join(d, "scripts.json")
+    return d, os.path.join(d, "main.py"), os.path.join(d, "scripts.json")
 
 
 def _load(path, name):
@@ -33,7 +33,7 @@ def _load(path, name):
 
 def _meta(files_dir):
     try:
-        with open(_paths(files_dir)[3]) as f:
+        with open(_paths(files_dir)[2]) as f:
             return json.load(f)
     except Exception:
         return {}
@@ -42,7 +42,7 @@ def _meta(files_dir):
 def _save_meta(files_dir, m):
     d = _paths(files_dir)[0]
     os.makedirs(d, exist_ok=True)
-    with open(_paths(files_dir)[3], "w") as f:
+    with open(_paths(files_dir)[2], "w") as f:
         json.dump(m, f)
 
 
@@ -96,7 +96,7 @@ def _meta_magic(m, role):
 
 
 def signatures(files_dir):
-    """-> (main signature, fallback signature or None) for the file browser."""
+    """-> the main script's signature, for the file browser."""
     m = _meta(files_dir)
     main = DEFAULT_MAGIC
     if _main_loaded:
@@ -104,23 +104,7 @@ def signatures(files_dir):
         if main is None:
             mod = sys.modules.get("kiln_v14")
             main = (_detect(mod) if mod else None) or DEFAULT_MAGIC
-    fb = None
-    if os.path.isfile(_paths(files_dir)[2]):
-        fb = _meta_magic(m, "fallback")
-        if fb is None:
-            mod = sys.modules.get("kiln_fallback")
-            fb = _detect(mod) if mod else None
-    return main, fb
-
-
-def _refresh_live(files_dir):
-    """A new or removed fallback takes effect straight away; no restart needed for it."""
-    try:
-        import kiln_app
-    except Exception:
-        return
-    kiln_app.fallback = load_fallback(files_dir)
-    kiln_app.set_signatures(*signatures(files_dir))
+    return main
 
 
 def _check_main(mod):
@@ -131,28 +115,23 @@ def _check_main(mod):
 
 def status(files_dir):
     m = _meta(files_dir)
-    main_sig, fb_sig = signatures(files_dir)
+    main_sig = signatures(files_dir)
     return json.dumps({"ok": True, "main": m.get("main", ""), "main_version": m.get("main_version", ""),
-                       "fallback": m.get("fallback", ""), "fallback_version": m.get("fallback_version", ""),
                        "main_magic": show_magic(_meta_magic(m, "main") or main_sig) if m.get("main") else show_magic(DEFAULT_MAGIC),
-                       "fallback_magic": show_magic(fb_sig) if fb_sig else "",
                        "note": _note}, ensure_ascii=False)
 
 
 def install(files_dir, role, src, name, magic=""):
-    """role: 'main' or 'fallback'. Checks the script loads, then keeps a private copy.
+    """Checks the script loads, then keeps a private copy (role is always 'main').
     magic: what the person typed for its signature; blank = read the script's own MAGIC. If the
     script has none, nothing is installed and need_magic is returned so the app can ask."""
-    d, main_p, fb_p, _ = _paths(files_dir)
+    d, main_p, _ = _paths(files_dir)
     os.makedirs(d, exist_ok=True)
     tmp = os.path.join(d, "candidate.py")
     shutil.copyfile(src, tmp)
     try:
         mod = _load(tmp, "kiln_candidate")
-        if role == "main":
-            _check_main(mod)
-        elif not hasattr(mod, "main"):
-            raise ValueError("it has no main() function")
+        _check_main(mod)
         if magic.strip():
             try:
                 sig = parse_magic(magic)
@@ -172,44 +151,50 @@ def install(files_dir, role, src, name, magic=""):
     finally:
         sys.modules.pop("kiln_candidate", None)
     ver = str(getattr(mod, "VERSION", "?"))
-    os.replace(tmp, main_p if role == "main" else fb_p)
+    os.replace(tmp, main_p)
     m = _meta(files_dir)
-    m[role] = name
-    m[role + "_version"] = ver
-    m[role + "_magic"] = sig.hex()
+    m["main"] = name
+    m["main_version"] = ver
+    m["main_magic"] = sig.hex()
     _save_meta(files_dir, m)
-    if role == "fallback":
-        _refresh_live(files_dir)
-    return json.dumps({"ok": True, "version": ver, "magic": show_magic(sig), "restart": role == "main"})
+    return json.dumps({"ok": True, "version": ver, "magic": show_magic(sig), "restart": True})
 
 
 def set_magic(files_dir, role, text):
-    """Change the signature of the installed main or fallback script."""
+    """Change the signature of the installed main script."""
     try:
         sig = parse_magic(text)
     except ValueError as e:
         return json.dumps({"ok": False, "message": f"Signature: {e}"})
     m = _meta(files_dir)
-    m[role + "_magic"] = sig.hex()
+    m["main_magic"] = sig.hex()
     _save_meta(files_dir, m)
-    if role == "fallback":
-        _refresh_live(files_dir)
-    return json.dumps({"ok": True, "magic": show_magic(sig), "restart": role == "main"})
+    return json.dumps({"ok": True, "magic": show_magic(sig), "restart": True})
 
 
 def remove(files_dir, role):
-    _, main_p, fb_p, _ = _paths(files_dir)
-    p = main_p if role == "main" else fb_p
-    if os.path.exists(p):
-        os.remove(p)
+    _, main_p, _ = _paths(files_dir)
+    if os.path.exists(main_p):
+        os.remove(main_p)
     m = _meta(files_dir)
-    m.pop(role, None)
-    m.pop(role + "_version", None)
-    m.pop(role + "_magic", None)
+    for k in ("main", "main_version", "main_magic"):
+        m.pop(k, None)
     _save_meta(files_dir, m)
-    if role == "fallback":
-        _refresh_live(files_dir)
-    return json.dumps({"ok": True, "restart": role == "main"})
+    return json.dumps({"ok": True, "restart": True})
+
+
+def _drop_old_fallback(files_dir):
+    """The fallback script feature was removed: delete any copy an earlier version kept."""
+    d, _, _ = _paths(files_dir)
+    try:
+        os.remove(os.path.join(d, "fallback.py"))
+    except OSError:
+        pass
+    m = _meta(files_dir)
+    if any(k.startswith("fallback") for k in m):
+        for k in [k for k in m if k.startswith("fallback")]:
+            m.pop(k)
+        _save_meta(files_dir, m)
 
 
 def boot(files_dir):
@@ -217,7 +202,8 @@ def boot(files_dir):
     global _note, _main_loaded
     if not files_dir:
         return
-    _, main_p, _, _ = _paths(files_dir)
+    _drop_old_fallback(files_dir)
+    _, main_p, _ = _paths(files_dir)
     if os.path.isfile(main_p):
         try:
             mod = _load(main_p, "kiln_custom_main")
@@ -227,19 +213,6 @@ def boot(files_dir):
         except BaseException as e:
             sys.modules.pop("kiln_custom_main", None)
             _note = f"Custom main script not used ({e}). Built-in v14 is running."
-
-
-def load_fallback(files_dir):
-    global _note
-    if not files_dir:
-        return None
-    _, _, fb_p, _ = _paths(files_dir)
-    if os.path.isfile(fb_p):
-        try:
-            return _load(fb_p, "kiln_fallback")
-        except BaseException as e:
-            _note = (_note + " " if _note else "") + f"Fallback script not loaded ({e})."
-    return None
 
 
 def note():

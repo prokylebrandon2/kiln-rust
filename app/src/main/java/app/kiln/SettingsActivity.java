@@ -171,17 +171,11 @@ public class SettingsActivity extends Activity {
         heading("SCRIPTS");
         LinearLayout sr = card();
         String mainName = scripts.optString("main", "");
-        String fbName = scripts.optString("fallback", "");
         String mainMagic = scripts.optString("main_magic", "");
-        String fbMagic = scripts.optString("fallback_magic", "");
         choiceRow(sr, "Main script", mainName.isEmpty() ? "Built-in v14" : mainName,
                 "Used for everything. Applies the next time Kiln starts."
                         + (mainMagic.isEmpty() ? "" : "\nRecognises files starting with " + mainMagic),
                 () -> scriptSheet("main", mainName));
-        choiceRow(sr, "Fallback script", fbName.isEmpty() ? "None" : fbName,
-                "Opens archives the main script can't read (browse, extract and check only)."
-                        + (fbName.isEmpty() || fbMagic.isEmpty() ? "" : "\nRecognises files starting with " + fbMagic),
-                () -> scriptSheet("fallback", fbName));
 
         heading("TOOLS");
         LinearLayout tl = card();
@@ -322,19 +316,16 @@ public class SettingsActivity extends Activity {
 
     private void scriptSheet(final String role, String current) {
         final boolean isMain = role.equals("main");
-        Sheet sh = new Sheet(this, isMain ? "Main script" : "Fallback script");
-        sh.text(isMain
-                ? "Kiln's built-in v14 can't be removed. A replacement must provide every function the "
-                + "app uses; it's checked when you choose it, and the app returns to v14 if it fails to load."
-                : "Used only for archives the main script can't open. It can browse, extract and check "
-                + "them, but not edit them.");
+        Sheet sh = new Sheet(this, "Main script");
+        sh.text("Kiln's built-in v14 can't be removed. A replacement must provide every function the "
+                + "app uses; it's checked when you choose it, and the app returns to v14 if it fails to load.");
         sh.option(R.drawable.ic_open, "Choose a .py file...", false,
                 () -> pickFile((f, n) -> installScript(role, f, n, "")));
         if (!current.isEmpty()) {
             final String sig = scripts.optString(role + "_magic", "");
             sh.option(R.drawable.ic_edit, "Signature: " + (sig.isEmpty() ? "not set" : sig) + " (change)", false,
                     () -> changeMagic(role, sig, null));
-            sh.option(R.drawable.ic_close, isMain ? "Switch back to built-in v14" : "Remove the fallback", false, () -> {
+            sh.option(R.drawable.ic_close, "Switch back to built-in v14", false, () -> {
                 py("remove", "kiln_scripts", getFilesDir().getPath(), role);
                 loadScripts();
                 if (isMain) restartNote();
@@ -412,7 +403,7 @@ public class SettingsActivity extends Activity {
 
     /** Change the signature of the script that's already installed. */
     private void changeMagic(final String role, String current, String message) {
-        askMagic(role.equals("main") ? "main script" : "fallback script", message, current, m -> {
+        askMagic("main script", message, current, m -> {
             new Thread(() -> {
                 final String r = py("set_magic", "kiln_scripts", getFilesDir().getPath(), role, m);
                 runOnUiThread(() -> {

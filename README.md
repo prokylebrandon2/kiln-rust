@@ -94,7 +94,14 @@ and custom/fallback scripts.
 
 ## 3.12 (second half, checkpoint 2)
 
-- **Settings > Scripts:** a custom *main script* (replaces built-in v14 at the next start; checked when chosen and falls back to v14 if it fails to load; v14 can always be switched back to) and one *fallback script* used automatically for archives the main script can't read (browse, extract and check only; no editing). The fallback needs an `open_archive` function like v14's for browsing.
+- **Settings > Scripts:** a custom *main script* (replaces built-in v14 at the next start; checked when chosen and falls back to v14 if it fails to load; v14 can always be switched back to). It has a signature, the first bytes of the files it handles.
 - **Settings > Tools:** Self-test, Benchmark and WAV info, with the output shown in a results box.
 - **Settings > Advanced:** parallel jobs for packing (1 default; 2 and 4 are experimental).
 - **Bookmarks:** mounted flash drives / SD cards are listed while plugged in (they disappear when unplugged); "Termux home" is there too, with an explanation when Android blocks it.
+
+
+## 3.15
+
+- The fallback script feature is removed. Any fallback script saved by an earlier version is deleted at start-up. Custom main scripts still work, with their signature.
+- Back in a folder now scrolls once and slides all visible rows in (the second scroll made lower rows skip the animation).
+- Check (inside an archive) shows a result card: verdict, files, data and time tiles, and details.

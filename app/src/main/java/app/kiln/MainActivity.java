@@ -697,13 +697,14 @@ public class MainActivity extends Activity {
             public boolean onPreDraw() {
                 android.view.ViewTreeObserver o = list.getViewTreeObserver();
                 if (o.isAlive()) o.removeOnPreDrawListener(this);
-                int n = Math.min(list.getChildCount(), 24);
+                int n = list.getChildCount();
                 for (int k = 0; k < n; k++) {
                     View c = list.getChildAt(k);
+                    c.animate().cancel();
                     c.setAlpha(0f);
                     c.setTranslationY(c.getHeight() * 0.14f);
                     c.animate().alpha(1f).translationY(0f)
-                            .setStartDelay(Defaults.anim(MainActivity.this, 29L * k))
+                            .setStartDelay(Defaults.anim(MainActivity.this, 29L * Math.min(k, 24)))
                             .setDuration(Defaults.anim(MainActivity.this, 240))
                             .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f))
                             .start();
@@ -1656,12 +1657,12 @@ public class MainActivity extends Activity {
             empty.setText(emptyText());
             shownSig = snap.sig;
             lastDir = dir.getPath();
+            redraw();
+            // Scroll once, after the new rows are in, and let the slide-in start from the final
+            // layout. (Scrolling twice re-laid the rows out after they'd started animating, so
+            // the ones lower down skipped it.)
             if (goingUp) list.setSelectionFromTop(snap.first, snap.top);
             else list.setSelectionFromTop(0, 0);
-            redraw();
-            if (goingUp) list.post(() -> {                       // again once the rows are laid out
-                if (gen == loadGen && arc == null) list.setSelectionFromTop(snap.first, snap.top);
-            });
             playRows();
         } else {
             if (moved) shownSig = null;                       // what's on screen isn't this folder
@@ -3137,13 +3138,75 @@ public class MainActivity extends Activity {
         final Arc a = arc;
         runOp("Checking...", true, p -> call("test", a.file.getPath(), a.password, p), r -> {
             if (r.optBoolean("ok")) {
-                message("Archive is intact", r.optString("message"));
+                checkResult(a, true, r.optString("message"));
             } else if (r.optBoolean("cancelled")) {
                 toast("Cancelled");
             } else {
-                message("Problem found", r.optString("message"));
+                checkResult(a, false, r.optString("message"));
             }
         });
+    }
+
+    /** The result of Check: a clear verdict, the numbers as tiles, and the details underneath. */
+    private void checkResult(Arc a, boolean ok, String msg) {
+        int tone = ok ? Ui.accent(this) : getColor(R.color.k_danger);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(ok ? R.drawable.ic_check : R.drawable.ic_close);
+        Ui.tint(ic, tone);
+        ic.setPadding(dp(13), dp(13), dp(13), dp(13));
+        ic.setBackground(Ui.shape(this, Ui.alpha(tone, 0x26), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, ok ? "Archive is intact" : "Problem found", 18, true, false));
+        TextView nm = Ui.label(this, a.file.getName(), 13, false, true);
+        nm.setSingleLine(true);
+        nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(nm);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = dp(14);
+        head.addView(col, cp);
+        Sheet sh = new Sheet(this, null).content(head).space(16);
+
+        List<String[]> rows = new ArrayList<>();
+        // kiln's success line: "Checked 12 file(s), 3.4 MB in 0.8s - all checksums OK"
+        java.util.regex.Matcher m = ok ? java.util.regex.Pattern
+                .compile("(\\d+) file\\(s\\), (.+?) in ([\\d.]+)s").matcher(msg) : null;
+        if (m != null && m.find()) {
+            LinearLayout stats = new LinearLayout(this);
+            int n = Integer.parseInt(m.group(1));
+            stats.addView(statTile(String.valueOf(n), n == 1 ? "file checked" : "files checked"), statLp(false));
+            stats.addView(statTile(m.group(2), "of data"), statLp(true));
+            stats.addView(statTile(m.group(3) + " s", "took"), statLp(false));
+            sh.content(stats).space(16);
+            rows.add(new String[]{"Result", "Every checksum matches"});
+        } else if (ok) {
+            rows.add(new String[]{"Result", msg.isEmpty() ? "No problems found" : msg, "stack"});
+        } else {
+            String[] lines = msg.isEmpty() ? new String[]{"The check failed."} : msg.split("\n");
+            rows.add(new String[]{"What went wrong", lines[0].trim(), "stack"});
+            if (lines.length > 1) {
+                StringBuilder more = new StringBuilder();
+                for (int i = 1; i < lines.length; i++) {
+                    if (lines[i].trim().isEmpty()) continue;
+                    if (more.length() > 0) more.append('\n');
+                    more.append(lines[i].trim());
+                }
+                if (more.length() > 0) rows.add(new String[]{"Details", more.toString(), "stack"});
+            }
+        }
+        rows.add(new String[]{"Encryption", a.encrypted ? "AES-256-GCM" : "None"});
+        rows.add(new String[]{"Files in archive", String.valueOf(a.ents.size())});
+        if (!ok) {
+            TextView hint = Ui.label(this, "The archive may be damaged. Keep your original files until "
+                    + "you've restored or re-created it.", 13, false, true);
+            sh.content(detailCard(rows)).space(12).content(hint);
+        } else {
+            sh.content(detailCard(rows));
+        }
+        sh.space(4).button("OK", Ui.FILLED, null).show();
     }
 
     private void decryptInPlace() {
@@ -3508,8 +3571,6 @@ public class MainActivity extends Activity {
                     JSONObject sc = new JSONObject(m.callAttr("status", getFilesDir().getPath()).toString());
                     o.put("main", sc.optString("main"));
                     o.put("main_version", sc.optString("main_version"));
-                    o.put("fallback", sc.optString("fallback"));
-                    o.put("fallback_version", sc.optString("fallback_version"));
                 } catch (Exception ignored) {
                 }
             }
@@ -3560,15 +3621,12 @@ public class MainActivity extends Activity {
         String engine = o.optString("engine");
         String helper = o.optString("helper");
         String mainName = o.optString("main");
-        String fbName = o.optString("fallback");
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[]{"Version", ver + (build > 0 ? " (build " + build + ")" : "")});
         if (!engine.isEmpty()) rows.add(new String[]{"Engine", "kiln " + engine});
         if (app != null) rows.add(new String[]{"Fast mode", helper.isEmpty() ? "On" : "Off \u2013 " + helper});
         rows.add(new String[]{"Main script", mainName.isEmpty() ? "Built-in"
                 : mainName + (o.optString("main_version").isEmpty() ? "" : " (v" + o.optString("main_version") + ")")});
-        rows.add(new String[]{"Fallback script", fbName.isEmpty() ? "None"
-                : fbName + (o.optString("fallback_version").isEmpty() ? "" : " (v" + o.optString("fallback_version") + ")")});
         rows.add(new String[]{"Encryption", "AES-256-GCM"});
 
         LinearLayout card = detailCard(rows);

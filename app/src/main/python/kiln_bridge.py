@@ -77,11 +77,8 @@ def set_jobs(n):
     JOBS = max(1, min(8, int(n)))
 
 
-def run(args, password, sink, hook=None, mod=None):
-    """Run one kiln command. Returns 0 on success, non-zero on failure.
-    mod: another kiln script (the fallback) to run instead of the main one."""
-    if mod is not None and mod is not kiln:
-        return _run_mod(args, password, sink, hook, mod)
+def run(args, password, sink, hook=None):
+    """Run one kiln command. Returns 0 on success, non-zero on failure."""
     args = args.split("\x1f") if isinstance(args, str) else [str(a) for a in args]
     if not args or args[0] not in ("pack", "unpack", "list", "test") + TOOLS:
         sink.line("error: unsupported command")   # also keeps kiln's interactive shell out
@@ -163,59 +160,3 @@ def call(fn, sink, hook=None):
             kiln.stop_mp3_ahead()
             sys.stdout, sys.stderr, kiln.get_password, kiln.start_mp3_ahead = saved
         return code, res
-
-
-def _run_mod(args, password, sink, hook, mod):
-    """The same as run(), for the fallback script (extract/test/list only)."""
-    args = args.split("\x1f") if isinstance(args, str) else [str(a) for a in args]
-    if not args or args[0] not in ("unpack", "list", "test"):
-        sink.line("error: this command isn't available for archives opened with the fallback script")
-        return 2
-    pw = password or None
-
-    def get_password(confirm=False):
-        if not pw:
-            raise mod.KilnError("enter a password")
-        return pw
-
-    class _HP(mod.Progress):
-        def add(self, n):
-            super().add(n)
-            if hook is not None:
-                hook(self.done, self.total)
-
-    with _lock:
-        saved = (sys.argv, sys.stdout, sys.stderr)
-        old = {k: getattr(mod, k, None) for k in ("get_password", "Progress", "start_mp3_ahead")}
-        out = _Lines(sink)
-        sys.argv = ["kiln"] + args
-        sys.stdout = sys.stderr = out
-        mod.get_password = get_password
-        if hasattr(mod, "start_mp3_ahead"):
-            mod.start_mp3_ahead = lambda *a, **k: None
-        if hook and hasattr(mod, "Progress"):
-            mod.Progress = _HP
-        code = 0
-        try:
-            if hasattr(mod, "require_accel"):
-                mod.require_accel()
-            mod.main()
-        except Cancelled:
-            code = 130
-        except SystemExit as e:
-            if e.code not in (None, 0):
-                code = 1 if not isinstance(e.code, int) else e.code
-                if isinstance(e.code, str):
-                    print(e.code)
-        except BaseException as e:
-            code = 1
-            print(f"error: {e}")
-        finally:
-            out.flush()
-            sys.argv, sys.stdout, sys.stderr = saved
-            for k, v in old.items():
-                if v is not None:
-                    setattr(mod, k, v)
-            if hasattr(mod, "stop_mp3_ahead"):
-                mod.stop_mp3_ahead()
-        return code

@@ -103,6 +103,7 @@ public class MainActivity extends Activity {
     static final class Ent { String p, k = ""; long s, m; }
     static final class Row {
         String key, title, sub, right, ext = "", path;
+        String where;                        // folder of a search hit, shown on its own line (null = none)
         int icon;
         boolean dir, folder, up;
         long size, time;
@@ -384,6 +385,18 @@ public class MainActivity extends Activity {
         return 0;
     }
 
+    /**
+     * What a real file on disk is: 1 text, 2 image, 0 "maybe text" (a name Kiln doesn't know whose
+     * content reads as text, or an empty file), -1 binary. A name Kiln knows is trusted; anything
+     * else (no extension, or an unfamiliar one) is looked at, so Kiln only offers its text viewer
+     * for files that are text and can still show a picture that has lost its extension.
+     */
+    private static int kindOf(File f) {
+        int k = kindOf(f.getName());
+        if (k != 0) return k;
+        return f.isFile() ? Sniff.kind(f) : 0;
+    }
+
     private static String plural(long n, String one, String many) {
         return n + " " + (n == 1 ? one : many);
     }
@@ -623,7 +636,7 @@ public class MainActivity extends Activity {
     /** One row: icon (or preview), name and date, size on the right. A selected row is tinted. */
     private final class RowView extends LinearLayout {
         final ImageView icon;
-        final TextView name, detail, size;
+        final TextView name, detail, loc, size;
         private final Drawable plain, picked;
         private boolean wasSelected;
 
@@ -644,8 +657,14 @@ public class MainActivity extends Activity {
             name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
             detail = Ui.label(MainActivity.this, "", 12, false, true);
             detail.setSingleLine(true);
+            detail.setEllipsize(TextUtils.TruncateAt.END);
+            loc = Ui.label(MainActivity.this, "", 12, false, true);
+            loc.setSingleLine(true);
+            loc.setEllipsize(TextUtils.TruncateAt.START);       // keep the deepest folder in view
+            loc.setTextColor(Ui.accent(MainActivity.this));
             col.addView(name);
             col.addView(detail);
+            col.addView(loc);
             LayoutParams cp = new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             cp.leftMargin = dp(14);
             addView(col, cp);
@@ -680,6 +699,12 @@ public class MainActivity extends Activity {
             name.setText(r.title);
             detail.setText(r.sub);
             detail.setVisibility(r.sub.isEmpty() ? View.GONE : View.VISIBLE);
+            String w = r.where;                               // where a search hit lives
+            if (w == null && r.item != null && arc == null && searching && !query.isEmpty()) {
+                w = whereLabel("");                           // hit in the searched folder itself
+            }
+            loc.setText(w == null ? "" : w);
+            loc.setVisibility(w == null || w.isEmpty() ? View.GONE : View.VISIBLE);
             size.setText(r.right);
             setBackground(selected ? picked : plain);
             jumpDrawablesToCurrentState();
@@ -865,12 +890,14 @@ public class MainActivity extends Activity {
         if (reveal > 0f && !pullShown) {
             pullShown = true;
             list.animate().cancel();
+            empty.animate().cancel();
             pullPanel.animate().cancel();
             fillPull();
             pullPanel.setVisibility(View.VISIBLE);
         }
         if (pullShown) {
             list.setTranslationY(reveal);
+            empty.setTranslationY(reveal);                   // the message belongs to the list: move together
             pullPanel.setAlpha(Math.min(1f, reveal / (dp(PULL_H) * 0.5f)));
         }
     }
@@ -879,8 +906,12 @@ public class MainActivity extends Activity {
         if (!pullShown) return;
         pullShown = false;
         boolean full = list.getTranslationY() >= dp(PULL_H) * 0.9f;
-        list.animate().translationY(0f).setStartDelay(full ? 250 : 0)
-                .setDuration(Defaults.anim(this, 220)).withEndAction(() -> {
+        final long delay = full ? 250 : 0;
+        final long dur = Defaults.anim(this, 220);
+        empty.animate().translationY(0f).setStartDelay(delay).setDuration(dur)
+                .withEndAction(() -> empty.animate().setStartDelay(0)).start();
+        list.animate().translationY(0f).setStartDelay(delay)
+                .setDuration(dur).withEndAction(() -> {
                     list.animate().setStartDelay(0);
                     pullPanel.setVisibility(View.INVISIBLE);
                     pullStop.set(true);
@@ -1516,7 +1547,10 @@ public class MainActivity extends Activity {
 
     /** The folder shown under a search hit: below the searched folder, or the full path from /. */
     private String whereLabel(String relDir) {
-        return Defaults.searchPath(this) == 1 ? new File(cwd, relDir).getPath() : relDir;
+        if (Defaults.searchPath(this) == 1) {
+            return relDir.isEmpty() ? cwd.getPath() : new File(cwd, relDir).getPath();
+        }
+        return relDir.isEmpty() ? "This folder" : relDir;
     }
 
     /** Same for a hit inside an open archive. */
@@ -1574,7 +1608,7 @@ public class MainActivity extends Activity {
         }
         List<Row> rr = new ArrayList<>();
         List<Item> ii = new ArrayList<>();
-        parseItems(res, rr, ii);
+        parseItems(res, rr, ii, true);
         rows.clear();
         rows.addAll(rr);
         items.clear();
@@ -2261,7 +2295,7 @@ public class MainActivity extends Activity {
         }
         List<Row> nr = new ArrayList<>();
         List<Item> ni = new ArrayList<>();
-        parseItems(r, nr, ni);
+        parseItems(r, nr, ni, false);
         for (int i = 0; i < ni.size() && i < nr.size(); i++) {      // counts seen before show at once
             Item it = ni.get(i);
             if (it.kind.equals("dir") && it.count < 0) {
@@ -2310,7 +2344,7 @@ public class MainActivity extends Activity {
     }
 
     /** Turns scan or search output into rows. Names from a search are paths below the folder. */
-    private void parseItems(JSONObject r, List<Row> outRows, List<Item> outItems) {
+    private void parseItems(JSONObject r, List<Row> outRows, List<Item> outItems, boolean hits) {
         JSONArray arr = r.optJSONArray("items");
         for (int i = 0; arr != null && i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
@@ -2331,7 +2365,7 @@ public class MainActivity extends Activity {
             row.time = it.mtime;
             row.ext = Fmt.ext(it.name);
             String when = Fmt.date(it.mtime);
-            if (slash > 0) when = whereLabel(it.name.substring(0, slash)) + " \u00b7 " + when;   // hit in a subfolder
+            if (hits) row.where = whereLabel(slash > 0 ? it.name.substring(0, slash) : "");   // search: say where
             switch (it.kind) {
                 case "dir":
                     row.folder = true;
@@ -2466,7 +2500,7 @@ public class MainActivity extends Activity {
     }
 
     private void fileSheet(final File f, Item it) {
-        int kind = kindOf(f.getName());
+        int kind = kindOf(f);
         Sheet s = new Sheet(this, f.getName());
         s.text(Fmt.size(it.size) + " \u00b7 " + Fmt.date(it.mtime));
         boolean small = it.size <= TextActivity.MAX_BYTES;
@@ -2475,7 +2509,7 @@ public class MainActivity extends Activity {
         } else if (kind == 1 && small) {
             s.option(R.drawable.ic_open, "View in Kiln", false, () -> openText(f, false));
             s.option(R.drawable.ic_edit, "Edit in Kiln", false, () -> openText(f, true));
-        } else if (kind == 0 && small && it.size > 0) {
+        } else if (kind == 0 && small) {
             s.option(R.drawable.ic_open, "View as text in Kiln", false, () -> openText(f, false));
             s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, () -> openText(f, true));
         }
@@ -2497,7 +2531,8 @@ public class MainActivity extends Activity {
     private static String mimeOf(File f) {
         String m = MimeTypeMap.getSingleton().getMimeTypeFromExtension(Fmt.ext(f.getName()));
         if (m != null) return m;
-        return kindOf(f.getName()) == 1 ? "text/plain" : "*/*";
+        if (kindOf(f.getName()) == 1) return "text/plain";
+        return Sniff.mime(f);          // no extension, or one Android doesn't know: go by the content
     }
 
     private Intent viewIntent(File f, boolean edit) {
@@ -2541,8 +2576,8 @@ public class MainActivity extends Activity {
         final Sheet s = new Sheet(this, edit ? "Edit with" : "Open with");
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        int kind = kindOf(f.getName());
-        boolean small = f.length() <= TextActivity.MAX_BYTES && f.length() > 0;
+        int kind = kindOf(f);
+        boolean small = f.length() <= TextActivity.MAX_BYTES;
         if (!edit && (kind == 2 || ((kind == 1 || kind == 0) && small))) {
             box.addView(appRow(getDrawable(R.drawable.ic_open), "Kiln " + (kind == 2 ? "image viewer" : "text viewer"), () -> {
                 if (always.isChecked()) Defaults.set(this, ext, Defaults.KILN_VIEW);
@@ -3723,10 +3758,19 @@ public class MainActivity extends Activity {
                         return;
                     }
                     File f = new File(r.optString("file"));
+                    int kind = mode == 1 ? 0 : kindOf(f);         // looks inside names it doesn't know
                     if (mode == 1) {
                         openExternal(f, false);
-                    } else if (kindOf(f.getName()) == 2) {
+                    } else if (kind == 2) {
                         showImage(f, false);                      // the cache keeps it for next time
+                    } else if (kind == -1) {
+                        new Sheet(this, "Not a text file").text("\"" + f.getName() + "\" looks like "
+                                + "binary data, so Kiln can't show it as text. You can open it in another app.")
+                                .button("Cancel", Ui.TEXT, null)
+                                .button("Open with...", Ui.FILLED, () -> {
+                                    openExternal(f, false);
+                                    return true;
+                                }).show();
                     } else {
                         openText(f, false);
                     }
@@ -3779,13 +3823,7 @@ public class MainActivity extends Activity {
                     if (r.optBoolean("ok")) {
                         sel.clear();
                         redraw();
-                        new Sheet(this, "Done").text(msg)
-                                .button("OK", Ui.TEXT, null)
-                                .button("Open folder", Ui.FILLED, () -> {
-                                    arc = null;
-                                    loadDir(new File(dest));
-                                    return true;
-                                }).show();
+                        extractResult(a, dest, msg, overwrite);
                     } else if (r.optBoolean("cancelled")) {
                         toast("Cancelled");
                     } else if (!overwrite && msg.contains("already exist")) {
@@ -3795,6 +3833,63 @@ public class MainActivity extends Activity {
                         message("Couldn't extract", msg);
                     }
                 });
+    }
+
+    /** The result of Extract: a header, the numbers as tiles, where it went, and Open folder. */
+    private void extractResult(Arc a, final String dest, String msg, boolean overwrite) {
+        int tone = Ui.accent(this);
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(R.drawable.ic_extract);
+        Ui.tint(ic, tone);
+        ic.setPadding(dp(13), dp(13), dp(13), dp(13));
+        ic.setBackground(Ui.shape(this, Ui.alpha(tone, 0x26), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, "Extraction complete", 18, true, false));
+        TextView nm = Ui.label(this, a.file.getName(), 13, false, true);
+        nm.setSingleLine(true);
+        nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(nm);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = dp(14);
+        head.addView(col, cp);
+        Sheet sh = new Sheet(this, null).content(head).space(16);
+
+        List<String[]> rows = new ArrayList<>();
+        // kiln's line: "extracted 2 file(s), 88 B in 0.0s - all checksums OK"
+        //          or: "extracted 5 file(s) from /path in 0.4s - all checksums OK" (no size)
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(\\d+) file\\(s\\)(?: from [^\\n]+?)?(?:, ([^\\n]+?))? in ([\\d.]+)s").matcher(msg);
+        boolean verified = msg.contains("all checksums OK");
+        if (m.find()) {
+            int n = Integer.parseInt(m.group(1));
+            LinearLayout stats = new LinearLayout(this);
+            if (m.group(2) != null) {
+                stats.addView(statTile(String.valueOf(n), n == 1 ? "file" : "files"), statLp(false));
+                stats.addView(statTile(m.group(2), "extracted"), statLp(true));
+                stats.addView(statTile(m.group(3) + " s", "took"), statLp(false));
+            } else {                                    // no size in the line: two wider tiles
+                stats.addView(statTile(String.valueOf(n), n == 1 ? "file" : "files"), Ui.tileLp(this, false, true));
+                stats.addView(statTile(m.group(3) + " s", "took"), Ui.tileLp(this, true, false));
+            }
+            sh.content(stats).space(16);
+        } else {
+            rows.add(new String[]{"Result", msg.isEmpty() ? "Done" : msg, "stack"});
+        }
+        rows.add(new String[]{"Saved to", dest, "stack"});
+        rows.add(new String[]{"From", a.file.getName(), "stack"});
+        if (verified) rows.add(new String[]{"Verification", "Every checksum matches"});
+        if (overwrite) rows.add(new String[]{"Existing files", "Replaced"});
+        sh.content(detailCard(rows)).space(4)
+                .button("OK", Ui.TEXT, null)
+                .button("Open folder", Ui.FILLED, () -> {
+                    arc = null;
+                    loadDir(new File(dest));
+                    return true;
+                }).show();
     }
 
     private void runTest() {

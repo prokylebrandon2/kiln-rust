@@ -935,6 +935,41 @@ def _wav_view(lines):
     return v
 
 
+_ST_HEAD = re.compile(r"^kiln\s+(\S+)\s+selftest\s+-\s+Python\s+(\S+),\s*(\d+)\s+core")
+_ST_CHECK = re.compile(r"^(PASS|FAIL)\s+(.*?)\s+\((\d+(?:\.\d+)?)s\)(?:\s+-\s+(.*))?$")
+_ST_SUM = re.compile(r"^(?:all (\d+) checks passed|(\d+) of (\d+) checks FAILED) in (\d+(?:\.\d+)?)s$")
+
+
+def _selftest_view(lines):
+    """The self-test report as data (None if it isn't in the shape we know)."""
+    checks, notes, head, summ = [], [], None, None
+    for ln in lines:
+        t = ln.strip()
+        if not t:
+            continue
+        m = _ST_HEAD.match(t)
+        if m and head is None:
+            head = {"version": m.group(1), "python": m.group(2), "cores": int(m.group(3))}
+            continue
+        m = _ST_CHECK.match(t)
+        if m:
+            checks.append({"ok": m.group(1) == "PASS", "name": m.group(2),
+                           "secs": float(m.group(3)), "msg": (m.group(4) or "").strip()})
+            continue
+        m = _ST_SUM.match(t)
+        if m:
+            summ = m
+            continue
+        notes.append(t)
+    if not checks:
+        return None
+    failed = sum(1 for c in checks if not c["ok"])
+    return {"type": "selftest", "head": head, "checks": checks, "notes": notes,
+            "total": len(checks), "failed": failed,
+            "secs": float(summ.group(4)) if summ else sum(c["secs"] for c in checks),
+            "finished": summ is not None}
+
+
 def tool(name, arg, progress):
     """Self-test, benchmark or WAV info. -> {ok, text}  (or cancelled=True when stopped)"""
     args = [name] + ([arg] if arg else [])
@@ -952,4 +987,6 @@ def tool(name, arg, progress):
         view = _bench_view(sink.lines)
     elif rc == 0 and name == "wavcheck":
         view = _wav_view(sink.lines)
+    elif name == "selftest":                       # a failed run still has checks worth showing
+        view = _selftest_view(sink.lines)
     return _j(ok=rc == 0, text=text or ("Done" if rc == 0 else "The tool failed"), view=view)

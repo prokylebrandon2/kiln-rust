@@ -276,7 +276,13 @@ final class Props {
     private static String typeOf(File f, String kind) {
         if ("archive".equals(kind) || "set".equals(kind)) return "application/x-kln";
         String m = MimeTypeMap.getSingleton().getMimeTypeFromExtension(Fmt.ext(f.getName()));
-        return m != null ? m : "Unknown";
+        if (m != null) return m;
+        if (f.isFile()) {                                    // no extension: go by the content
+            String s = Sniff.mime(f);
+            if (!"*/*".equals(s)) return s;
+            return "application/octet-stream";
+        }
+        return "Unknown";
     }
 
     /** "rw- rw- --- (660)" */

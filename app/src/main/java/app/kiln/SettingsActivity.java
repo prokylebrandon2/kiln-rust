@@ -24,6 +24,7 @@ import android.content.res.ColorStateList;
 import android.text.TextUtils;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -633,6 +634,128 @@ public class SettingsActivity extends Activity {
         sh.space(4).button("Close", Ui.FILLED, null).show();
     }
 
+    /** The self-test result: a verdict, three number tiles, failures first, then every check. */
+    private void showSelfTest(String title, JSONObject v) {
+        org.json.JSONArray checks = v.optJSONArray("checks");
+        if (checks == null) return;
+        int total = v.optInt("total", checks.length()), failed = v.optInt("failed");
+        boolean ok = failed == 0 && v.optBoolean("finished", true);
+        int tone = ok ? Ui.accent(this) : getColor(R.color.k_danger);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(ok ? R.drawable.ic_check : R.drawable.ic_close);
+        Ui.tint(ic, tone);
+        ic.setPadding(Ui.dp(this, 13), Ui.dp(this, 13), Ui.dp(this, 13), Ui.dp(this, 13));
+        ic.setBackground(Ui.shape(this, Ui.alpha(tone, 0x26), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(Ui.dp(this, 54), Ui.dp(this, 54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, ok ? "All checks passed"
+                : failed == 1 ? "1 check failed" : failed + " checks failed", 18, true, false));
+        JSONObject h = v.optJSONObject("head");
+        String sub = h == null ? "Self-test" : "Kiln " + h.optString("version") + "  ·  Python "
+                + h.optString("python") + "  ·  " + h.optInt("cores") + (h.optInt("cores") == 1 ? " core" : " cores");
+        TextView st = Ui.label(this, sub, 13, false, true);
+        st.setSingleLine(true);
+        st.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(st);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = Ui.dp(this, 14);
+        head.addView(col, cp);
+        Sheet sh = new Sheet(this, title).content(head).space(16);
+
+        LinearLayout tiles = new LinearLayout(this);
+        tiles.addView(Ui.statTile(this, String.valueOf(total), total == 1 ? "check" : "checks"),
+                Ui.tileLp(this, false, true));
+        tiles.addView(Ui.statTile(this, String.valueOf(total - failed), "passed"), Ui.tileLp(this, true, true));
+        tiles.addView(Ui.statTile(this, String.format(java.util.Locale.US, "%.1f s", v.optDouble("secs")), "took"),
+                Ui.tileLp(this, true, false));
+        sh.content(tiles);
+
+        if (!v.optBoolean("finished", true)) {
+            TextView t = Ui.label(this, "The run ended before the summary line, so some checks may be missing.",
+                    13, false, true);
+            sh.space(12).content(t);
+        }
+
+        if (failed > 0) {                                           // the ones that matter, first
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+            box.setBackground(Ui.shape(this, Ui.alpha(tone, 0x1F), 0, 14));
+            int n = 0;
+            for (int i = 0; i < checks.length(); i++) {
+                JSONObject c = checks.optJSONObject(i);
+                if (c == null || c.optBoolean("ok")) continue;
+                if (n++ > 0) box.addView(Ui.rule(this));
+                box.addView(checkRow(c, tone, true));
+            }
+            sh.space(16).content(Ui.label(this, "FAILED", 11, true, true)).space(6).content(box);
+        }
+
+        LinearLayout all = new LinearLayout(this);
+        all.setOrientation(LinearLayout.VERTICAL);
+        all.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+        all.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+        int shown = 0;
+        for (int i = 0; i < checks.length(); i++) {
+            JSONObject c = checks.optJSONObject(i);
+            if (c == null || !c.optBoolean("ok")) continue;
+            if (shown++ > 0) all.addView(Ui.rule(this));
+            all.addView(checkRow(c, Ui.accent(this), false));
+        }
+        if (shown > 0) {
+            sh.space(16).content(Ui.label(this, failed > 0 ? "PASSED" : "CHECKS", 11, true, true))
+                    .space(6).content(all);
+        }
+
+        org.json.JSONArray notes = v.optJSONArray("notes");
+        if (notes != null && notes.length() > 0) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < notes.length(); i++) {
+                if (i > 0) sb.append('\n');
+                sb.append(notes.optString(i));
+            }
+            sh.space(12).content(Ui.label(this, sb.toString(), 12, false, true));
+        }
+        sh.space(4).button("Close", Ui.FILLED, null).show();
+    }
+
+    /** One check: a status mark, its name and time, and the note under it when there is one. */
+    private View checkRow(JSONObject c, int tone, boolean failedRow) {
+        int d = Ui.dp(this, 1);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(c.optBoolean("ok") ? R.drawable.ic_check : R.drawable.ic_close);
+        Ui.tint(mark, tone);
+        top.addView(mark, new LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)));
+        TextView name = Ui.label(this, c.optString("name"), 14, failedRow, false);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        np.leftMargin = Ui.dp(this, 10);
+        np.rightMargin = Ui.dp(this, 10);
+        top.addView(name, np);
+        top.addView(Ui.label(this, String.format(java.util.Locale.US, "%.1f s", c.optDouble("secs")),
+                12, false, true));
+        row.addView(top);
+        String msg = c.optString("msg");
+        if (!msg.isEmpty()) {
+            TextView m = Ui.label(this, msg, 12, false, !failedRow);
+            if (failedRow) m.setTextColor(tone);
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            mp.leftMargin = Ui.dp(this, 28);
+            mp.topMargin = d * 3;
+            row.addView(m, mp);
+        }
+        return row;
+    }
+
     private void restartNote() {
         new Sheet(this, "Restart Kiln").text("The main script changes the next time Kiln starts. "
                 + "Close Kiln from the recent apps list and open it again.")
@@ -752,6 +875,10 @@ public class SettingsActivity extends Activity {
                 }
                 if (view != null && "wav".equals(view.optString("type"))) {
                     showWav(title, subject, view);
+                    return;
+                }
+                if (view != null && "selftest".equals(view.optString("type"))) {
+                    showSelfTest(title, view);
                     return;
                 }
                 if (tool.equals("wavcheck")) {                   // not a WAV it can describe: say so plainly

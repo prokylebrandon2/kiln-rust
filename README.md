@@ -140,3 +140,11 @@ and custom/fallback scripts.
 - **Delete source files after packing:** Settings > Packing (off by default) and a tick box in the Pack dialog. Only files confirmed inside a finished archive are removed, and only when the whole job succeeds; skipped files stay, and empty folders are tidied. The result card shows how many were deleted.
 - **Bookmarks show space:** storages show free/total; bookmarked folders show how much they hold (counted in the background).
 - Pack result no longer says "random names" for unencrypted one-archive-per-file packs.
+
+## 3.21
+
+- **Pull-down strip no longer clips the list:** the "can't open..." / empty-folder message used to stay put while the list slid down, so it landed on top of the ".." row. The message now moves with the list, and slides back with it on release.
+- **Search results show where they are:** every hit has its own line with the folder it is in (archives, sets, folders and files alike, including hits directly in the searched folder). Settings > "Path shown in results" still picks relative or absolute; long paths are cut at the start so the deepest folder stays visible.
+- **New "Extraction complete" screen:** header with the archive name, tiles for files, size and time, and a card with where it was saved, the source archive, the checksum result and whether files were replaced. Buttons: OK and Open folder.
+- **Self-test result redone:** a verdict header, tiles for checks / passed / time, failures listed first in red with their message, then every passed check with its time. The raw text list is still the fallback if the output isn't in the usual shape.
+- **Files without an extension:** Kiln looks at the first 8 KB when a name doesn't say what a file is. Text opens in Kiln's viewer and editor (empty files too); an extensionless picture opens in the image viewer; binary data no longer gets a "View as text" option (from inside an archive, Kiln says it looks binary and offers Open with...). Other apps are told the real type (text/plain, image/png, application/pdf, application/zip, ...), so "Open with" lists the right apps. Properties shows the detected type.

@@ -238,7 +238,7 @@ class Archive:
     def open(f, password=None):
         head = f.read(5)
         if head[:4] == b"KLN2": raise KilnError("this is an old KLN2 archive; use the old kiln.py to open it")
-        if len(head) < 5 or head[:4] != MAGIC: raise KilnError("not a kiln archive (expected format KLNA; archives from kiln 13 and older are not readable)")
+        if len(head) < 5 or head[:4] != MAGIC: raise KilnError("not a kiln archive (expected format KLNA)")
         flags = head[4]
         if flags & ~1: raise KilnError(NEWER)
         cipher = None

@@ -19,11 +19,13 @@ helper, so it does not need Termux, and it reads and writes the same archives.
 3. Download the `kiln-apk` artifact, unzip it, install `app-debug.apk`.
 4. Open Kiln and allow **All files access** when asked.
 
-## Rust engine (optional, experimental)
-`rust/` holds a Rust reader for `.kln` archives (open, test, extract; plain and encrypted). The
-**rust-engine** workflow job builds `libkiln_rs.so` (artifact `kiln-rust-engine`). In Settings ->
-Scripts -> **Rust engine**, choose the file for your phone's ABI. Anything it can't do (sets,
-WAV/MP3 files, a custom main script) still goes through Python. See `rust/HANDOFF.md`.
+## Rust engine (bundled)
+`rust/` holds the Rust engine. CI builds `libkiln_rs.so` for arm64-v8a and x86_64 and packages it in
+the APK (`jniLibs/<abi>/libkiln_rs.so`); there is nothing to choose or install in Settings. Opening,
+checking and extracting archives (plain, encrypted, WAV/MP3-filtered, sets) run in Rust. Packing and
+editing still go through the Python engine until the Rust packer is wired in (see `rust/HANDOFF.md`).
+The custom main script and the injectable engine were removed. Only the KLNA archive format is
+supported (older formats such as KLN9 or KLN2 are no longer recognised).
 
 ## Layout
 * `app/src/main/python/kiln_v14.py` - your script plus one change: `KILN_ACCEL_LIB` can name a
@@ -220,3 +222,10 @@ and custom/fallback scripts.
 ## 4.0.5
 
 - Check on a folder of separate archives now shows the same result sheet as a normal archive (files checked, size, time) instead of Kiln's raw output line with the path.
+
+## 4.0.6 (unreleased)
+
+- Removed Settings > Scripts (custom main script, injected Rust engine) and the file-signature settings.
+  Old script files are deleted at start-up.
+- The Rust engine is built into the APK.
+- Removed all references to unsupported archive formats (KLN9, KLN2): such files are now ordinary files.

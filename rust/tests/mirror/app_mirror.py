@@ -112,7 +112,7 @@ def sniff(path):
     if size >= MIN_ARCHIVE and len(head) >= 4 and head[:4] == MAGIC:
         if len(head) >= 5: return bool(head[4] & 1)
         raise Err("this file isn't a Kiln archive")
-    if size >= MIN_ARCHIVE and len(head) >= 4 and head[:4] in (b"KLN9", b"KLN2"):
+    if size >= MIN_ARCHIVE and len(head) >= 4 and head[:4] in ():
         raise Err("this archive was made by an older Kiln (format 9 or earlier) that this app can't open")
     raise Err("this file isn't a Kiln archive")
 

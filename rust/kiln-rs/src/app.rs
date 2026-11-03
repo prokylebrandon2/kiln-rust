@@ -262,9 +262,6 @@ fn sniff(path: &str) -> std::result::Result<bool, String> {
             Err("this file isn't a Kiln archive".into())
         };
     }
-    if size >= MIN_ARCHIVE && n >= 4 && (&head[..4] == b"KLN9" || &head[..4] == b"KLN2") {
-        return Err("this archive was made by an older Kiln (format 9 or earlier) that this app can't open".into());
-    }
     Err("this file isn't a Kiln archive".into())
 }
 
@@ -465,8 +462,8 @@ fn run(path: &str, password: &str, names: &[String], dest: &str, force: bool, wr
         Err(m) => return fail_json(&app_message(&m), 0),
     };
     if a.table.entries.iter().any(|e| make_unfilter(e).is_err()) {
-        // WAV/MP3 filters arrive in CP8: decide before anything is written
-        return unsupported("this archive uses the MP3 filter, which the Rust engine does not support yet");
+        // a filter this engine can't build (none are known today): decide before anything is written
+        return unsupported("this archive uses a filter the Rust engine does not support");
     }
     let t0 = Instant::now();
     let root = abspath(if write { dest } else { "." });

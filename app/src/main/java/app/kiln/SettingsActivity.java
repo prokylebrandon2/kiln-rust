@@ -36,7 +36,6 @@ import java.util.Map;
 /** Settings: a few switches and the list of "always open with" choices. */
 public class SettingsActivity extends Activity {
     private LinearLayout content;
-    private JSONObject scripts = new JSONObject();
     private long cacheBytes = -1;                  // size of the preview cache (-1 = not known yet)
     private interface Picked { void got(File f, String name); }
     private Picked picked;
@@ -178,23 +177,6 @@ public class SettingsActivity extends Activity {
                         + "a tick box each time.",
                 Defaults.deleteAfterPack(this), (b, on) -> Defaults.setDeleteAfterPack(this, on));
 
-        heading("SCRIPTS");
-        LinearLayout sr = card();
-        String mainName = scripts.optString("main", "");
-        String mainMagic = scripts.optString("main_magic", "");
-        choiceRow(sr, "Main script", mainName.isEmpty() ? "Built-in v14" : mainName,
-                "Used for everything. Applies the next time Kiln starts."
-                        + (mainMagic.isEmpty() ? "" : "\nRecognises files starting with " + mainMagic),
-                () -> scriptSheet("main", mainName));
-        String engName = scripts.optString("engine", "");
-        choiceRow(sr, "Rust engine",
-                engName.isEmpty() ? "Off (Python)"
-                        : engName + " v" + scripts.optString("engine_version", "?")
-                                + (scripts.optBoolean("engine_active") ? "" : " (not running)"),
-                "Optional, experimental. Reads archives with a prebuilt Rust library (.so). Applies at once. "
-                        + "Sets and WAV/MP3 files still use Python, and so does everything else if it fails.",
-                () -> engineSheet(engName));
-
         heading("TOOLS");
         LinearLayout tl = card();
         choiceRow(tl, "Self-test", "Run", "Checks packing, extracting and encryption on this phone.",
@@ -250,7 +232,7 @@ public class SettingsActivity extends Activity {
         heading("ADVANCED");
         LinearLayout ad = card();
         choiceRow(ad, "Parallel jobs", String.valueOf(Defaults.jobs(this)),
-                "Worker processes when packing. 1 is safest; more is experimental and can crash the app.",
+                "Workers when packing: processes, or threads if the app can't start processes. 1 is safest; more is experimental. The result sheet shows what was used.",
                 () -> {
                     Sheet sh = new Sheet(this, "Parallel jobs");
                     int[] opts = {1, 2, 4};
@@ -266,15 +248,17 @@ public class SettingsActivity extends Activity {
 
         heading("STORAGE");
         LinearLayout stc = card();
-        choiceRow(stc, "Preview cache", cacheBytes < 0 ? "..." : Fmt.size(cacheBytes),
-                "Files opened from archives are kept here so they open at once next time. "
-                        + "The oldest are removed automatically above 1 GB.", () ->
-                        new Sheet(this, "Clear the preview cache?")
+        choiceRow(stc, "Cache", cacheBytes < 0 ? "..." : Fmt.size(cacheBytes),
+                "Everything Kiln keeps temporarily: files opened from archives (so they open at once next time), "
+                        + "scratch copies and edit copies. Previews are trimmed automatically above 1 GB.", () ->
+                        new Sheet(this, "Clear the cache?")
                                 .text("Files you opened from archives will be extracted again the next time.")
                                 .button("Cancel", Ui.TEXT, null)
                                 .button("Clear", Ui.FILLED, () -> {
                                     new Thread(() -> {
-                                        py("clear_cache", "kiln_app", cacheDir().getPath());
+                                        for (java.io.File d : cacheDirs()) {
+                                            py("clear_cache", "kiln_app", d.getPath());
+                                        }
                                         loadCacheSize();
                                     }).start();
                                     return true;
@@ -327,8 +311,15 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    private java.io.File cacheDir() {
-        return new java.io.File(getCacheDir(), "preview");
+    /** Every folder Kiln uses for temporary files, so the size shown and "Clear" cover all of them. */
+    private java.util.List<java.io.File> cacheDirs() {
+        java.util.List<java.io.File> l = new java.util.ArrayList<>();
+        l.add(getCacheDir());                                  // preview, incoming, edit, pick, ...
+        java.io.File ext = getExternalCacheDir();
+        if (ext != null) {
+            l.add(ext);                                        // private-folder staging (priv/...)
+        }
+        return l;
     }
 
     // ---- protected folders (root / Shizuku)
@@ -406,22 +397,13 @@ public class SettingsActivity extends Activity {
     private void loadCacheSize() {
         new Thread(() -> {
             try {
-                final JSONObject o = new JSONObject(py("cache_size", "kiln_app", cacheDir().getPath()));
+                long sum = 0;
+                for (java.io.File d : cacheDirs()) {
+                    sum += new JSONObject(py("cache_size", "kiln_app", d.getPath())).optLong("bytes", 0);
+                }
+                final long total = sum;
                 runOnUiThread(() -> {
-                    cacheBytes = o.optLong("bytes", -1);
-                    render();
-                });
-            } catch (Exception ignored) {
-            }
-        }).start();
-    }
-
-    private void loadScripts() {
-        new Thread(() -> {
-            try {
-                final JSONObject o = new JSONObject(py("status", "kiln_scripts", getFilesDir().getPath()));
-                runOnUiThread(() -> {
-                    scripts = o;
+                    cacheBytes = total;
                     render();
                 });
             } catch (Exception ignored) {
@@ -478,130 +460,6 @@ public class SettingsActivity extends Activity {
                 else cb.got(f, n);
             });
         }).start();
-    }
-
-    private void scriptSheet(final String role, String current) {
-        final boolean isMain = role.equals("main");
-        Sheet sh = new Sheet(this, "Main script");
-        sh.text("Kiln's built-in v14 can't be removed. A replacement must provide every function the "
-                + "app uses; it's checked when you choose it, and the app returns to v14 if it fails to load.");
-        sh.option(R.drawable.ic_open, "Choose a .py file...", false,
-                () -> pickFile((f, n) -> installScript(role, f, n, "")));
-        if (!current.isEmpty()) {
-            final String sig = scripts.optString(role + "_magic", "");
-            sh.option(R.drawable.ic_edit, "Signature: " + (sig.isEmpty() ? "not set" : sig) + " (change)", false,
-                    () -> changeMagic(role, sig, null));
-            sh.option(R.drawable.ic_close, "Switch back to built-in v14", false, () -> {
-                py("remove", "kiln_scripts", getFilesDir().getPath(), role);
-                loadScripts();
-                if (isMain) restartNote();
-            });
-        }
-        sh.button("Cancel", Ui.TEXT, null).show();
-    }
-
-    private void engineSheet(String current) {
-        Sheet sh = new Sheet(this, "Rust engine");
-        sh.text("Choose the libkiln_rs.so built for this phone (arm64-v8a or x86_64). It is checked by "
-                + "loading it. Kiln keeps working with Python if the engine can't do something.");
-        sh.option(R.drawable.ic_open, "Choose a .so file...", false,
-                () -> pickFile((f, n) -> installScript("engine", f, n, "")));
-        if (!current.isEmpty()) {
-            sh.option(R.drawable.ic_close, "Switch back to Python", false, () -> {
-                py("remove", "kiln_scripts", getFilesDir().getPath(), "engine");
-                loadScripts();
-            });
-        }
-        sh.button("Cancel", Ui.TEXT, null).show();
-    }
-
-    private void installScript(final String role, final File f, final String name, final String magic) {
-        final Sheet busy = new Sheet(this, role.equals("engine") ? "Checking engine..." : "Checking script...").cancelable(false);
-        busy.show();
-        new Thread(() -> {
-            final String r = py("install", "kiln_scripts", getFilesDir().getPath(), role, f.getPath(), name, magic);
-            runOnUiThread(() -> {
-                busy.dismiss();
-                try {
-                    JSONObject o = new JSONObject(r);
-                    if (o.optBoolean("ok")) {
-                        f.delete();
-                        Toast.makeText(this, "Using " + name + " (v" + o.optString("version") + ")",
-                                Toast.LENGTH_SHORT).show();
-                        loadScripts();
-                        if (role.equals("main")) restartNote();
-                    } else if (o.optBoolean("need_magic")) {
-                        // the script doesn't say which files it handles (or the typed signature was wrong)
-                        askMagic(name, o.optString("message"), magic,
-                                m -> installScript(role, f, name, m), f::delete);
-                    } else {
-                        f.delete();
-                        new Sheet(this, role.equals("engine") ? "Can't use this engine" : "Can't use this script").text(o.optString("message"))
-                                .button("OK", Ui.FILLED, null).show();
-                    }
-                } catch (Exception e) {
-                    f.delete();
-                    new Sheet(this, role.equals("engine") ? "Can't use this engine" : "Can't use this script").text(r).button("OK", Ui.FILLED, null).show();
-                }
-            });
-        }).start();
-    }
-
-    /** Ask for the first bytes of the files a script handles. */
-    private void askMagic(String name, String message, String initial,
-                          final java.util.function.Consumer<String> ok, final Runnable cancel) {
-        final EditText ed = Ui.field(this, "KLNA   or   0x4B4C4E41", false);
-        ed.setText(initial == null ? "" : initial);
-        ed.setSelection(ed.length());
-        TextView hint = Ui.label(this, "The first bytes of the files this script reads, as text "
-                + "(KLNA) or hex (0x4B4C4E41). Up to 16 bytes. The file list uses this to tell which "
-                + "files are archives.", 12, false, true);
-        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hp.topMargin = Ui.dp(this, 10);
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(ed);
-        box.addView(hint, hp);
-        new Sheet(this, "Signature for " + name).keyboard()
-                .text(message == null || message.isEmpty() ? "Which files does this script handle?" : message)
-                .content(box)
-                .button("Cancel", Ui.TEXT, () -> {
-                    if (cancel != null) cancel.run();
-                    return true;
-                })
-                .button("Use it", Ui.FILLED, () -> {
-                    String t = ed.getText().toString().trim();
-                    if (t.isEmpty()) {
-                        ed.setError("Enter the signature");
-                        return false;
-                    }
-                    ok.accept(t);
-                    return true;
-                }).show();
-        ed.requestFocus();
-    }
-
-    /** Change the signature of the script that's already installed. */
-    private void changeMagic(final String role, String current, String message) {
-        askMagic("main script", message, current, m -> {
-            new Thread(() -> {
-                final String r = py("set_magic", "kiln_scripts", getFilesDir().getPath(), role, m);
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject o = new JSONObject(r);
-                        if (o.optBoolean("ok")) {
-                            loadScripts();
-                            if (role.equals("main")) restartNote();
-                        } else {
-                            changeMagic(role, m, o.optString("message"));
-                        }
-                    } catch (Exception e) {
-                        new Sheet(this, "Couldn't change it").text(r).button("OK", Ui.FILLED, null).show();
-                    }
-                });
-            }).start();
-        }, null);
     }
 
     // ---- nicer results for Benchmark and WAV info
@@ -895,12 +753,6 @@ public class SettingsActivity extends Activity {
         return row;
     }
 
-    private void restartNote() {
-        new Sheet(this, "Restart Kiln").text("The main script changes the next time Kiln starts. "
-                + "Close Kiln from the recent apps list and open it again.")
-                .button("OK", Ui.FILLED, null).show();
-    }
-
     /** Python reports tool progress here and polls for cancellation. Public so Python can call it. */
     public static class ToolProgress {
         private final SettingsActivity owner;
@@ -1042,7 +894,6 @@ public class SettingsActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        loadScripts();
         loadCacheSize();
     }
 

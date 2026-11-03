@@ -40,6 +40,20 @@ jobs:
               "$BIN/${triple}-linux-android30-clang" -Wl,-z,max-page-size=16384
           done
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      # The Rust engine is part of the app: it goes into jniLibs next to the C helper.
+      - name: Build libkiln_rs.so with the NDK
+        working-directory: rust/kiln-rs
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
+        run: |
+          cargo install cargo-ndk --locked
+          cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o ../../app/src/main/jniLibs build --release
+          ls -l ../../app/src/main/jniLibs/*/
+
       - name: Build the APK
         run: gradle :app:assembleDebug --stacktrace
 
@@ -48,8 +62,7 @@ jobs:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
 
-  # The optional Rust engine (libkiln_rs.so). A separate job: the APK above never depends on it, and
-  # the app falls back to Python whenever the engine is missing or can't do something.
+  # The Rust engine's tests (the library itself is built into the APK by the job above).
   rust-engine:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -70,9 +83,33 @@ jobs:
           pip install cryptography
           python tools/make_corpus.py ../app/src/main/python/kiln_v14.py tests/corpus
 
+      - name: MP3 test corpus (ffmpeg makes the MP3s, the real engine packs them)
+        working-directory: rust
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          python tools/make_mp3_corpus.py ../app/src/main/python/kiln_v14.py tests/mp3corpus
+          python tools/make_mp3_fuzz.py ../app/src/main/python/kiln_v14.py tests/mp3corpus 40
+
+      - name: Packer test vectors (range encoder, match finder, block builder: real C / Python engine)
+        working-directory: rust
+        run: |
+          python tools/make_enc_vectors.py ../app/src/main/python/kiln_v14.py tests/encvec
+          python tools/make_lz_vectors.py ../app/src/main/python/kiln_v14.py tests/lzvec
+          python tools/make_blk_vectors.py ../app/src/main/python/kiln_v14.py tests/blkvec
+
       - name: Rust tests
         working-directory: rust/kiln-rs
         run: cargo test --release
+
+      - name: The compiled library against the real Python engine
+        working-directory: rust
+        run: |
+          for part in open test extract cancel fnmatch unsupported sets sets2 sets3 sets4 sets5; do
+            echo "== $part"; python tests/rs_so/run.py kiln-rs/target/release/libkiln_rs.so ../app/src/main/python tests/corpus $part | tee /tmp/part.log
+            ! grep -q '^FAIL' /tmp/part.log
+          done
+          python tests/rs_so/test_mp3_so.py kiln-rs/target/release/libkiln_rs.so ../app/src/main/python tests/mp3corpus
+          python tests/rs_so/test_pack_each_so.py kiln-rs/target/release/libkiln_rs.so ../app/src/main/python
 
       - name: Build libkiln_rs.so for Android
         working-directory: rust/kiln-rs

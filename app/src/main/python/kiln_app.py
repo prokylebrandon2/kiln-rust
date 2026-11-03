@@ -31,53 +31,33 @@ def version():
 
 # ---------------------------------------------------------------- browsing
 
-# The first bytes that mark a file as one of ours: the main script's signature
-# (set at start-up; see kiln_scripts).
-main_sig = _MAGIC
-_sniff_len = 5
-_sniff_min = _MIN_ARCHIVE
-
-
-def set_signature(main):
-    global main_sig, _sniff_len, _sniff_min
-    main_sig = main or _MAGIC
-    _sniff_len = max(5, len(main_sig) + 1)
-    _sniff_min = _main_min()
-
-
-def _main_min():
-    return _MIN_ARCHIVE if main_sig == _MAGIC else len(main_sig)
+_SNIFF_LEN = 5
 
 
 def _sniff(path, size):
-    """-> ('archive', encrypted) | ('old', False) | None, from the first bytes of a file.
+    """-> ('archive', encrypted) | None, from the first bytes of a file.
     Reads straight from the descriptor: a buffered open() would pull in a whole 8 KB block."""
-    if size < _sniff_min:
+    if size < _MIN_ARCHIVE:
         return None
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
         return None
     try:
-        head = os.read(fd, _sniff_len)
+        head = os.read(fd, _SNIFF_LEN)
     except OSError:
         return None
     finally:
         os.close(fd)
-    if head.startswith(main_sig) and size >= _main_min():
-        if main_sig == _MAGIC:
-            # only this format's flag byte is known; others are asked for a password when opened
-            return ("archive", bool(head[4] & kiln.FLAG_ENCRYPTED)) if len(head) >= 5 else None
-        return "archive", False
-    if head[:4] in (b"KLN9", b"KLN2"):
-        return "old", False
+    if head.startswith(_MAGIC) and len(head) >= 5:
+        return "archive", bool(head[4] & kiln.FLAG_ENCRYPTED)
     return None
 
 
 def scan_params():
     """What the Java side needs to recognise archives itself (it lists folders natively, which is
     faster than a round trip through Python for every folder)."""
-    return _j(sig=main_sig.hex(), min=_main_min(), builtin=main_sig == _MAGIC,
+    return _j(sig=_MAGIC.hex(), min=_MIN_ARCHIVE, builtin=True,
               enc=kiln.FLAG_ENCRYPTED, index=kiln.INDEX_NAME)
 
 
@@ -205,9 +185,9 @@ def search(path, query, show_all, show_hidden=False):
 # ---------------------------------------------------------------- opening
 
 def _rust(op, args, progress=None):
-    """The Rust engine's JSON answer, or None = use Python (no engine, unsupported job, custom
-    main script, or the engine failed)."""
-    if main_sig != _MAGIC or not rs.active():
+    """The Rust engine's JSON answer, or None = use Python (no engine, unsupported job, or the
+    engine failed)."""
+    if not rs.active():
         return None
     r = rs.run(op, args, progress)
     return None if r is None else json.dumps(r, ensure_ascii=False)
@@ -238,9 +218,6 @@ def _open_main(path, password):
         sn = _sniff(path, os.path.getsize(path))
         if sn is None:
             return _j(ok=False, error="this file isn't a Kiln archive")
-        if sn[0] == "old":
-            return _j(ok=False, error="this archive was made by an older Kiln (format 9 or "
-                                       "earlier) that this app can't open")
         enc = sn[1]
         if enc and not password:
             return _j(ok=False, need_password=True)
@@ -584,11 +561,21 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, delete_src
     if not files:
         return _j(ok=False, message="there is nothing to pack")
     existed = os.path.lexists(dest)
-    args = ["pack"] + (["-e"] if encrypt else []) + (["-s"] if encrypt and store else []) \
-        + (["-i"] if each else []) + (["-f"] if overwrite else []) + ["--", dest] + items
-    keep = []
-    res = _run(args, password, len(files), progress, not each,
-               sum(f["size"] for f in files), each, keep)
+    packed = None
+    res = _rust("pack", {"items": items, "dest": dest, "encrypt": bool(encrypt), "store": bool(store),
+                         "overwrite": bool(overwrite), "password": password or "", "each": bool(each),
+                         "jobs": bridge.JOBS if bridge.JOBS > 1 else 0}, progress)
+    if res is not None:
+        out = json.loads(res)
+        packed = out.pop("packed", None)
+        keep = [type("P", (), {"packed": packed or []})()] if out.get("ok") else []
+        res = _j(**out)
+    else:
+        args = ["pack"] + (["-e"] if encrypt else []) + (["-s"] if encrypt and store else []) \
+            + (["-i"] if each else []) + (["-f"] if overwrite else []) + ["--", dest] + items
+        keep = []
+        res = _run(args, password, len(files), progress, not each,
+                   sum(f["size"] for f in files), each, keep)
     out = json.loads(res)
     if not out.get("ok") and not existed:      # don't leave half-written output
         for leftover in (dest, dest + ".tmp"):

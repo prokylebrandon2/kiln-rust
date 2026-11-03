@@ -1,8 +1,7 @@
-"""The optional Rust engine: a prebuilt libkiln_rs.so (see kiln-rs/include/kiln_rs.h) chosen in Settings.
+"""The Rust engine: libkiln_rs.so is bundled in the APK (see kiln-rs/include/kiln_rs.h).
 
-It reads archives (open / test / extract); everything else stays with the Python engine. Whenever the
-Rust engine says "unsupported" (sets, WAV/MP3 files for now), can't be loaded, or the main script is a
-custom one, the caller uses Python instead, so installing it can never make something stop working.
+It reads archives (open / test / extract); packing and editing are still Python until the Rust
+packer is wired in. If the library can't be loaded, or says "unsupported", the caller uses Python.
 Loaded with ctypes (like the C helper), so no JNI is needed."""
 import ctypes
 import json

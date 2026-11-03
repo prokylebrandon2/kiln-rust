@@ -12,8 +12,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub const INDEX_NAME: &str = "_index.kln";
 const INDEX_FILE: &str = "index.json";
-const MP3_MSG: &str = "this archive uses the MP3 filter, which the Rust engine does not support yet";
-/// Unwinds a run that met an MP3 filter (the run is undone, the app then answers "unsupported").
+const MP3_MSG: &str = "this archive uses a filter the Rust engine does not support";
+/// Unwinds a run that met a filter this engine cannot build (the run is undone, the app then answers "unsupported").
 const UNSUPPORTED_ERR: &str = "\u{1}unsupported";
 const DAMAGED_INDEX: &str = "the index archive is damaged or isn't a kiln index";
 
@@ -251,7 +251,7 @@ fn extract_one(src: &str, out_dir: &str, pw: &str, write: bool, name: &str, prog
     }
 }
 
-/// An MP3 filter turned up: leave nothing of this run behind.
+/// An unsupported filter turned up: leave nothing of this run behind.
 fn undo(moved: &[String], made: &[String]) {
     for p in moved.iter().rev() {
         let _ = fs::remove_file(p);

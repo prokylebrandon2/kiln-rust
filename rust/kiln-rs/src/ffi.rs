@@ -3,7 +3,7 @@
 //!   char *kiln_rs_call(const char *op, const char *args_json, kiln_rs_cb cb, void *user);
 //!   void  kiln_rs_free(char *s);
 //!
-//! ops: "version" | "open" | "test" | "extract"   (see include/kiln_rs.h for the arguments)
+//! ops: "version" | "open" | "test" | "extract" | "pack"   (see include/kiln_rs.h for the arguments)
 //! `cb` (may be NULL) is called with a progress event (JSON) or with NULL to ask "cancelled?";
 //! a non-zero return means cancel. The result is always a Rust-owned C string that
 //! the caller releases with kiln_rs_free. A panic is caught and returned as {"ok":false,...}.
@@ -61,6 +61,7 @@ pub fn call(op: &str, args: &str, prog: &mut dyn Progress) -> String {
             let overwrite = a.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             app::extract(s(&a, "path"), s(&a, "password"), &members, s(&a, "dest"), overwrite, prog)
         }
+        "pack" => crate::packapp::pack(&a, prog),
         _ => json!({"ok": false, "error": format!("unknown operation: {op}")}).to_string(),
     }
 }

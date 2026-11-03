@@ -18,6 +18,12 @@ typedef int (*kiln_rs_cb)(const char *event, void *user);
  *                   "members":[{"p":"dir/file","dir":false},...]}   ([] = everything)
  *                                                        -> {"ok","message","done","bad_password"}
  *                                                           or {"ok":false,"cancelled":true,"message":"Cancelled"}
+ * op = "pack"    : {"items":[paths],"dest","encrypt":b,"store":b,"overwrite":b,"password","each":b,"jobs":N}
+ *                   each=false: dest is the archive; each=true: dest is the OUTPUT FOLDER, one archive per file
+ *                   (plain: mirrored layout, NAME.kln; encrypted: random names + an encrypted _index.kln).
+ *                   jobs 0 = automatic                   -> {"ok","message","done","packed":[paths],"warnings":[..]}
+ *                                                           or {"ok":false,"cancelled":true,"message":"Cancelled"}
+ *                                                           or {"unsupported":true} (caller falls back to Python)
  * Result: NUL-terminated UTF-8 JSON owned by the engine; release with kiln_rs_free. Never NULL. */
 char *kiln_rs_call(const char *op, const char *args_json, kiln_rs_cb cb, void *user);
 void kiln_rs_free(char *s);

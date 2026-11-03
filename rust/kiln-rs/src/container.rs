@@ -4,6 +4,7 @@
 //! Error texts are the same as the Python engine's, so the app can show them unchanged.
 
 use crate::bcj::{Bcj, BCJ_ARM64, BCJ_X86};
+use crate::mp3::Mp3Un;
 use crate::wav::Wav;
 use crate::crypto::{self, CryptSource};
 use crate::rc;
@@ -260,6 +261,8 @@ impl<'a> StreamReader<'a> {
 pub enum Unfilter {
     Bcj(Bcj),
     Wav(Wav),
+    /// MP3 recompression (filter 120): collects the packed bytes, decodes in `finish`
+    Mp3(Mp3Un),
 }
 
 impl Unfilter {
@@ -267,23 +270,28 @@ impl Unfilter {
         match self {
             Unfilter::Bcj(b) => Ok(b.feed(chunk)),
             Unfilter::Wav(w) => w.feed(chunk),
+            Unfilter::Mp3(m) => {
+                m.feed(chunk);
+                Ok(Vec::new())
+            }
         }
     }
     pub fn finish(&mut self) -> Result<Vec<u8>> {
         match self {
             Unfilter::Bcj(b) => Ok(b.finish()),
             Unfilter::Wav(w) => w.finish(),
+            Unfilter::Mp3(m) => m.finish(),
         }
     }
 }
 
-/// python `make_unfilter`: None for plain/dead entries. MP3 (filter 120) is still Python-only.
+/// python `make_unfilter`: None for plain/dead entries.
 pub fn make_unfilter(e: &Entry) -> Result<Option<Unfilter>> {
     if e.filt == 0 || e.dead {
         return Ok(None);
     }
     if e.filt == MP3_FID {
-        return err("this file uses the MP3 filter that the Rust engine does not support yet");
+        return Ok(Some(Unfilter::Mp3(Mp3Un::new(e.size))));
     }
     if e.filt == BCJ_X86 || e.filt == BCJ_ARM64 {
         return Ok(Some(Unfilter::Bcj(Bcj::new(e.filt))));
@@ -320,11 +328,8 @@ impl<R: Read + Seek> Archive<R> {
     pub fn open(mut f: R, password: Option<&str>) -> Result<Archive<R>> {
         let io = |e: std::io::Error| KilnError(format!("read error: {e}"));
         let head = read_upto(&mut f, 5)?;
-        if head.len() >= 4 && &head[..4] == b"KLN2" {
-            return err("this is an old KLN2 archive; use the old kiln.py to open it");
-        }
         if head.len() < 5 || &head[..4] != MAGIC {
-            return err("not a kiln archive (expected format KLNA; archives from kiln 13 and older are not readable)");
+            return err("not a kiln archive (expected format KLNA)");
         }
         let flags = head[4];
         if flags & !FLAG_ENCRYPTED != 0 {

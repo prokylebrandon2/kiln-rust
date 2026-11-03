@@ -1204,7 +1204,21 @@ public class MainActivity extends Activity {
         Sheet s = new Sheet(this, heading);
         for (int i = 0; i < labels.length; i++) {
             final int id = ids[i];
-            s.option(menuIcon(id), labels[i], false, () -> onMenu(id));
+            s.option(menuIcon(id), labels[i], false, () -> {
+                // a sheet this item opens returns to this menu (with the same selection) when it is backed out of
+                final java.util.Set<String> keep = new java.util.LinkedHashSet<>(sel);
+                Sheet.nextBack = () -> {
+                    sel.clear();
+                    sel.addAll(keep);
+                    redraw();
+                    showMenu();
+                };
+                try {
+                    onMenu(id);
+                } finally {
+                    Sheet.nextBack = null;
+                }
+            });
         }
         s.show();
     }
@@ -2015,7 +2029,8 @@ public class MainActivity extends Activity {
                 if (!Python.isStarted()) Python.start(new AndroidPlatform(MainActivity.this));
                 Python py = Python.getInstance();
                 String helper = getApplicationInfo().nativeLibraryDir + "/libkiln_accel.so";
-                String note = py.getModule("kiln_boot").callAttr("init", helper, getFilesDir().getPath()).toString();
+                String note = py.getModule("kiln_boot").callAttr("init", helper, getFilesDir().getPath(),
+                        getApplicationInfo().nativeLibraryDir + "/libkiln_rs.so").toString();
                 app = py.getModule("kiln_app");
                 edit = py.getModule("kiln_edit");
                 app.callAttr("set_jobs", Defaults.jobs(MainActivity.this));
@@ -2274,9 +2289,6 @@ public class MainActivity extends Activity {
                     } else {
                         kind = "archive";
                     }
-                } else if (n >= 4 && head[0] == 'K' && head[1] == 'L' && head[2] == 'N'
-                        && (head[3] == '9' || head[3] == '2')) {
-                    kind = "old";
                 }
             }
             if (kind.equals("file") && !all) return null;
@@ -2319,9 +2331,9 @@ public class MainActivity extends Activity {
         List<JSONObject> items = new ArrayList<>(got.length);
         for (JSONObject o : got) if (o != null) items.add(o);
         Collections.sort(items, (x, y) -> {
-            boolean fx = !x.optString("k").equals("archive") && !x.optString("k").equals("old")
+            boolean fx = !x.optString("k").equals("archive")
                     && !x.optString("k").equals("file");
-            boolean fy = !y.optString("k").equals("archive") && !y.optString("k").equals("old")
+            boolean fy = !y.optString("k").equals("archive")
                     && !y.optString("k").equals("file");
             if (fx != fy) return fx ? -1 : 1;
             return x.optString("n").compareToIgnoreCase(y.optString("n"));
@@ -2497,12 +2509,6 @@ public class MainActivity extends Activity {
                     row.sub = (it.enc ? "Encrypted archive \u00b7 " : "Archive \u00b7 ") + when;
                     row.right = Fmt.size(it.size);
                     break;
-                case "old":
-                    row.size = it.size;
-                    row.icon = R.drawable.ic_archive;
-                    row.sub = "Older Kiln format \u00b7 can't be opened here";
-                    row.right = Fmt.size(it.size);
-                    break;
                 default:
                     row.size = it.size;
                     row.icon = Thumbs.iconFor(it.name);
@@ -2554,10 +2560,6 @@ public class MainActivity extends Activity {
             case "dir": loadDir(new File(cwd, it.name)); break;
             case "archive":
             case "set": openItem(it, null); break;
-            case "old":
-                message("Older format", "This archive was made by an older Kiln (format 9 or earlier) "
-                        + "that this app can't open.");
-                break;
             default: openRegular(new File(cwd, it.name), it); break;
         }
     }
@@ -2806,10 +2808,6 @@ public class MainActivity extends Activity {
 
     private void openItem(final Item it, final Runnable after) {
         final File f = new File(cwd, it.name);
-        if (it.kind.equals("old")) {
-            onRowClick(items.indexOf(it));
-            return;
-        }
         if (it.kind.equals("set") || it.enc) {
             askPassword(f.getName(), pw -> doOpen(f, pw, after));
         } else {
@@ -3576,8 +3574,20 @@ public class MainActivity extends Activity {
                 });
             }
             sheet = sh;
-            sh.show();
+            // A job that ends within a moment never shows the sheet: opening and closing it for a
+            // few milliseconds is what looked like a flash/stutter (README note 13).
+            ui.postDelayed(showLater, SHOW_AFTER_MS);
         }
+
+        private static final long SHOW_AFTER_MS = 250;
+        private boolean shown;
+        private final Runnable showLater = new Runnable() {
+            @Override public void run() {
+                if (closed || shown) return;
+                shown = true;
+                sheet.show();
+            }
+        };
 
         // The engine reports only when a chunk is finished, which can be seconds apart on a phone.
         // So the bar eases toward each report and, between reports, creeps forward at the speed
@@ -3647,8 +3657,9 @@ public class MainActivity extends Activity {
         void close() {
             closed = true;
             ui.removeCallbacks(tick);
+            ui.removeCallbacks(showLater);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            sheet.dismiss();
+            if (shown) sheet.dismiss();                         // never shown: nothing to animate away
         }
     }
 
@@ -4500,6 +4511,10 @@ public class MainActivity extends Activity {
         rows.add(new String[]{"Layout", separate ? (encrypt ? "One archive per file, random names"
             : "One archive per file") : "Single archive"});
         rows.add(new String[]{"Encryption", encrypt ? "AES-256-GCM" : "None"});
+        // kiln ends its line with e.g. "[2 cores]", "[1 core]" or "[2 threads - worker processes failed: ...]"
+        java.util.regex.Matcher pm = java.util.regex.Pattern.compile("\\[([^\\]]*(?:core|thread)[^\\]]*)\\]")
+                .matcher(msg);
+        if (pm.find()) rows.add(new String[]{"Parallel", pm.group(1), "stack"});
         if (noCompress) rows.add(new String[]{"Compression", "Stored only"});
         if (deleted >= 0) {                              // -1: the option was off
             rows.add(new String[]{"Originals", plural(deleted, "file deleted", "files deleted")
@@ -4675,13 +4690,6 @@ public class MainActivity extends Activity {
                     o.put("helper", v.optString("helper"));
                 } catch (Exception ignored) {
                 }
-                try {
-                    PyObject m = Python.getInstance().getModule("kiln_scripts");
-                    JSONObject sc = new JSONObject(m.callAttr("status", getFilesDir().getPath()).toString());
-                    o.put("main", sc.optString("main"));
-                    o.put("main_version", sc.optString("main_version"));
-                } catch (Exception ignored) {
-                }
             }
             return o;
         }, o -> showAbout(ver, build, o));
@@ -4729,13 +4737,10 @@ public class MainActivity extends Activity {
         // details: label on the left, value on the right, thin lines between
         String engine = o.optString("engine");
         String helper = o.optString("helper");
-        String mainName = o.optString("main");
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[]{"Version", ver + (build > 0 ? " (build " + build + ")" : "")});
         if (!engine.isEmpty()) rows.add(new String[]{"Engine", "kiln " + engine});
         if (app != null) rows.add(new String[]{"Fast mode", helper.isEmpty() ? "On" : "Off \u2013 " + helper});
-        rows.add(new String[]{"Main script", mainName.isEmpty() ? "Built-in"
-                : mainName + (o.optString("main_version").isEmpty() ? "" : " (v" + o.optString("main_version") + ")")});
         rows.add(new String[]{"Encryption", "AES-256-GCM"});
 
         LinearLayout card = detailCard(rows);

@@ -1289,8 +1289,13 @@ import atexit
 atexit.register(stop_mp3_ahead)
 
 
+POOL_ERROR = ""          # why make_pool couldn't start worker processes (shown in the "[N cores]" note)
+
+
 def make_pool(jobs):
-    """A pool of worker processes, or None (then everything runs serially)."""
+    """A pool of worker processes, or None (the Encoder then tries threads, then runs serially)."""
+    global POOL_ERROR
+    POOL_ERROR = ""
     if jobs <= 1:
         return None
     try:
@@ -1302,8 +1307,18 @@ def make_pool(jobs):
             ctx = None
         return cf.ProcessPoolExecutor(max_workers=jobs, mp_context=ctx,
                                       initializer=_worker_init, initargs=(PARSE,))
-    except Exception:
+    except Exception as e:
+        POOL_ERROR = repr(e)[:80]
         return None
+
+
+def make_thread_pool(jobs):
+    """Fallback when worker processes can't be used (an app can't always fork): the heavy work runs in the
+    C helper through ctypes, which releases the GIL, so threads still use several cores."""
+    import concurrent.futures as cf
+    # the helper fills a few static tables on first use: do that once, here, before threads race on it
+    build_blocks(bytes(range(256)) * 8 + bytes(1024), 0)
+    return cf.ThreadPoolExecutor(max_workers=jobs)
 
 
 class Encoder:
@@ -1318,7 +1333,11 @@ class Encoder:
         self.futs = collections.deque()
         self.par_done = 0          # segments finished by worker processes
         self.ser_done = 0          # segments done in this process
-        self.fail = None           # why the workers weren't used, if they weren't
+        self.fail = None           # why the worker processes weren't used, if they weren't
+        self.jobs = max(jobs, 1)
+        self.threads = False       # True: segments run on a thread pool (process pool unavailable)
+        if pool is None and self.jobs > 1 and not store and POOL_ERROR:
+            self._to_threads(POOL_ERROR)
         self.pending = bytearray()
         self.history = b""
         self.since = 0             # bytes fed since the last checkpoint
@@ -1359,6 +1378,8 @@ class Encoder:
     def finish(self):
         self.flush()
         self._drain()
+        if self.threads and self.pool is not None:
+            self.pool.shutdown(wait=True)
         stop_mp3_ahead()
         self.sink.write_record(b"\x02", final=True)
 
@@ -1378,8 +1399,12 @@ class Encoder:
             try:
                 fut = self.pool.submit(_lz_job, job)
             except Exception as e:
-                self.pool = None  # pool unusable: carry on in this process
-                self.fail = self.fail or repr(e)[:80]
+                self._to_threads(repr(e)[:80])      # process pool unusable
+                if self.pool is not None:
+                    try:
+                        fut = self.pool.submit(_lz_job, job)
+                    except Exception:
+                        self.pool = None            # carry on in this process
         if fut is None:
             self.ser_done += 1
             self._write(build_blocks(*job), n_new)
@@ -1395,9 +1420,8 @@ class Encoder:
             self.par_done += 1
         except KilnError:
             raise
-        except Exception as e:  # a worker died: redo this segment here
-            self.pool = None
-            self.fail = self.fail or repr(e)[:80]
+        except Exception as e:  # a worker died: redo this segment here, later ones go to threads
+            self._to_threads(repr(e)[:80])
             self.ser_done += 1
             blocks = build_blocks(*job)
         self._write(blocks, n_new)
@@ -1405,6 +1429,19 @@ class Encoder:
     def _drain(self):
         while self.futs:
             self._drain_one()
+
+    def _to_threads(self, reason):
+        """Worker processes failed: remember why and switch to a thread pool (or serial if that fails too)."""
+        self.fail = self.fail or reason
+        if self.threads:                 # the thread pool itself failed: serial from here on
+            self.pool = None
+            return
+        try:
+            self.pool = make_thread_pool(self.jobs)
+            self.threads = True
+        except Exception as e:
+            self.pool = None
+            self.fail += f"; threads: {repr(e)[:40]}"
 
     def _write(self, blocks, n_new):
         for btype, raw, payload in blocks:
@@ -1627,10 +1664,8 @@ def open_archive(path, password=None):
         raise KilnError(f"cannot open {path}: {e.strerror}")
     try:
         head = f.read(5)
-        if head[:4] == b"KLN2":
-            raise KilnError("this is an old KLN2 archive; use the old kiln.py to open it")
         if head[:4] != MAGIC or len(head) < 5:
-            raise KilnError("not a kiln archive (expected format KLNA; archives from kiln 13 and older are not readable)")
+            raise KilnError("not a kiln archive (expected format KLNA)")
         flags = head[4]
         if flags & ~FLAG_ENCRYPTED:
             raise KilnError("archive uses features from a newer kiln")
@@ -1669,6 +1704,8 @@ def core_note(enc, jobs):
     """' [4 cores]' style note for summary lines."""
     if not (enc.par_done or enc.ser_done):
         return ""
+    if enc.threads and enc.par_done:
+        return f" [{jobs} threads - worker processes failed: {enc.fail}]"
     cores = (f"{jobs} cores" if enc.par_done and not enc.ser_done else
              "1 core" if not enc.par_done else f"{jobs} cores, partly serial")
     return f" [{cores}]" if not enc.fail else f" [1 core - parallel failed: {enc.fail}]"

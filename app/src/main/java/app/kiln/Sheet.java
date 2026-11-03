@@ -49,6 +49,11 @@ final class Sheet {
     private boolean insetsSeen;
     private android.animation.ObjectAnimator glide;
     private Runnable onClose;
+    /** Set (by a menu) just before it opens a sheet: that sheet takes it and runs it when the person
+     *  backs out of it (Back, a tap outside, or a button with no action such as Cancel / OK). */
+    static Runnable nextBack;
+    private Runnable back;
+    private boolean userCancel;
 
     /** The card measures itself so it never grows taller than the room above the keyboard. */
     private final class Card extends LinearLayout {
@@ -69,10 +74,15 @@ final class Sheet {
 
     Sheet(Activity a, String title) {
         act = a;
+        back = nextBack;
+        nextBack = null;
         dialog = new Dialog(a, R.style.KilnSheet) {
             @Override
             public void onBackPressed() {
-                if (cancelable) Sheet.this.dismiss();
+                if (cancelable) {
+                    userCancel = true;
+                    Sheet.this.dismiss();
+                }
             }
         };
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -83,10 +93,16 @@ final class Sheet {
         scrim.setBackgroundColor(Color.BLACK);
         scrim.setAlpha(0f);
         scrim.setOnClickListener(v -> {
-            if (cancelable) dismiss();
+            if (cancelable) {
+                userCancel = true;
+                dismiss();
+            }
         });
         screen.setOnClickListener(v -> {                 // a tap beside the card closes it too
-            if (cancelable) dismiss();
+            if (cancelable) {
+                userCancel = true;
+                dismiss();
+            }
         });
         // the scrim is a sibling of the padded holder, so the padding can't inset it
         root.addView(scrim, new FrameLayout.LayoutParams(
@@ -256,7 +272,12 @@ final class Sheet {
 
     Sheet button(String label, int kind, final Click click) {
         Button b = Ui.button(act, label, kind, v -> {
-            if (click == null || click.run()) dismiss();
+            if (click == null) {
+                userCancel = true;
+                dismiss();
+            } else if (click.run()) {
+                dismiss();
+            }
         });
         buttons.add(b);
         last = b;
@@ -365,6 +386,7 @@ final class Sheet {
 
         dialog.setOnDismissListener(d -> {
             if (onClose != null) onClose.run();
+            if (userCancel && back != null) back.run();
         });
         if (act.isFinishing()) return this;
         dialog.show();

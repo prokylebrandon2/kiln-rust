@@ -97,7 +97,7 @@ final class Sniff {
         if (ascii(b, 0, "SQLite format 3")) return "application/vnd.sqlite3";
         if (at(b, 0, 0x7F, 0x45, 0x4C, 0x46)) return "application/x-executable";
         if (ascii(b, 0, "dex\n")) return "application/octet-stream";
-        if (ascii(b, 0, "KLNA") || ascii(b, 0, "KLN9") || ascii(b, 0, "KLN2")) return "application/octet-stream";
+        if (ascii(b, 0, "KLNA")) return "application/octet-stream";
         return null;
     }
 

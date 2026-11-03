@@ -3,16 +3,16 @@
 
 use std::sync::OnceLock;
 
-const RC_TOP: u32 = 1 << 24;
-const RC_LC: u32 = 3;
-const RC_PB: u32 = 2;
-const RC_LPMAX: u8 = 2;
-const RC_NS: usize = 8 << RC_PB; // 32
+pub(crate) const RC_TOP: u32 = 1 << 24;
+pub(crate) const RC_LC: u32 = 3;
+pub(crate) const RC_PB: u32 = 2;
+pub(crate) const RC_LPMAX: u8 = 2;
+pub(crate) const RC_NS: usize = 8 << RC_PB; // 32
 const RC_RA: u32 = 4;
 const RC_RB: u32 = 7;
 const RC_K: f64 = 1.6;
 const RC_NMAX: u8 = 255;
-const LIT_SIZE: usize = 0x300;
+pub(crate) const LIT_SIZE: usize = 0x300;
 const MIX_N: usize = 3;
 const MIX_SHIFT: i32 = 10;
 
@@ -33,11 +33,11 @@ pub fn error_text(rc: i32) -> &'static str {
     }
 }
 
-struct Tables {
-    ra: [u16; 256],
-    rb: [u16; 256],
-    mixstr: [i16; 4096],
-    mixsq: [u16; 4096],
+pub(crate) struct Tables {
+    pub(crate) ra: [u16; 256],
+    pub(crate) rb: [u16; 256],
+    pub(crate) mixstr: [i16; 4096],
+    pub(crate) mixsq: [u16; 4096],
 }
 
 fn mix_sq(d: i32) -> i32 {
@@ -56,7 +56,7 @@ fn mix_sq(d: i32) -> i32 {
     (T[i] * (128 - w) + T[i + 1] * w + 64) >> 7
 }
 
-fn tables() -> &'static Tables {
+pub(crate) fn tables() -> &'static Tables {
     static T: OnceLock<Tables> = OnceLock::new();
     T.get_or_init(|| {
         let mut ra = [0u16; 256];
@@ -91,21 +91,21 @@ fn tables() -> &'static Tables {
 }
 
 #[derive(Clone, Copy)]
-struct Rcp {
-    a: u16,
-    b: u16,
-    n: u8,
+pub(crate) struct Rcp {
+    pub(crate) a: u16,
+    pub(crate) b: u16,
+    pub(crate) n: u8,
 }
 
-const RCP_INIT: Rcp = Rcp { a: 32768, b: 32768, n: 0 };
+pub(crate) const RCP_INIT: Rcp = Rcp { a: 32768, b: 32768, n: 0 };
 
 impl Rcp {
     #[inline(always)]
-    fn p(&self) -> u32 {
+    pub(crate) fn p(&self) -> u32 {
         (self.a as u32 + self.b as u32) >> 5
     }
     #[inline(always)]
-    fn up(&mut self, bit: u32, t: &Tables) {
+    pub(crate) fn up(&mut self, bit: u32, t: &Tables) {
         let n = self.n as usize;
         if self.n < RC_NMAX {
             self.n += 1;
@@ -122,28 +122,28 @@ impl Rcp {
     }
 }
 
-struct Lenc {
-    ch: [Rcp; 2],
-    low: [Rcp; 8],
-    mid: [Rcp; 8],
-    high: [Rcp; 256],
+pub(crate) struct Lenc {
+    pub(crate) ch: [Rcp; 2],
+    pub(crate) low: [Rcp; 8],
+    pub(crate) mid: [Rcp; 8],
+    pub(crate) high: [Rcp; 256],
 }
 
 impl Lenc {
-    fn new() -> Lenc {
+    pub(crate) fn new() -> Lenc {
         Lenc { ch: [RCP_INIT; 2], low: [RCP_INIT; 8], mid: [RCP_INIT; 8], high: [RCP_INIT; 256] }
     }
 }
 
-struct Mix {
-    t1: Vec<Rcp>, // [256][256]
-    t2: Vec<Rcp>, // [4096][256]
-    w: Vec<i32>,  // [256][3]
-    wm: Vec<i32>, // [256][3]
+pub(crate) struct Mix {
+    pub(crate) t1: Vec<Rcp>, // [256][256]
+    pub(crate) t2: Vec<Rcp>, // [4096][256]
+    pub(crate) w: Vec<i32>,  // [256][3]
+    pub(crate) wm: Vec<i32>, // [256][3]
 }
 
 impl Mix {
-    fn new() -> Mix {
+    pub(crate) fn new() -> Mix {
         let mut w = vec![0i32; 256 * MIX_N];
         let mut wm = vec![0i32; 256 * MIX_N];
         for c in 0..256 {
@@ -158,25 +158,25 @@ impl Mix {
     }
 }
 
-struct Model {
-    ism: [Rcp; RC_NS],
-    isrep: [Rcp; RC_NS],
-    isrep0: [Rcp; RC_NS],
-    isrep1: [Rcp; RC_NS],
-    isrep2: [Rcp; RC_NS],
-    isrep0l: [Rcp; RC_NS],
-    lit: Vec<Rcp>, // [(1<<RC_LC) << RC_LPMAX][0x300]
-    ml: Lenc,
-    rl: Lenc,
-    slot: [[Rcp; 32]; 4],
-    ext: [[Rcp; 8]; 27],
-    align: [Rcp; 16],
-    lpm: u32,
-    mix: Option<Box<Mix>>,
+pub(crate) struct Model {
+    pub(crate) ism: [Rcp; RC_NS],
+    pub(crate) isrep: [Rcp; RC_NS],
+    pub(crate) isrep0: [Rcp; RC_NS],
+    pub(crate) isrep1: [Rcp; RC_NS],
+    pub(crate) isrep2: [Rcp; RC_NS],
+    pub(crate) isrep0l: [Rcp; RC_NS],
+    pub(crate) lit: Vec<Rcp>, // [(1<<RC_LC) << RC_LPMAX][0x300]
+    pub(crate) ml: Lenc,
+    pub(crate) rl: Lenc,
+    pub(crate) slot: [[Rcp; 32]; 4],
+    pub(crate) ext: [[Rcp; 8]; 27],
+    pub(crate) align: [Rcp; 16],
+    pub(crate) lpm: u32,
+    pub(crate) mix: Option<Box<Mix>>,
 }
 
 impl Model {
-    fn new() -> Model {
+    pub(crate) fn new() -> Model {
         Model {
             ism: [RCP_INIT; RC_NS],
             isrep: [RCP_INIT; RC_NS],
@@ -523,4 +523,335 @@ fn decode_inner(pl: &[u8], out: &mut [u8], op0: usize, target: usize) -> Result<
         return Err(-5);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Encoder side: exact port of `kz_rc_enc` / `enc_tok` (tools/accel_reference.c). The output must
+// be byte-identical to the C encoder, since archives made by either engine must be the same.
+// ---------------------------------------------------------------------------------------------
+
+const DBITS: u32 = 32;
+const DMASK: u64 = (1u64 << DBITS) - 1;
+
+pub(crate) struct Enc {
+    low: u64,
+    range: u32,
+    cache: u8,
+    csize: i64,
+    out: Vec<u8>,
+    cap: usize,
+    pub(crate) err: bool,
+    t: &'static Tables,
+}
+
+impl Enc {
+    pub(crate) fn new(cap: usize) -> Enc {
+        Enc { low: 0, range: 0xFFFF_FFFF, cache: 0, csize: 1, out: Vec::with_capacity(cap.min(1 << 20)), cap, err: false, t: tables() }
+    }
+    /// start a fresh output (the learning parser only wants the model updates, not the bytes)
+    pub(crate) fn clear_out(&mut self) {
+        self.out.clear();
+        self.err = false;
+        self.csize = 1;
+    }
+    #[inline(always)]
+    fn put(&mut self, v: u8) {
+        if self.out.len() < self.cap {
+            self.out.push(v);
+        } else {
+            self.err = true;
+        }
+    }
+    #[inline(always)]
+    fn shift(&mut self) {
+        if (self.low as u32) < 0xFF00_0000 || (self.low >> 32) != 0 {
+            let carry = (self.low >> 32) as u8;
+            let mut t = self.cache;
+            loop {
+                self.put(t.wrapping_add(carry));
+                t = 0xFF;
+                self.csize -= 1;
+                if self.csize == 0 {
+                    break;
+                }
+            }
+            self.cache = (self.low >> 24) as u8;
+        }
+        self.csize += 1;
+        self.low = (self.low & 0x00FF_FFFF) << 8;
+    }
+    #[inline(always)]
+    fn norm(&mut self) {
+        while self.range < RC_TOP {
+            self.range <<= 8;
+            self.shift();
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn bit(&mut self, p: &mut Rcp, bit: u32) {
+        let bound = (self.range >> 12) * p.p();
+        if bit == 0 {
+            self.range = bound;
+        } else {
+            self.low += bound as u64;
+            self.range -= bound;
+        }
+        p.up(bit, self.t);
+        self.norm();
+    }
+    #[inline(always)]
+    fn bitp(&mut self, p: u32, bit: u32) {
+        let bound = (self.range >> 12) * p;
+        if bit == 0 {
+            self.range = bound;
+        } else {
+            self.low += bound as u64;
+            self.range -= bound;
+        }
+        self.norm();
+    }
+    fn direct(&mut self, v: u32, n: u32) {
+        for i in (0..n).rev() {
+            self.range >>= 1;
+            if (v >> i) & 1 != 0 {
+                self.low += self.range as u64;
+            }
+            self.norm();
+        }
+    }
+    fn tree(&mut self, t: &mut [Rcp], nbits: u32, v: u32) {
+        let mut m = 1u32;
+        for i in (0..nbits).rev() {
+            let b = (v >> i) & 1;
+            self.bit(&mut t[m as usize], b);
+            m = (m << 1) | b;
+        }
+    }
+    fn rtree(&mut self, t: &mut [Rcp], nbits: u32, v: u32) {
+        let mut m = 1u32;
+        for i in 0..nbits {
+            let b = (v >> i) & 1;
+            self.bit(&mut t[m as usize], b);
+            m = (m << 1) | b;
+        }
+    }
+    fn len(&mut self, l: &mut Lenc, v: u32) {
+        if v < 8 {
+            self.bit(&mut l.ch[0], 0);
+            self.tree(&mut l.low, 3, v);
+        } else if v < 16 {
+            self.bit(&mut l.ch[0], 1);
+            self.bit(&mut l.ch[1], 0);
+            self.tree(&mut l.mid, 3, v - 8);
+        } else {
+            self.bit(&mut l.ch[0], 1);
+            self.bit(&mut l.ch[1], 1);
+            self.tree(&mut l.high, 8, v - 16);
+        }
+    }
+    /// false if the distance needs a slot the model does not have (C would read out of bounds)
+    fn dist(&mut self, m: &mut Model, v: u32, dist: u32) -> bool {
+        let d = dist.wrapping_sub(1);
+        let mut slot = 0u32;
+        while slot < 32 && (d >> slot) != 0 {
+            slot += 1;
+        }
+        if slot > 26 {
+            return false;
+        }
+        let sc = (if v < 1 { 0 } else if v < 4 { v - 1 } else { 3 }) as usize;
+        self.tree(&mut m.slot[sc], 5, slot);
+        if slot >= 2 {
+            let eb = slot - 1;
+            let x = d - (1u32 << eb);
+            let nm = if eb < 3 { eb } else { 3 };
+            let r = eb - nm;
+            self.tree(&mut m.ext[slot as usize], nm, x >> r);
+            if r >= 4 {
+                self.direct((x >> 4) & ((1u32 << (r - 4)) - 1), r - 4);
+                self.rtree(&mut m.align, 4, x & 15);
+            } else if r > 0 {
+                self.direct(x & ((1u32 << r) - 1), r);
+            }
+        }
+        true
+    }
+}
+
+fn enc_mixlit(e: &mut Enc, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32, byte: u32) {
+    let b1 = (prev as usize) * 256;
+    let b2 = mix_h2(prev2, prev) * 256;
+    let mut c0 = 1usize;
+    for i in (0..8).rev() {
+        let bit = (byte >> i) & 1;
+        let wi = c0 * 3;
+        let (p, s) = mix_pred(e.t, &lp[c0], &x.t1[b1 + c0], &x.t2[b2 + c0], &x.w[wi..wi + 3]);
+        e.bitp(p, bit);
+        mix_upd(&mut x.w[wi..wi + 3], &s, p, bit);
+        lp[c0].up(bit, e.t);
+        x.t1[b1 + c0].up(bit, e.t);
+        x.t2[b2 + c0].up(bit, e.t);
+        c0 = (c0 << 1) | bit as usize;
+    }
+}
+
+fn enc_mixlitm(e: &mut Enc, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32, mut mb: u32, byte: u32) {
+    let b1 = (prev as usize) * 256;
+    let b2 = mix_h2(prev2, prev) * 256;
+    let mut offs: u32 = 0x100;
+    let mut sym: u32 = 1;
+    for i in (0..8).rev() {
+        mb <<= 1;
+        let mbit = mb & offs;
+        let bit = (byte >> i) & 1;
+        let wi = sym as usize * 3;
+        let ai = (offs + mbit + sym) as usize;
+        let (p, s) = mix_pred(e.t, &lp[ai], &x.t1[b1 + sym as usize], &x.t2[b2 + sym as usize], &x.wm[wi..wi + 3]);
+        e.bitp(p, bit);
+        mix_upd(&mut x.wm[wi..wi + 3], &s, p, bit);
+        lp[ai].up(bit, e.t);
+        x.t1[b1 + sym as usize].up(bit, e.t);
+        x.t2[b2 + sym as usize].up(bit, e.t);
+        sym = (sym << 1) | bit;
+        if bit != 0 {
+            offs &= mbit;
+        } else {
+            offs &= !mbit;
+        }
+    }
+}
+
+/// Encode one token (updating the models, `pos`, `st` and `rep`). Mirrors C `enc_tok`.
+/// Returns true if the token breaks the rules (nothing is changed then), or reads outside `buf`.
+pub(crate) fn enc_tok(e: &mut Enc, m: &mut Model, tk: u64, buf: &[u8], pos0: usize,
+                      pos: &mut usize, st: &mut usize, rep: &mut [u32; 4]) -> bool {
+    let sp = *st + 8 * ((*pos - pos0) & ((1 << RC_PB) - 1));
+    if tk < 256 {
+        let prev: u32 = if *pos > pos0 { match buf.get(*pos - 1) { Some(&v) => v as u32, None => return true } } else { 0 };
+        let prev2: u32 = if *pos > pos0 + 1 { match buf.get(*pos - 2) { Some(&v) => v as u32, None => return true } } else { 0 };
+        let mb: u32 = if (*st & 1) != 0 {
+            match (*pos).checked_sub(rep[0] as usize).and_then(|i| buf.get(i)) { Some(&v) => v as u32, None => return true }
+        } else { 0 };
+        e.bit(&mut m.ism[sp], 0);
+        let ctx = ((prev >> (8 - RC_LC)) + 8 * (((*pos - pos0) as u32) & m.lpm)) as usize;
+        let base = ctx * LIT_SIZE;
+        let lpm = &mut m.lit[base..base + LIT_SIZE];
+        let byte = tk as u32;
+        if (*st & 1) != 0 {
+            if let Some(x) = m.mix.as_mut() {
+                enc_mixlitm(e, x, lpm, prev, prev2, mb, byte);
+            } else {
+                let mut mb = mb;
+                let mut offs: u32 = 0x100;
+                let mut sym: u32 = 1;
+                for i in (0..8).rev() {
+                    mb <<= 1;
+                    let mbit = mb & offs;
+                    let bit = (byte >> i) & 1;
+                    e.bit(&mut lpm[(offs + mbit + sym) as usize], bit);
+                    sym = (sym << 1) | bit;
+                    if bit != 0 { offs &= mbit; } else { offs &= !mbit; }
+                }
+            }
+        } else if let Some(x) = m.mix.as_mut() {
+            enc_mixlit(e, x, lpm, prev, prev2, byte);
+        } else {
+            e.tree(lpm, 8, byte);
+        }
+        *pos += 1;
+        *st = (*st << 1) & 7;
+    } else {
+        let len = (tk >> DBITS) as u32;
+        let dist = (tk & DMASK) as u32;
+        let ri: i32 = if len < 2 { -1 } else { (0..4).find(|&k| rep[k] == dist).map(|k| k as i32).unwrap_or(-1) };
+        if len < 2 && ri < 0 && !(len == 1 && dist == rep[0]) {
+            return true;
+        }
+        if ri < 0 && len != 1 {
+            // a new distance: refuse before touching anything if its slot does not exist
+            let d = dist.wrapping_sub(1);
+            if (32 - d.leading_zeros()) > 26 {
+                return true;
+            }
+        }
+        e.bit(&mut m.ism[sp], 1);
+        if ri >= 0 || len == 1 {
+            e.bit(&mut m.isrep[sp], 1);
+            if len == 1 {
+                e.bit(&mut m.isrep0[sp], 0);
+                e.bit(&mut m.isrep0l[sp], 0);
+            } else {
+                if ri == 0 {
+                    e.bit(&mut m.isrep0[sp], 0);
+                    e.bit(&mut m.isrep0l[sp], 1);
+                } else {
+                    e.bit(&mut m.isrep0[sp], 1);
+                    if ri == 1 {
+                        e.bit(&mut m.isrep1[sp], 0);
+                    } else {
+                        e.bit(&mut m.isrep1[sp], 1);
+                        e.bit(&mut m.isrep2[sp], (ri == 3) as u32);
+                    }
+                    let mut k = ri as usize;
+                    while k > 0 {
+                        rep[k] = rep[k - 1];
+                        k -= 1;
+                    }
+                    rep[0] = dist;
+                }
+                e.len(&mut m.rl, len - 2);
+            }
+        } else {
+            e.bit(&mut m.isrep[sp], 0);
+            let v = len - 2;
+            e.len(&mut m.ml, v);
+            e.dist(m, v, dist);
+            rep[3] = rep[2];
+            rep[2] = rep[1];
+            rep[1] = rep[0];
+            rep[0] = dist;
+        }
+        *pos += len as usize;
+        *st = ((*st << 1) | 1) & 7;
+    }
+    false
+}
+
+/// Range-code a token block whose bytes start at `buf[pos0]` (history before it). Mirrors
+/// `kz_rc_enc`: returns `(raw_len, payload)`, or None if the payload does not fit in `cap`
+/// bytes or a token breaks the rules (the caller then stores the bytes instead).
+/// `lp`: bits 0-1 literal position bits (0..=2), bit 2 = literal mixer.
+pub fn encode_block(tok: &[u64], buf: &[u8], pos0: usize, lp: u32, cap: usize) -> Option<(usize, Vec<u8>)> {
+    if (lp & 3) > RC_LPMAX as u32 || (lp >> 2) > 1 {
+        return None;
+    }
+    let mut raw: u64 = 0;
+    for &t in tok {
+        raw += if t < 256 { 1 } else { t >> DBITS };
+    }
+    let mut m = Model::new();
+    m.lpm = (1u32 << (lp & 3)) - 1;
+    if (lp >> 2) != 0 {
+        m.mix = Some(Box::new(Mix::new()));
+    }
+    let mut e = Enc::new(cap);
+    let mut pos = pos0;
+    let mut st: usize = 0;
+    let mut rep: [u32; 4] = [1, 1, 1, 1];
+    for &tk in tok {
+        if e.err {
+            break;
+        }
+        if enc_tok(&mut e, &mut m, tk, buf, pos0, &mut pos, &mut st, &mut rep) {
+            return None;
+        }
+    }
+    for _ in 0..5 {
+        e.shift();
+    }
+    if e.err || e.out.is_empty() {
+        return None;
+    }
+    e.out[0] = lp as u8;
+    Some((raw as usize, e.out))
 }

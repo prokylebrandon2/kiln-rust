@@ -386,7 +386,7 @@ final class Sheet {
 
         dialog.setOnDismissListener(d -> {
             if (onClose != null) onClose.run();
-            if (userCancel && back != null) back.run();
+            runBack();                                   // only if it did not already run at dismiss()
         });
         if (act.isFinishing()) return this;
         dialog.show();
@@ -400,9 +400,19 @@ final class Sheet {
         return this;
     }
 
+    /** Runs the "go back to the menu" callback at most once. */
+    private void runBack() {
+        Runnable r = back;
+        back = null;
+        if (userCancel && r != null) r.run();
+    }
+
     void dismiss() {
         if (closing) return;
         closing = true;
+        // Bring the previous menu back right away so it fades in while this sheet fades out; waiting
+        // for the fade-out to finish left the bare list showing for a moment (the stutter).
+        runBack();
         if (!dialog.isShowing() || act.isFinishing()) {
             hardDismiss();
             return;

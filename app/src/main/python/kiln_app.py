@@ -117,14 +117,35 @@ def search_cancel():
     _search_gen[0] += 1
 
 
+def _name_matcher(query):
+    """-> f(lowercased name) -> bool, or None for an empty/invalid query. Three forms:
+    "re:<regex>" (regular expression, found anywhere in the name), a query with * or ?
+    (wildcards, must match the whole name, so "*.txt" means ends in .txt), or plain words
+    (the name must contain every word)."""
+    q = query.strip()
+    if not q:
+        return None
+    if q[:3].lower() == "re:":
+        try:
+            rx = re.compile(q[3:].strip(), re.IGNORECASE)
+        except re.error:
+            return None
+        return lambda low: rx.search(low) is not None
+    if "*" in q or "?" in q:
+        rx = re.compile(fnmatch.translate(q.casefold()))
+        return lambda low: rx.match(low) is not None
+    terms = [t for t in q.casefold().split() if t]
+    return lambda low: all(t in low for t in terms)
+
+
 def search(path, query, show_all, show_hidden=False):
-    """Every file and folder below `path` whose name contains all the words in `query`
-    (case-insensitive). Names come back relative to `path`, so the app can treat them like
+    """Every file and folder below `path` whose name matches `query` (see _name_matcher; plain
+    words are case-insensitive). Names come back relative to `path`, so the app can treat them like
     entries of the folder itself. A newer search (or search_cancel) stops this one."""
     _search_gen[0] += 1
     mine = _search_gen[0]
-    terms = [t for t in query.casefold().split() if t]
-    if not terms:
+    match = _name_matcher(query)
+    if match is None:
         return _j(ok=True, path=path, items=[], truncated=False)
     items = []
     truncated = False
@@ -147,7 +168,7 @@ def search(path, query, show_all, show_hidden=False):
                 try:
                     is_dir = e.is_dir(follow_symlinks=False)
                     low = name.casefold()
-                    hit = all(t in low for t in terms)
+                    hit = match(low)
                     relname = rel + "/" + name if rel else name
                     if is_dir:
                         if hit:

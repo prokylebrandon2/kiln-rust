@@ -511,6 +511,7 @@ public class MainActivity extends Activity {
             @Override
             public void onScrollStateChanged(AbsListView v, int state) {
                 if (state == SCROLL_STATE_TOUCH_SCROLL && searching) hideKeyboard();
+                if (state != SCROLL_STATE_IDLE) settleRows();   // scrolling right after a refresh: finish the slide-in now
             }
 
             @Override
@@ -735,6 +736,10 @@ public class MainActivity extends Activity {
         @Override
         public View getView(int i, View convert, ViewGroup parent) {
             RowView v = convert instanceof RowView ? (RowView) convert : new RowView();
+            // a recycled row may still carry the slide-in (invisible, delayed): start it clean
+            v.animate().cancel();
+            v.setAlpha(1f);
+            v.setTranslationY(0f);
             Row r = rowAt(i);
             if (r == null) {
                 v.bind(upRow(), false);
@@ -750,6 +755,18 @@ public class MainActivity extends Activity {
      * list's new data is laid out and runs on the rows themselves, so no later layout pass
      * (selection, thumbnails, a rescan) can replay it. Call after the data has changed.
      */
+    /** Ends the rows' slide-in at once: every visible row fully shown and in place. */
+    private void settleRows() {
+        for (int k = 0; k < list.getChildCount(); k++) {
+            View c = list.getChildAt(k);
+            if (c.getAlpha() < 1f || c.getTranslationY() != 0f) {
+                c.animate().cancel();
+                c.setAlpha(1f);
+                c.setTranslationY(0f);
+            }
+        }
+    }
+
     private void playRows() {
         if (!Defaults.animOn(this)) return;
         list.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
@@ -1208,9 +1225,11 @@ public class MainActivity extends Activity {
                 // a sheet this item opens returns to this menu (with the same selection) when it is backed out of
                 final java.util.Set<String> keep = new java.util.LinkedHashSet<>(sel);
                 Sheet.nextBack = () -> {
-                    sel.clear();
-                    sel.addAll(keep);
-                    redraw();
+                    if (!sel.equals(keep)) {             // rebuilding the list is only needed if it changed
+                        sel.clear();
+                        sel.addAll(keep);
+                        redraw();
+                    }
                     showMenu();
                 };
                 try {

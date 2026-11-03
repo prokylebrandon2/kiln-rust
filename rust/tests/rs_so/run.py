@@ -17,4 +17,4 @@ s = s[:a] + "\n" + s[b:]
 t = tempfile.mkdtemp(); open(os.path.join(t, "test_app.py"), "w").write(s)
 env = dict(os.environ, KILN_RS_SO=os.path.abspath(so), KILN_MIRROR_DIR=mirror, PYTHONPATH="")
 sys.exit(subprocess.call([sys.executable, "-I", "-c",
-    f"import sys; sys.path[:0] = [{pydir!r}, {here!r}]; sys.argv = ['test_app.py', {pydir!r}, {corpus!r}, {part!r}]; exec(compile(open({os.path.join(t, 'test_app.py')!r}).read(), 'test_app.py', 'exec'))"], env=env))
+    f"import sys; sys.path[:0] = [{pydir!r}, {here!r}]; sys.argv = ['test_app.py', {pydir!r}, {corpus!r}, {part!r}]; exec(compile(open({os.path.join(t, 'test_app.py')!r}).read(), 'test_app.py', 'exec'), {{'__file__': {os.path.join(t, 'test_app.py')!r}, '__name__': '__main__'}})"], env=env))

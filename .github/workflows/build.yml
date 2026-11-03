@@ -104,6 +104,8 @@ jobs:
       - name: The compiled library against the real Python engine
         working-directory: rust
         run: |
+          (cd kiln-rs && cargo build --release)
+          ls -l kiln-rs/target/release/libkiln_rs.so
           for part in open test extract cancel fnmatch unsupported sets sets2 sets3 sets4 sets5; do
             echo "== $part"; python tests/rs_so/run.py kiln-rs/target/release/libkiln_rs.so ../app/src/main/python tests/corpus $part | tee /tmp/part.log
             ! grep -q '^FAIL' /tmp/part.log

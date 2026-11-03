@@ -3580,11 +3580,11 @@ public class MainActivity extends Activity {
         }
 
         private static final long SHOW_AFTER_MS = 250;
-        private boolean shown;
+        private boolean sheetUp;
         private final Runnable showLater = new Runnable() {
             @Override public void run() {
-                if (closed || shown) return;
-                shown = true;
+                if (closed || sheetUp) return;
+                sheetUp = true;
                 sheet.show();
             }
         };
@@ -3659,7 +3659,7 @@ public class MainActivity extends Activity {
             ui.removeCallbacks(tick);
             ui.removeCallbacks(showLater);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            if (shown) sheet.dismiss();                         // never shown: nothing to animate away
+            if (sheetUp) sheet.dismiss();                         // never shown: nothing to animate away
         }
     }
 

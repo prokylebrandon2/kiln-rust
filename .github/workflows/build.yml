@@ -90,7 +90,7 @@ jobs:
           python tools/make_mp3_corpus.py ../app/src/main/python/kiln_v14.py tests/mp3corpus
           python tools/make_mp3_fuzz.py ../app/src/main/python/kiln_v14.py tests/mp3corpus 40
 
-      - name: Packer test vectors (range encoder, match finder, block builder: real C / Python engine)
+      - name: "Packer test vectors (range encoder, match finder, block builder: real C / Python engine)"
         working-directory: rust
         run: |
           python tools/make_enc_vectors.py ../app/src/main/python/kiln_v14.py tests/encvec

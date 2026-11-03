@@ -4,6 +4,23 @@
 //! (use6 is always false in the C build, BTMODE == 2, so the 6-byte chain is not ported.)
 
 use crate::rc::{enc_tok, Enc, Lenc, Model, Rcp, RC_LPMAX, RC_PB, RC_LC};
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+thread_local! {
+    static CANCEL: RefCell<Option<Arc<AtomicBool>>> = RefCell::new(None);
+}
+
+/// Gives the current thread a cancel flag; `lz77` and the block builder poll it and give up early
+/// (README note 8). Without a flag nothing changes.
+pub fn set_cancel(t: Option<Arc<AtomicBool>>) {
+    CANCEL.with(|c| *c.borrow_mut() = t);
+}
+
+pub fn cancelled() -> bool {
+    CANCEL.with(|c| c.borrow().as_ref().map_or(false, |a| a.load(Ordering::Relaxed)))
+}
 
 const WINDOW: i64 = (1 << 26) - 1;
 const HIST_NEAR: i64 = 1 << 20;
@@ -960,7 +977,14 @@ pub fn lz77(bp: &[u8], n: i64, start: i64, rnd: &[u8], chain_max: i32, nice: i32
     let mut cpos: i64 = 0;
     insert_to(&mut c, start);
     let b = bp;
+    let mut chk = start;
     while i < n {
+        if i - chk >= 32768 {
+            chk = i;
+            if cancelled() {
+                return None;
+            }
+        }
         s.pos = i;
         let k = rnd[(i >> RND_BITS) as usize];
         if k == 2 {

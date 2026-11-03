@@ -87,6 +87,9 @@ fn code_parts(parts: &[Part], toks: &[u64], buf: &[u8], start: usize, stat: &mut
     let mut blocks = Vec::new();
     let mut pos = start;
     for part in parts {
+        if lz::cancelled() {
+            break; // the caller (build_blocks) notices and returns None
+        }
         match part {
             Part::Raw(n) => {
                 let mut off = 0;
@@ -101,6 +104,9 @@ fn code_parts(parts: &[Part], toks: &[u64], buf: &[u8], start: usize, stat: &mut
                 let part = &toks[r.clone()];
                 let mut i = 0;
                 while i < part.len() {
+                    if lz::cancelled() {
+                        break;
+                    }
                     let tk = &part[i..(i + BLOCK_TOKENS).min(part.len())];
                     match code_block(tk, buf, pos, stat) {
                         Some((raw, payload)) if payload.len() < raw => {
@@ -156,6 +162,9 @@ pub fn build_blocks(buf: &[u8], start: usize, parse: (i32, i32, i32, i32)) -> Op
     let first = lz::lz77(&padded, n as i64, start as i64, &rnd, chain, nice, lazy, accel, 0)?;
     let mut stat = [0u64; 3];
     let mut best = code_parts(&parts_of(&first), &first.tok, buf, start, &mut stat);
+    if lz::cancelled() {
+        return None;
+    }
     if stat[0] > 0 {
         let (s4, s5, s6) = (stat[0], stat[1], stat[2]);
         let (lp, sl) = if s5 < s6 { (1, s5) } else { (2, s6) };
@@ -163,6 +172,9 @@ pub fn build_blocks(buf: &[u8], start: usize, parse: (i32, i32, i32, i32)) -> Op
             let second = lz::lz77(&padded, n as i64, start as i64, &rnd, chain, nice, lazy, accel, lp)?;
             let mut ignore = [0u64; 3];
             let alt = code_parts(&parts_of(&second), &second.tok, buf, start, &mut ignore);
+            if lz::cancelled() {
+                return None;
+            }
             if total(&alt) < total(&best) {
                 best = alt;
             }

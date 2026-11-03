@@ -181,7 +181,7 @@ public class SettingsActivity extends Activity {
         LinearLayout tl = card();
         choiceRow(tl, "Self-test", "Run", "Checks packing, extracting and encryption on this phone.",
                 () -> runTool("selftest", null, "Self-test", ""));
-        choiceRow(tl, "Benchmark a file", "Choose...", "Compares Kiln with zlib, bz2 and lzma.",
+        choiceRow(tl, "Benchmark a file", "Choose...", "Compares Kiln with zlib, bz2 and lzma on the first 8 MB.",
                 () -> pickFile((f, n) -> runTool("bench", f.getPath(), "Benchmark", n)));
         choiceRow(tl, "WAV info", "Choose...", "Shows whether a .wav is float or integer audio.",
                 () -> pickFile((f, n) -> runTool("wavcheck", f.getPath(), "WAV info", n)));

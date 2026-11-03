@@ -2302,6 +2302,9 @@ def cmd_list(args):
 
 
 # ---------------------------------------------------------------- wavcheck / selftest
+WAVINFO_FRAMES = 4096
+
+
 def wav_report(path):
     """Text lines describing a WAV's samples: is it float, and is it really
     integer audio in disguise (which a future filter could exploit)?"""
@@ -2315,7 +2318,7 @@ def wav_report(path):
         tag, rate = struct.unpack_from("<H", head, head.index(b"fmt ") + 8)[0], \
             struct.unpack_from("<I", head, head.index(b"fmt ") + 12)[0]
         frames = region // align
-        win = min(16384, frames // 4) * align
+        win = min(WAVINFO_FRAMES, frames // 4) * align      # small windows: this loop runs in Python
         wins = []
         for q in (1, 2, 3):
             fh.seek(start + (region * q // 4) // align * align)
@@ -3094,6 +3097,9 @@ def run_selftest(say=print):
     return not bad
 
 
+BENCH_MAX = 8 << 20
+
+
 def cmd_bench(args):
     import bz2
     import io
@@ -3104,12 +3110,18 @@ def cmd_bench(args):
     files = collect(args.inputs)
     if not files:
         raise KilnError("nothing to benchmark")
+    # Only the first BENCH_MAX bytes are timed: lzma/bz2 on a big file froze the phone for minutes.
     data = bytearray()
+    total = 0
     for e in files:
-        with open(e["full"], "rb") as fh:
-            data += fh.read()
+        total += e["size"] if "size" in e else os.path.getsize(e["full"])
+        room = BENCH_MAX - len(data)
+        if room > 0:
+            with open(e["full"], "rb") as fh:
+                data += fh.read(room)
     data = bytes(data)
-    print(f"input: {len(files)} file(s), {fmt_size(len(data))}")
+    cut = f" (first {fmt_size(len(data))} of {fmt_size(total)})" if total > len(data) else ""
+    print(f"input: {len(files)} file(s), {fmt_size(len(data))}{cut}")
 
     def kiln_c(d):
         buf = io.BytesIO()

@@ -6,11 +6,14 @@
 use crate::bcj::{BcjEnc, BCJ_ARM64, BCJ_X86};
 use crate::container::{Entry, KilnError, Result, Table};
 use crate::crypto;
+use crate::lz;
 use crate::pack::{self, Block};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use std::collections::VecDeque;
 use std::fs::File;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::io::{Read, Write};
 
@@ -106,6 +109,8 @@ pub struct Encoder<'a, S: Sink> {
     progress: Option<Progress<'a>>,
     jobs: usize,
     inflight: VecDeque<(JoinHandle<Option<(Vec<Block>, Vec<u8>)>>, usize)>,
+    /// set when the person cancels: worker threads see it through `lz::set_cancel` and stop early
+    cancel: Arc<AtomicBool>,
     pending: Vec<u8>,
     history: Vec<u8>,
     since: u64,
@@ -121,6 +126,7 @@ impl<'a, S: Sink> Encoder<'a, S> {
             progress,
             jobs: jobs.max(1),
             inflight: VecDeque::new(),
+            cancel: Arc::new(AtomicBool::new(false)),
             pending: Vec::new(),
             history: Vec::new(),
             since: 0,
@@ -195,13 +201,41 @@ impl<'a, S: Sink> Encoder<'a, S> {
         Ok(())
     }
 
+    /// Cancel seen: tell every worker to stop, then wait for them (they stop within a few ms).
+    fn abort(&mut self) -> KilnError {
+        self.cancel.store(true, Ordering::Relaxed);
+        while let Some((h, _)) = self.inflight.pop_front() {
+            let _ = h.join();
+        }
+        KilnError(CANCELLED.to_string())
+    }
+
     /// Wait for the oldest segment, write it, report its bytes.
     fn drain_one(&mut self) -> Result<()> {
+        if self.inflight.is_empty() {
+            return Ok(());
+        }
+        if self.progress.is_some() {
+            // poll the callback (0 new bytes) until the oldest segment is done: a cancel is noticed
+            // within ~20 ms even in the middle of a segment; the other workers keep running meanwhile
+            while !self.inflight.front().unwrap().0.is_finished() {
+                if let Some(p) = self.progress.as_mut() {
+                    if p(0) {
+                        return Err(self.abort());
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         if let Some((h, n_new)) = self.inflight.pop_front() {
-            let (blocks, buf) = h
+            let r = h
                 .join()
-                .map_err(|_| KilnError("a compression thread stopped unexpectedly".to_string()))?
-                .ok_or_else(|| KilnError("out of memory while compressing".to_string()))?;
+                .map_err(|_| KilnError("a compression thread stopped unexpectedly".to_string()))?;
+            let (blocks, buf) = match r {
+                Some(x) => x,
+                None if self.cancel.load(Ordering::Relaxed) => return Err(self.abort()),
+                None => return Err(KilnError("out of memory while compressing".to_string())),
+            };
             self.write_blocks(&blocks, &buf)?;
             self.tick(n_new)?;
         }
@@ -234,8 +268,35 @@ impl<'a, S: Sink> Encoder<'a, S> {
         let keep = buf.len().min(WINDOW);
         self.history = buf[buf.len() - keep..].to_vec();
         if self.jobs <= 1 {
-            let blocks = pack::build_blocks(&buf, start, pack::PARSE)
-                .ok_or_else(|| KilnError("out of memory while compressing".to_string()))?;
+            let blocks = if self.progress.is_none() {
+                pack::build_blocks(&buf, start, pack::PARSE)
+            } else {
+                // run on a helper thread so this one can keep asking whether to cancel
+                let flag = self.cancel.clone();
+                let bref: &[u8] = &buf;
+                let res = std::thread::scope(|sc| -> Result<Option<Vec<Block>>> {
+                    let h = std::thread::Builder::new()
+                        .stack_size(64 << 20)
+                        .spawn_scoped(sc, move || {
+                            lz::set_cancel(Some(flag));
+                            pack::build_blocks(bref, start, pack::PARSE)
+                        })
+                        .map_err(|e| KilnError(format!("can't start a compression thread: {e}")))?;
+                    while !h.is_finished() {
+                        if let Some(p) = self.progress.as_mut() {
+                            if p(0) {
+                                self.cancel.store(true, Ordering::Relaxed);
+                                let _ = h.join();
+                                return Err(KilnError(CANCELLED.to_string()));
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    h.join().map_err(|_| KilnError("a compression thread stopped unexpectedly".to_string()))
+                });
+                res?
+            };
+            let blocks = blocks.ok_or_else(|| KilnError("out of memory while compressing".to_string()))?;
             self.write_blocks(&blocks, &buf)?;
             return self.tick(n_new);
         }
@@ -243,9 +304,11 @@ impl<'a, S: Sink> Encoder<'a, S> {
         while self.inflight.len() >= self.jobs {
             self.drain_one()?;
         }
+        let flag = self.cancel.clone();
         let h = std::thread::Builder::new()
             .stack_size(64 << 20)
             .spawn(move || {
+                lz::set_cancel(Some(flag));
                 let r = pack::build_blocks(&buf, start, pack::PARSE);
                 r.map(|bl| (bl, buf))
             })
@@ -596,6 +659,26 @@ mod tests {
         assert_eq!(fit_segment(10 << 20, 4), 4 << 20);
         assert_eq!(fit_segment(100 << 20, 2), 16 << 20);
         assert_eq!(fit_segment(9 << 20, 1), 9 << 20);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancel_stops_mid_segment() {
+        let dir = std::env::temp_dir().join(format!("kiln_cnl_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.bin");
+        let n = 6_000_000;
+        std::fs::write(&src, sample(n)).unwrap();
+        for jobs in [1usize, 2] {
+            let f = PackFile { full: src.to_string_lossy().into(), rel: "in.bin".into(), size: n as u64, mtime: 1, mode: 0o644, filt: 0, pre: false };
+            let dest = dir.join(format!("c{jobs}.kln"));
+            let mut stop = |_n: u64| true;
+            let t = std::time::Instant::now();
+            let r = pack_archive(dest.to_str().unwrap(), &[f], &PackOpts { store: false, password: None, segment: n, jobs }, Some(&mut stop as &mut dyn FnMut(u64) -> bool));
+            assert_eq!(r.err().map(|e| e.0), Some(CANCELLED.to_string()));
+            assert!(t.elapsed().as_secs() < 5, "cancel took {:?}", t.elapsed());
+            assert!(!dest.exists());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

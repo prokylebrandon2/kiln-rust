@@ -4,11 +4,29 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::codec::Method;
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{Entry, Index};
-use crate::format::record::{decode_payload, read_record};
+use crate::format::record::{RECORD_HEADER_LEN, RecordHeader, decode_payload, read_record};
 use crate::format::{FOOTER_LEN, Footer, HEADER_LEN, Header, MAGIC, MAX_INDEX_RAW};
 use crate::fsutil::read_full;
+
+/// How the data blocks of an archive are encoded (from their 13-byte headers only).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlockStats {
+    /// Total data blocks.
+    pub total: u64,
+    /// Blocks stored verbatim (incompressible, or a `store` archive).
+    pub stored: u64,
+    /// Blocks compressed with LZ4.
+    pub lz4: u64,
+    /// Blocks compressed with Zstandard.
+    pub zstd: u64,
+    /// Blocks compressed with LZMA2.
+    pub lzma: u64,
+    /// Bytes of block payload as stored (headers excluded).
+    pub payload_bytes: u64,
+}
 
 /// An opened archive. Opening reads only the header, footer and index - never the data blocks -
 /// so listing even a huge archive is instant.
@@ -69,6 +87,35 @@ impl Archive {
             file_len,
             data_end,
         })
+    }
+
+    /// Read every block's 13-byte header (one seek per block; no payload is read) and count how
+    /// each block is encoded. Also checks that the blocks tile the data area exactly.
+    pub fn block_stats(&self) -> Result<BlockStats> {
+        let mut file = File::open(&self.path).at(&self.path)?;
+        let offsets = &self.index.block_offsets;
+        let mut stats = BlockStats::default();
+        for (i, &offset) in offsets.iter().enumerate() {
+            let next = offsets.get(i + 1).copied().unwrap_or(self.data_end);
+            file.seek(SeekFrom::Start(offset)).at(&self.path)?;
+            let mut raw = [0u8; RECORD_HEADER_LEN];
+            file.read_exact(&mut raw).at(&self.path)?;
+            let header = RecordHeader::decode(&raw, self.header.block_size() as u32)?;
+            if offset + header.total_len() != next {
+                return Err(Error::corrupt(format!(
+                    "block {i} does not end where the next block begins"
+                )));
+            }
+            stats.total += 1;
+            stats.payload_bytes += u64::from(header.comp_len);
+            match header.method {
+                Method::Store => stats.stored += 1,
+                Method::Lz4 => stats.lz4 += 1,
+                Method::Zstd => stats.zstd += 1,
+                Method::Lzma2 => stats.lzma += 1,
+            }
+        }
+        Ok(stats)
     }
 
     /// Where the archive lives.

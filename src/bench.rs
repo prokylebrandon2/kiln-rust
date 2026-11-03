@@ -51,6 +51,7 @@ pub fn run(config: &BenchConfig, mut on_row: impl FnMut(&BenchRow)) -> Result<Ve
                 block_log2,
                 threads: config.threads,
                 overwrite: true,
+                ..PackOptions::default()
             };
             let started = Instant::now();
             let stats = pack(&target, &config.inputs, &options)?;

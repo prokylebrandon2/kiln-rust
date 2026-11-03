@@ -15,7 +15,8 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use crate::codec::{CodecSpec, Method};
+use super::{Progress, pipeline_config};
+use crate::codec::{CodecSpec, Method, looks_incompressible};
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{Entry, EntryKind, Index};
 use crate::format::record::EncodedBlock;
@@ -25,7 +26,7 @@ use crate::format::{
 };
 use crate::fsutil::{TempOutput, read_full};
 use crate::integrity::{FileHash, FileHasher, HASH_LEN, empty_hash};
-use crate::parallel::{Config, Source, run_ordered};
+use crate::parallel::{MemoryModel, Source, run_ordered};
 use crate::walk::{self, Skipped, SourceEntry};
 
 /// Settings for [`pack`].
@@ -40,6 +41,12 @@ pub struct PackOptions {
     pub threads: usize,
     /// Replace the destination if it already exists.
     pub overwrite: bool,
+    /// Keep estimated peak memory under this many bytes by lowering threads / in-flight blocks.
+    /// `None` = unlimited. It is an estimate (see `docs/PHASE2.md`), not an enforced cap.
+    pub memory_limit: Option<u64>,
+    /// For slow codecs (zstd >= 10, lzma), store blocks that sampling shows are incompressible
+    /// instead of spending seconds failing to compress them.
+    pub skip_incompressible: bool,
 }
 
 impl Default for PackOptions {
@@ -49,6 +56,8 @@ impl Default for PackOptions {
             block_log2: DEFAULT_BLOCK_LOG2,
             threads: 0,
             overwrite: false,
+            memory_limit: None,
+            skip_incompressible: true,
         }
     }
 }
@@ -68,6 +77,8 @@ pub struct PackStats {
     pub blocks: u64,
     /// Of those, blocks that did not compress and were stored as-is.
     pub stored_blocks: u64,
+    /// Of the stored blocks, those skipped by the incompressibility sampler (never attempted).
+    pub precheck_skipped: u64,
     /// Items found but not archived (symlinks, special files).
     pub skipped: Vec<Skipped>,
     /// Files that grew while being read; only their original size was archived.
@@ -79,6 +90,16 @@ pub struct PackStats {
 /// The archive is built in a temporary file and renamed into place on success, so `output` is
 /// either complete or untouched.
 pub fn pack(output: &Path, inputs: &[PathBuf], options: &PackOptions) -> Result<PackStats> {
+    pack_with_progress(output, inputs, options, &mut |_, _| {})
+}
+
+/// [`pack`], reporting `(raw_bytes_done, raw_bytes_total)` after every block is written.
+pub fn pack_with_progress(
+    output: &Path,
+    inputs: &[PathBuf],
+    options: &PackOptions,
+    progress: Progress<'_>,
+) -> Result<PackStats> {
     if inputs.is_empty() {
         return Err(Error::Invalid(
             "nothing to archive: no input paths given".into(),
@@ -106,20 +127,43 @@ pub fn pack(output: &Path, inputs: &[PathBuf], options: &PackOptions) -> Result<
     };
     out.write_all(&header.encode()).at(output)?;
 
+    let block_bytes = 1u64 << options.block_log2;
+    let config = pipeline_config(
+        options.threads,
+        options.memory_limit,
+        MemoryModel {
+            base: 16 << 20,
+            per_item: 2 * block_bytes,
+            per_thread: options.codec.compress_context_bytes(block_bytes),
+        },
+        "lower --block-size or use a lighter codec",
+    )?;
+    let total_bytes: u64 = collected.entries.iter().map(|e| e.size).sum();
+    let mut done_bytes = 0u64;
+    let sample = options.skip_incompressible && options.codec.is_heavy();
     let source = PackSource::new(&collected.entries, 1usize << options.block_log2);
     let mut position = HEADER_LEN as u64;
     let mut block_offsets = Vec::new();
     let mut stats = PackStats::default();
 
     let source = run_ordered(
-        Config::new(options.threads),
+        config,
         source,
-        |raw: Vec<u8>| EncodedBlock::from_raw(codec.as_ref(), raw),
-        |block: EncodedBlock| {
+        |raw: Vec<u8>| {
+            if sample && looks_incompressible(&raw) {
+                EncodedBlock::stored(raw).map(|b| (b, true))
+            } else {
+                EncodedBlock::from_raw(codec.as_ref(), raw).map(|b| (b, false))
+            }
+        },
+        |(block, skipped): (EncodedBlock, bool)| {
             block_offsets.push(position);
             position += block.write_to(&mut out).at(output)?;
             stats.blocks += 1;
             stats.stored_blocks += u64::from(block.header.method == Method::Store);
+            stats.precheck_skipped += u64::from(skipped);
+            done_bytes += u64::from(block.header.raw_len);
+            progress(done_bytes, total_bytes);
             Ok(())
         },
     )

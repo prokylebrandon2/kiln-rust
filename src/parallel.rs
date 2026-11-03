@@ -66,7 +66,48 @@ pub fn resolve_threads(requested: usize) -> usize {
     n.max(1)
 }
 
+/// Inputs of the memory estimate behind `--memory-limit`:
+/// `base + inflight * per_item + threads * per_thread`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemoryModel {
+    /// Fixed overhead (binary, I/O buffers, index).
+    pub base: u64,
+    /// Memory held by one in-flight item (raw block plus its encoded/decoded twin).
+    pub per_item: u64,
+    /// Codec working memory per worker thread.
+    pub per_thread: u64,
+}
+
+impl MemoryModel {
+    /// Estimated peak memory for a pipeline shape.
+    pub fn estimate(&self, threads: usize, inflight: usize) -> u64 {
+        self.base
+            .saturating_add(self.per_item.saturating_mul(inflight as u64))
+            .saturating_add(self.per_thread.saturating_mul(threads as u64))
+    }
+}
+
 impl Config {
+    /// Like [`Config::new`], but shrink threads and the in-flight window until the estimated
+    /// memory fits `limit` bytes. Prefers more threads over a deeper window. If even one thread
+    /// with a one-item window does not fit, returns the minimum bytes that would be needed.
+    pub fn with_memory_limit(
+        requested: usize,
+        limit: u64,
+        model: MemoryModel,
+    ) -> Result<Self, u64> {
+        let wanted = Self::new(requested);
+        for threads in (1..=wanted.threads).rev() {
+            let deep = threads * 3 / 2 + 2;
+            for inflight in [deep, threads] {
+                if model.estimate(threads, inflight) <= limit {
+                    return Ok(Self { threads, inflight });
+                }
+            }
+        }
+        Err(model.estimate(1, 1))
+    }
+
     /// A configuration for `requested` worker threads (`0` = all cores) with a default
     /// in-flight window of 1.5 x threads + 2, enough to keep every worker busy.
     pub fn new(requested: usize) -> Self {
@@ -415,5 +456,38 @@ mod tests {
         assert!(resolve_threads(0) >= 1);
         let c = Config::new(4);
         assert_eq!((c.threads, c.inflight), (4, 8));
+    }
+}
+
+#[cfg(test)]
+mod memory_limit_tests {
+    use super::*;
+
+    const MODEL: MemoryModel = MemoryModel {
+        base: 10,
+        per_item: 20,
+        per_thread: 5,
+    };
+
+    #[test]
+    fn plenty_of_memory_keeps_the_requested_shape() {
+        let c = Config::with_memory_limit(4, u64::MAX, MODEL).unwrap();
+        assert_eq!((c.threads, c.inflight), (4, 8));
+    }
+
+    #[test]
+    fn a_tight_limit_shrinks_the_window_before_the_threads() {
+        // 4 threads, window 8 = 10 + 160 + 20 = 190; window 4 = 10 + 80 + 20 = 110.
+        let c = Config::with_memory_limit(4, 120, MODEL).unwrap();
+        assert_eq!((c.threads, c.inflight), (4, 4));
+        // Cannot afford 4 threads even with window 4; 3 threads, window 3 = 10 + 60 + 15 = 85.
+        let c = Config::with_memory_limit(4, 100, MODEL).unwrap();
+        assert!(c.threads < 4 && MODEL.estimate(c.threads, c.inflight) <= 100);
+    }
+
+    #[test]
+    fn an_impossible_limit_reports_the_minimum_needed() {
+        assert_eq!(Config::with_memory_limit(4, 30, MODEL), Err(35));
+        assert!(Config::with_memory_limit(4, 35, MODEL).is_ok());
     }
 }

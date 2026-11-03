@@ -113,6 +113,22 @@ impl EncodedBlock {
         })
     }
 
+    /// Keep `raw` verbatim without trying to compress it.
+    pub fn stored(raw: Vec<u8>) -> Result<Self> {
+        let raw_len = u32::try_from(raw.len())
+            .map_err(|_| Error::Internal("block larger than 4 GiB".into()))?;
+        let crc = crc32(&raw);
+        Ok(Self {
+            header: RecordHeader {
+                method: Method::Store,
+                raw_len,
+                comp_len: raw_len,
+                crc,
+            },
+            payload: raw,
+        })
+    }
+
     /// Write header and payload; returns the bytes written.
     pub fn write_to<W: Write>(&self, out: &mut W) -> io::Result<u64> {
         out.write_all(&self.header.encode())?;

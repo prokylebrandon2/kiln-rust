@@ -81,6 +81,44 @@ impl TempOutput {
         )))
     }
 
+    /// Where the data is being written until it is committed.
+    pub fn temp_path(&self) -> &Path {
+        &self.tmp
+    }
+
+    /// Move a finished file to its final name without the `fsync` of [`commit`](Self::commit)
+    /// (acceptable for extracted files, where a crash just means extracting again).
+    ///
+    /// When overwriting is not allowed, a file that appeared since [`create`](Self::create) is
+    /// never replaced: the result is [`Error::Exists`] and the temporary file is removed.
+    pub fn commit_fast(mut self, file: File) -> Result<()> {
+        drop(file);
+        if self.overwrite {
+            if cfg!(windows) {
+                let _ = fs::remove_file(&self.dest);
+            }
+            fs::rename(&self.tmp, &self.dest).at(&self.dest)?;
+        } else {
+            match fs::hard_link(&self.tmp, &self.dest) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&self.tmp);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    return Err(Error::Exists(self.dest.clone()));
+                }
+                Err(_) => {
+                    // Filesystem without hard links: check, then rename (tiny race remains).
+                    if fs::symlink_metadata(&self.dest).is_ok() {
+                        return Err(Error::Exists(self.dest.clone()));
+                    }
+                    fs::rename(&self.tmp, &self.dest).at(&self.dest)?;
+                }
+            }
+        }
+        self.committed = true;
+        Ok(())
+    }
+
     /// Flush `file` to stable storage and move it to its final name.
     pub fn commit(mut self, file: File) -> Result<()> {
         file.sync_all().at(&self.tmp)?;

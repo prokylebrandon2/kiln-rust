@@ -15,7 +15,11 @@ use kiln::parallel::resolve_threads;
 use kiln::util::{format_size, format_utc, mib_per_sec, parse_size, ratio};
 use kiln::{Archive, ExtractOptions, PackOptions};
 
-/// Kiln: a fast multicore archiver (Rust rewrite, phase 1 foundation).
+/// Kiln: a fast multicore archiver (Rust rewrite, phase 2: working archiver).
+///
+/// Exit codes: 0 success, 1 other error, 2 usage error, 3 I/O error, 4 not a Kiln archive or
+/// unsupported version, 5 corrupt archive or checksum mismatch, 6 request refused (output exists,
+/// unsafe path, bad option, missing member), 7 completed with warnings.
 #[derive(Parser, Debug)]
 #[command(name = "kiln", version, about, long_about = None)]
 pub struct Cli {
@@ -26,13 +30,18 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Create an archive from files and directories
-    Pack(PackArgs),
+    #[command(visible_alias = "pack")]
+    Create(PackArgs),
     /// Extract an archive (or just some members of it)
-    Unpack(UnpackArgs),
+    #[command(visible_aliases = ["unpack", "x"])]
+    Extract(UnpackArgs),
     /// Show an archive's contents (instant: reads only the index)
+    #[command(visible_alias = "ls")]
     List(ListArgs),
     /// Verify every checksum without extracting
     Test(TestArgs),
+    /// Show archive-level information (format, codec, sizes, counts)
+    Info(InfoArgs),
     /// Measure codecs and block sizes on your own data
     Bench(BenchArgs),
 }
@@ -59,6 +68,15 @@ struct PackArgs {
     /// Print nothing except errors and warnings
     #[arg(short, long)]
     quiet: bool,
+    /// Keep estimated peak memory under this size (e.g. 256MiB) by using fewer threads/blocks
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    memory_limit: Option<u64>,
+    /// Always attempt compression, even on blocks that look incompressible (slow codecs only)
+    #[arg(long)]
+    no_precheck: bool,
+    /// Show a progress line on stderr
+    #[arg(long)]
+    progress: bool,
 }
 
 #[derive(Args, Debug)]
@@ -79,6 +97,12 @@ struct UnpackArgs {
     /// Print nothing except errors
     #[arg(short, long)]
     quiet: bool,
+    /// Keep estimated peak memory under this size (e.g. 256MiB) by using fewer threads/blocks
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    memory_limit: Option<u64>,
+    /// Show a progress line on stderr
+    #[arg(long)]
+    progress: bool,
 }
 
 #[derive(Args, Debug)]
@@ -97,6 +121,15 @@ struct TestArgs {
     /// Worker threads (0 = all cores)
     #[arg(short = 'j', long, default_value_t = 0)]
     threads: usize,
+    /// Keep estimated peak memory under this size (e.g. 256MiB) by using fewer threads/blocks
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    memory_limit: Option<u64>,
+}
+
+#[derive(Args, Debug)]
+struct InfoArgs {
+    /// Archive to inspect
+    archive: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -115,6 +148,52 @@ struct BenchArgs {
     threads: usize,
 }
 
+/// A throttled single-line progress display on stderr (only when `--progress` is given).
+struct Meter {
+    enabled: bool,
+    last: Instant,
+    drew: bool,
+}
+
+impl Meter {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            last: Instant::now(),
+            drew: false,
+        }
+    }
+
+    fn update(&mut self, done: u64, total: u64) {
+        if !self.enabled {
+            return;
+        }
+        let finished = done >= total;
+        if !finished && self.last.elapsed().as_millis() < 100 {
+            return;
+        }
+        self.last = Instant::now();
+        self.drew = true;
+        let pct = if total == 0 {
+            100.0
+        } else {
+            done as f64 * 100.0 / total as f64
+        };
+        eprint!(
+            "\r{pct:5.1}%  {} / {}   ",
+            format_size(done),
+            format_size(total)
+        );
+    }
+
+    /// Erase the progress line so the summary starts on a clean line.
+    fn finish(&mut self) {
+        if self.drew {
+            eprint!("\r{}\r", " ".repeat(48));
+        }
+    }
+}
+
 fn parse_block_size(text: &str) -> Result<u8, String> {
     let bytes = parse_size(text)?;
     if !bytes.is_power_of_two() {
@@ -127,26 +206,57 @@ fn parse_block_size(text: &str) -> Result<u8, String> {
     Ok(log2)
 }
 
-/// Run the parsed command line.
-pub fn run(cli: Cli) -> Result<()> {
-    match cli.command {
-        Command::Pack(a) => pack(a),
-        Command::Unpack(a) => unpack(a),
-        Command::List(a) => list(a),
-        Command::Test(a) => test(a),
-        Command::Bench(a) => benchmark(a),
+/// How a successful run ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Everything requested was done.
+    Clean,
+    /// Done, but something was skipped or could not be restored (a warning was printed).
+    Warnings,
+}
+
+/// Exit code for a failed run (see the `--help` text for the table).
+pub fn exit_code(err: &anyhow::Error) -> u8 {
+    use kiln::Error as E;
+    match err.downcast_ref::<E>() {
+        Some(E::Io { .. } | E::IoBare(_)) => 3,
+        Some(E::NotAnArchive(_) | E::Unsupported(_)) => 4,
+        Some(E::Corrupt(_) | E::Checksum(_)) => 5,
+        Some(E::UnsafePath(_) | E::Invalid(_) | E::Exists(_)) => 6,
+        // Codec failures while *reading* mean damaged data; FileChanged/Internal are other.
+        Some(E::Codec { .. }) => 5,
+        Some(E::FileChanged(_) | E::Internal(_)) | None => 1,
     }
 }
 
-fn pack(a: PackArgs) -> Result<()> {
+/// Run the parsed command line.
+pub fn run(cli: Cli) -> Result<Outcome> {
+    match cli.command {
+        Command::Create(a) => pack(a),
+        Command::Extract(a) => unpack(a),
+        Command::List(a) => list(a).map(|()| Outcome::Clean),
+        Command::Test(a) => test(a).map(|()| Outcome::Clean),
+        Command::Info(a) => info(a).map(|()| Outcome::Clean),
+        Command::Bench(a) => benchmark(a).map(|()| Outcome::Clean),
+    }
+}
+
+fn pack(a: PackArgs) -> Result<Outcome> {
     let options = PackOptions {
         codec: CodecSpec::parse(&a.codec)?,
         block_log2: a.block_size,
         threads: a.threads,
         overwrite: a.force,
+        memory_limit: a.memory_limit,
+        skip_incompressible: !a.no_precheck,
     };
     let started = Instant::now();
-    let stats = kiln::pack(&a.archive, &a.inputs, &options)?;
+    let mut meter = Meter::new(a.progress);
+    let stats = kiln::pack_with_progress(&a.archive, &a.inputs, &options, &mut |d, t| {
+        meter.update(d, t)
+    });
+    meter.finish();
+    let stats = stats?;
     let secs = started.elapsed().as_secs_f64();
     for s in &stats.skipped {
         eprintln!("warning: skipped {} ({})", s.path.display(), s.reason);
@@ -157,6 +267,7 @@ fn pack(a: PackArgs) -> Result<()> {
             p.display()
         );
     }
+    let warned = !stats.skipped.is_empty() || !stats.grew.is_empty();
     if !a.quiet {
         println!(
             "packed {} files, {} dirs: {} -> {} ({:.2}x) in {secs:.2}s, {:.0} MiB/s  [{}, {} blocks, {} threads]",
@@ -171,19 +282,27 @@ fn pack(a: PackArgs) -> Result<()> {
             resolve_threads(a.threads),
         );
     }
-    Ok(())
+    Ok(if warned {
+        Outcome::Warnings
+    } else {
+        Outcome::Clean
+    })
 }
 
-fn unpack(a: UnpackArgs) -> Result<()> {
+fn unpack(a: UnpackArgs) -> Result<Outcome> {
     let archive = Archive::open(&a.archive)?;
     let options = ExtractOptions {
         dest: a.output,
         overwrite: a.force,
         threads: a.threads,
         members: a.members,
+        memory_limit: a.memory_limit,
     };
     let started = Instant::now();
-    let stats = kiln::extract(&archive, &options)?;
+    let mut meter = Meter::new(a.progress);
+    let stats = kiln::extract_with_progress(&archive, &options, &mut |d, t| meter.update(d, t));
+    meter.finish();
+    let stats = stats?;
     let secs = started.elapsed().as_secs_f64();
     if stats.metadata_errors > 0 {
         eprintln!(
@@ -202,7 +321,11 @@ fn unpack(a: UnpackArgs) -> Result<()> {
             archive.block_count(),
         );
     }
-    Ok(())
+    Ok(if stats.metadata_errors > 0 {
+        Outcome::Warnings
+    } else {
+        Outcome::Clean
+    })
 }
 
 fn list(a: ListArgs) -> Result<()> {
@@ -241,10 +364,64 @@ fn list(a: ListArgs) -> Result<()> {
     Ok(())
 }
 
+fn info(a: InfoArgs) -> Result<()> {
+    let archive = Archive::open(&a.archive)?;
+    let files = archive
+        .entries()
+        .iter()
+        .filter(|e| e.kind == EntryKind::File)
+        .count();
+    let empty = archive
+        .entries()
+        .iter()
+        .filter(|e| e.kind == EntryKind::File && e.size == 0)
+        .count();
+    let dirs = archive.entries().len() - files;
+    let h = archive.header();
+    println!("Archive:         {}", archive.path().display());
+    println!(
+        "Format:          Kiln container, version {}",
+        kiln::format::FORMAT_VERSION
+    );
+    println!("Codec:           {}", h.default_method.name());
+    println!("Block size:      {}", format_size(h.block_size()));
+    println!("Files:           {files} ({empty} empty)");
+    println!("Directories:     {dirs}");
+    let blocks = archive.block_stats()?;
+    let mut kinds = Vec::new();
+    for (n, name) in [
+        (blocks.zstd, "zstd"),
+        (blocks.lz4, "lz4"),
+        (blocks.lzma, "lzma"),
+        (blocks.stored, "stored"),
+    ] {
+        if n > 0 {
+            kinds.push(format!("{n} {name}"));
+        }
+    }
+    println!("Blocks:          {} ({})", blocks.total, kinds.join(", "));
+    println!(
+        "Uncompressed:    {} ({} bytes)",
+        format_size(archive.total_raw()),
+        archive.total_raw()
+    );
+    println!(
+        "Archive size:    {} ({} bytes)",
+        format_size(archive.file_len()),
+        archive.file_len()
+    );
+    println!(
+        "Ratio:           {:.3}x",
+        ratio(archive.total_raw(), archive.file_len())
+    );
+    println!("Integrity:       CRC-32 per block, BLAKE3 per file (run `kiln test` to verify)");
+    Ok(())
+}
+
 fn test(a: TestArgs) -> Result<()> {
     let archive = Archive::open(&a.archive)?;
     let started = Instant::now();
-    let stats = kiln::verify(&archive, a.threads)?;
+    let stats = kiln::verify_with(&archive, a.threads, a.memory_limit)?;
     let secs = started.elapsed().as_secs_f64();
     println!(
         "OK: {} files, {} dirs, {} verified in {secs:.2}s ({:.0} MiB/s)",

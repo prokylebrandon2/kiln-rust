@@ -148,6 +148,49 @@ impl CodecSpec {
         Ok(())
     }
 
+    /// Conservative estimate of the working memory one *compression* worker needs for blocks of
+    /// `block` bytes, on top of the block buffers themselves. Derived from measured peak RSS
+    /// (see `docs/PHASE2.md`) and rounded up; used by `--memory-limit`.
+    pub fn compress_context_bytes(&self, block: u64) -> u64 {
+        const MIB: u64 = 1 << 20;
+        match self.method {
+            Method::Store => 0,
+            Method::Lz4 => MIB,
+            Method::Zstd => match self.level {
+                ..=3 => 4 * MIB + 2 * block.min(2 * MIB),
+                4..=9 => 8 * MIB + 4 * block.min(4 * MIB),
+                _ => 8 * MIB + 10 * block.min(8 * MIB),
+            },
+            Method::Lzma2 => {
+                let dict = match self.level {
+                    0 => MIB / 4,
+                    1 => MIB,
+                    2 => 2 * MIB,
+                    3 | 4 => 4 * MIB,
+                    5 | 6 => 8 * MIB,
+                    7 => 16 * MIB,
+                    8 => 32 * MIB,
+                    _ => 64 * MIB,
+                };
+                2 * MIB + 12 * dict.min(block)
+            }
+        }
+    }
+
+    /// Estimated working memory of one *decompression* worker for blocks of `block` bytes.
+    pub fn decompress_context_bytes(block: u64) -> u64 {
+        block + (1 << 20)
+    }
+
+    /// True for codecs slow enough that sampling a block to skip hopeless ones pays off.
+    pub fn is_heavy(&self) -> bool {
+        match self.method {
+            Method::Zstd => self.level >= 10,
+            Method::Lzma2 => true,
+            Method::Store | Method::Lz4 => false,
+        }
+    }
+
     /// Instantiate the backend.
     pub fn build(&self) -> Result<Box<dyn BlockCodec>> {
         self.validate()?;
@@ -181,6 +224,44 @@ pub fn decoder_for(method: Method) -> &'static dyn BlockCodec {
         Method::Zstd => &ZSTD,
         Method::Lzma2 => &LZMA,
     }
+}
+
+/// Cheap test for "this block will not compress": samples four 16 KiB windows spread across the
+/// block and requires **both** a near-flat byte histogram (order-0 entropy above 7.98 bits/byte)
+/// **and** that LZ4 saves less than 2% on every sample together. Either signal alone has
+/// well-known false positives (PCM audio has no LZ matches; repeated random bytes have a flat
+/// histogram), so only data that fails both is skipped. Blocks under 128 KiB are never skipped.
+///
+/// Known blind spot: matches farther apart than the sampled windows (for example a 2 MiB random
+/// chunk repeated twice in one block) are not seen, so such a block is stored instead of
+/// compressed. That costs ratio, never correctness.
+pub fn looks_incompressible(block: &[u8]) -> bool {
+    const WINDOW: usize = 16 << 10;
+    const WINDOWS: usize = 4;
+    if block.len() < 2 * WINDOW * WINDOWS {
+        return false;
+    }
+    let span = block.len() - WINDOW;
+    let mut histogram = [0u32; 256];
+    let mut lz_out = 0usize;
+    for k in 0..WINDOWS {
+        let start = span / (WINDOWS - 1) * k;
+        let window = &block[start..start + WINDOW];
+        for &b in window {
+            histogram[b as usize] += 1;
+        }
+        lz_out += lz4_flex::block::compress(window).len();
+    }
+    let n = (WINDOW * WINDOWS) as f64;
+    let entropy: f64 = histogram
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = f64::from(c) / n;
+            -p * p.log2()
+        })
+        .sum();
+    entropy > 7.98 && lz_out as f64 > n * 0.98
 }
 
 /// Reject decoder output of the wrong size (shared by every backend).
@@ -363,5 +444,66 @@ mod tests {
             assert_eq!(Method::from_id(id).unwrap().id(), id);
         }
         assert!(Method::from_id(4).is_none());
+    }
+}
+
+#[cfg(test)]
+mod sampler_tests {
+    use super::*;
+
+    fn noise(len: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 32) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn random_data_is_flagged_but_small_blocks_never_are() {
+        assert!(looks_incompressible(&noise(1 << 20, 7)));
+        assert!(!looks_incompressible(&noise(64 << 10, 7)));
+        assert!(!looks_incompressible(&[]));
+    }
+
+    #[test]
+    fn compressible_data_is_never_flagged() {
+        assert!(!looks_incompressible(&vec![0u8; 1 << 20]));
+        let text: Vec<u8> = b"the quick brown fox jumps over the lazy dog\n"
+            .iter()
+            .cycle()
+            .take(1 << 20)
+            .copied()
+            .collect();
+        assert!(!looks_incompressible(&text));
+        // Flat histogram but highly repetitive: LZ4 finds the matches, so it is not skipped.
+        let repeated: Vec<u8> = noise(256, 3).into_iter().cycle().take(1 << 20).collect();
+        assert!(!looks_incompressible(&repeated));
+        // Low-entropy "sensor" data with no long matches: entropy test keeps it out.
+        let slow: Vec<u8> = noise(1 << 20, 5).iter().map(|b| b & 0x0F).collect();
+        assert!(!looks_incompressible(&slow));
+    }
+
+    #[test]
+    fn memory_estimates_grow_with_effort_and_block_size() {
+        let mib = 1u64 << 20;
+        let z3 = CodecSpec::new(Method::Zstd, 3);
+        let z19 = CodecSpec::new(Method::Zstd, 19);
+        let lz = CodecSpec::new(Method::Lzma2, 6);
+        assert_eq!(
+            CodecSpec::new(Method::Store, 0).compress_context_bytes(4 * mib),
+            0
+        );
+        assert!(z3.compress_context_bytes(4 * mib) < z19.compress_context_bytes(4 * mib));
+        assert!(z19.compress_context_bytes(mib) < z19.compress_context_bytes(4 * mib));
+        assert!(
+            lz.compress_context_bytes(32 * mib) >= 90 * mib,
+            "lzma:6 needs ~96 MiB"
+        );
+        assert!(z19.is_heavy() && lz.is_heavy() && !z3.is_heavy());
     }
 }

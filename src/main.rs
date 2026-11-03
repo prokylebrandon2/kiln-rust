@@ -8,10 +8,11 @@ use clap::Parser;
 
 fn main() -> ExitCode {
     match cli::run(cli::Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(cli::Outcome::Clean) => ExitCode::SUCCESS,
+        Ok(cli::Outcome::Warnings) => ExitCode::from(7),
         Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
+            eprintln!("error: {e}");
+            ExitCode::from(cli::exit_code(&e))
         }
     }
 }

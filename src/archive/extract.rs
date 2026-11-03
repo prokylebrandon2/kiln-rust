@@ -18,12 +18,14 @@ use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::reader::Archive;
+use super::{Progress, pipeline_config};
+use crate::codec::CodecSpec;
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{Entry, EntryKind};
 use crate::format::record::{RecordHeader, decode_payload, read_record};
-use crate::fsutil::{set_dir_mtime, set_file_mtime, set_mode};
+use crate::fsutil::{TempOutput, set_dir_mtime, set_file_mtime, set_mode};
 use crate::integrity::{FileHasher, empty_hash, to_hex};
-use crate::parallel::{Config, Source, run_ordered};
+use crate::parallel::{MemoryModel, Source, run_ordered};
 use crate::path::{normalize_selector, safe_join, selector_matches};
 
 /// Settings for [`extract`].
@@ -38,6 +40,8 @@ pub struct ExtractOptions {
     /// Only extract these members (a file, or a directory with everything below it).
     /// Empty means everything.
     pub members: Vec<String>,
+    /// Keep estimated peak memory under this many bytes by lowering threads / in-flight blocks.
+    pub memory_limit: Option<u64>,
 }
 
 impl ExtractOptions {
@@ -48,6 +52,7 @@ impl ExtractOptions {
             overwrite: false,
             threads: 0,
             members: Vec::new(),
+            memory_limit: None,
         }
     }
 }
@@ -71,19 +76,44 @@ pub struct ExtractStats {
 ///
 /// Extraction is not transactional: if it fails midway, files written so far remain.
 pub fn extract(archive: &Archive, options: &ExtractOptions) -> Result<ExtractStats> {
+    extract_with_progress(archive, options, &mut |_, _| {})
+}
+
+/// [`extract`], reporting `(bytes_done, bytes_total)` of decoded block data as it goes.
+pub fn extract_with_progress(
+    archive: &Archive,
+    options: &ExtractOptions,
+    progress: Progress<'_>,
+) -> Result<ExtractStats> {
     let selected = select(archive, &options.members)?;
     let output = Output {
         dest: &options.dest,
         overwrite: options.overwrite,
     };
     fs::create_dir_all(&options.dest).at(&options.dest)?;
-    run(archive, &selected, Some(output), options.threads)
+    run(
+        archive,
+        &selected,
+        Some(output),
+        options.threads,
+        options.memory_limit,
+        progress,
+    )
 }
 
 /// Decode every block and check every checksum without writing anything.
 pub fn verify(archive: &Archive, threads: usize) -> Result<ExtractStats> {
+    verify_with(archive, threads, None)
+}
+
+/// [`verify`] with an optional memory limit (see [`ExtractOptions::memory_limit`]).
+pub fn verify_with(
+    archive: &Archive,
+    threads: usize,
+    memory_limit: Option<u64>,
+) -> Result<ExtractStats> {
     let all: Vec<usize> = (0..archive.entries().len()).collect();
-    run(archive, &all, None, threads)
+    run(archive, &all, None, threads, memory_limit, &mut |_, _| {})
 }
 
 /// Resolve user-supplied member names to entry indices (ascending = stream order).
@@ -118,8 +148,20 @@ fn run(
     selected: &[usize],
     output: Option<Output<'_>>,
     threads: usize,
+    memory_limit: Option<u64>,
+    progress: Progress<'_>,
 ) -> Result<ExtractStats> {
     let block_size = archive.header.block_size();
+    let config = pipeline_config(
+        threads,
+        memory_limit,
+        MemoryModel {
+            base: 16 << 20,
+            per_item: 2 * block_size,
+            per_thread: CodecSpec::decompress_context_bytes(block_size),
+        },
+        "this archive's block size sets the floor; the limit cannot go lower",
+    )?;
     let offsets = archive.index.stream_offsets();
 
     // Which blocks do the selected files touch?
@@ -146,6 +188,11 @@ fn run(
         .map(|(b, _)| b as u32)
         .collect();
 
+    let total_bytes: u64 = block_list
+        .iter()
+        .map(|&b| (archive.index.total_raw - u64::from(b) * block_size).min(block_size))
+        .sum();
+    let mut done_bytes = 0u64;
     let mut demux = Demux {
         entries: &archive.index.entries,
         selected,
@@ -172,7 +219,7 @@ fn run(
             total_raw: archive.index.total_raw,
         };
         run_ordered(
-            Config::new(threads),
+            config,
             source,
             |raw: RawBlock| {
                 let index = raw.index;
@@ -180,7 +227,12 @@ fn run(
                     .map(|data| DecodedBlock { index, data })
                     .map_err(|e| in_block(e, index))
             },
-            |block: DecodedBlock| demux.push(block.index, &block.data),
+            |block: DecodedBlock| {
+                demux.push(block.index, &block.data)?;
+                done_bytes += block.data.len() as u64;
+                progress(done_bytes, total_bytes);
+                Ok(())
+            },
         )
         .map_err(Error::from)?;
     }
@@ -260,9 +312,12 @@ struct Target {
     end: u64,
 }
 
+/// The file currently being written. Content goes to a temporary name and is renamed into place
+/// only after its BLAKE3 hash has been verified, so a failed run never leaves a truncated or
+/// unverified file under a real name (dropping this value removes the temporary file).
 struct OpenTarget {
-    file: Option<File>,
-    path: PathBuf,
+    /// `Some` when extracting; `None` for `verify`.
+    sink: Option<(TempOutput, File)>,
     hasher: FileHasher,
 }
 
@@ -314,19 +369,24 @@ impl Demux<'_> {
 
     fn begin(&mut self, entry: usize) -> Result<()> {
         let e = &self.entries[entry];
-        let (file, path) = match &self.output {
+        let sink = match &self.output {
             Some(out) => {
                 let path = safe_join(out.dest, &e.path)?;
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).at(parent)?;
                 }
-                (Some(create_file(&path, out.overwrite)?), path)
+                if out.overwrite && fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+                    return Err(Error::Invalid(format!(
+                        "cannot replace directory {} with a file",
+                        path.display()
+                    )));
+                }
+                Some(TempOutput::create(&path, out.overwrite)?)
             }
-            None => (None, PathBuf::from(&e.path)),
+            None => None,
         };
         self.open = Some(OpenTarget {
-            file,
-            path,
+            sink,
             hasher: FileHasher::new(),
         });
         Ok(())
@@ -342,8 +402,9 @@ impl Demux<'_> {
                 to_hex(&e.hash)
             )));
         }
-        if let Some(file) = &open.file {
-            self.stats.metadata_errors += apply_file_metadata(file, &open.path, e);
+        if let Some((temp, file)) = open.sink {
+            self.stats.metadata_errors += apply_file_metadata(&file, temp.temp_path(), e);
+            temp.commit_fast(file)?;
         }
         self.stats.files += 1;
         self.stats.bytes += e.size;
@@ -371,8 +432,8 @@ impl Demux<'_> {
             let slice = &data[(s - b0) as usize..(e - b0) as usize];
             let open = self.open.as_mut().expect("opened above");
             open.hasher.update(slice);
-            if let Some(file) = &mut open.file {
-                file.write_all(slice).at(&open.path)?;
+            if let Some((temp, file)) = &mut open.sink {
+                file.write_all(slice).at(temp.temp_path())?;
             }
             if e < t.end {
                 break; // the file continues in the next block

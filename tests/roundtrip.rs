@@ -15,6 +15,7 @@ fn opts(codec: &str, block_log2: u8, threads: usize) -> PackOptions {
         block_log2,
         threads,
         overwrite: false,
+        ..PackOptions::default()
     }
 }
 

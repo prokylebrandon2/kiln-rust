@@ -11,18 +11,24 @@ replaceable codec layer (store, lz4, zstd, lzma), a provisional block container,
 ordered pipeline, traversal, integrity, CLI (`pack unpack list test bench`), 81 tests including
 exhaustive corruption tests.
 
-## Phase 2 - Throughput and memory
+## Phase 2 - Working archiver  (done; see `PHASE2.md`)
 
-*Why:* a single core caps fast codecs near 400 MiB/s (producer does read + BLAKE3 + zero-fill);
-multicore scaling is unmeasured.
+`create / extract / list / test / info`, exit codes, end-to-end tests, validated on a mixed
+corpus and on a 4.25 GiB file. Also delivered from the original throughput plan:
+`--memory-limit`, progress reporting, the incompressibility pre-check, and block statistics in
+`info`. Android APK workflow and shell app are included but **have never been built**.
+
+## Throughput and memory (remaining items)
+
+*Why:* a single core caps fast codecs near 400-700 MiB/s (producer does read + BLAKE3 +
+zero-fill); scaling is only measured up to 2 threads.
 
 * Measure scaling on a multicore machine (1/2/4/8/16 threads) for lz4, zstd:3, zstd:19, lzma:6.
 * Move per-file hashing off the producer (hash on workers, combine in order), avoid zero-filling
   blocks, add a buffer pool, read-ahead and parallel file opening for many small files.
-* Cheap entropy pre-check to skip compression attempts on incompressible blocks.
-* `--memory-limit` that derives threads/in-flight from a budget; progress reporting.
+* Test archives larger than 4 GiB and a genuinely full disk.
 * **Exit:** documented speedup curve; at least 90% of the `store` ceiling for lz4 on all cores;
-  memory formula validated with measurements at >1 thread.
+  memory model validated at more than 2 threads.
 
 ## Phase 3 - Ratio and format
 

@@ -39,6 +39,7 @@ pub mod util;
 pub mod walk;
 
 pub use archive::{
-    Archive, ExtractOptions, ExtractStats, PackOptions, PackStats, extract, pack, verify,
+    Archive, BlockStats, ExtractOptions, ExtractStats, PackOptions, PackStats, extract,
+    extract_with_progress, pack, pack_with_progress, verify, verify_with,
 };
 pub use error::{Error, Result};

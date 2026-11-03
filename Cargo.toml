@@ -3,7 +3,7 @@ name = "kiln"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 1 foundation"
+description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 2 working archiver"
 readme = "README.md"
 publish = false
 

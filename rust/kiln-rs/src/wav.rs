@@ -615,7 +615,8 @@ mod enc_tests {
         let mut o = vec![0u8; 3];
         assert!(!f2i(&0x8000_0000u32.to_le_bytes(), 1, 15, 2, &mut o));
         assert!(!f2i(&0x7fc0_0000u32.to_le_bytes(), 1, 15, 2, &mut o));
-        assert!(!f2i(&0.5f32.to_le_bytes(), 1, 15, 2, &mut o));
+        assert!(f2i(&0.5f32.to_le_bytes(), 1, 15, 2, &mut o));
+        assert!(!f2i(&(1.0f32 / 65536.0).to_le_bytes(), 1, 15, 2, &mut o));
     }
 }
 

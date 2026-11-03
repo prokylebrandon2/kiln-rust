@@ -1,0 +1,22 @@
+kiln 14 selftest - Python 3.12.3, 1 core(s)
+  test set: 17 files, 2.5 MB
+  PASS  pack, test, extract, compare (7.6s) - 1.4 MB, filters: float32.wav=9, float64.wav=11, float_from16.wav=93, float_from24_ext.wav=109, float_from8_mono.wav=73, float_nan.wav=9, pcm16.wav=7, pcm16_6ch.wav=1, pcm24.wav=29, pcm24_ext_mono.wav=26, pcm24in32.wav=37, pcm32.wav=45, pcm8.wav=53
+  PASS  no silent raw fallback (0.1s) - raw-stored blocks are incompressible (192 KB)
+  PASS  encryption (9.3s) - wrong password rejected
+  PASS  wide match window (0.8s) - a repeat 2 MB away costs 603 bytes (0% of a fresh copy)
+  PASS  matches beyond 8 MB (1.5s) - a copy 14 MB away costs 140 extra bytes; distances to 64 MB round-trip
+  PASS  parse with literal position bits (4.1s) - float32: 1019129 -> 1014231 bytes (0.5% smaller)
+  PASS  every WAV filter round-trips (0.0s) - 126 filter/channel combinations
+  PASS  filter choice per WAV format (3.9s)
+  PASS  append-only saves, hidden entries, compact (14.6s) - plain + encrypted
+  PASS  checkpoints: random access (10.5s) - 4 checkpoints, plain; 4 checkpoints, encrypted
+  PASS  repeats in random-looking data (1.3s) - random: +0.0%, high-entropy text: +0.0%
+  PASS  duplicate precompressed files (0.1s) - 3 copies of a 300 KB jpg/zip + 100 KB jpg -> 390 KB
+  PASS  chunk classes (0.4s) - noise skipped, structured data searched
+  PASS  length-2 matches (0.0s) - 5035 tokens round-trip
+  PASS  memory-aware workers (0.0s) - 8 cores: 1, 3, 7, 8 workers at 0.5, 2.5, 6, 64 GB free
+  PASS  literal position bits (0.9s) - settings used by float32 blocks: [6]
+  PASS  literal mixer (0.3s) - 1 of 1 blocks use the mixer
+  PASS  range coder (5.6s) - 590835 bytes -> 158273
+  PASS  corruption is detected (6.1s) - 25 of 25 corrupted archives rejected
+all 19 checks passed in 67.7s

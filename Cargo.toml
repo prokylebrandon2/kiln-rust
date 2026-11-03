@@ -1,0 +1,41 @@
+[package]
+name = "kiln"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 1 foundation"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "kiln"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kiln"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1"
+crossbeam-channel = "0.5"
+liblzma = "0.4"
+lz4_flex = "0.14"
+tempfile = "3"
+thiserror = "2"
+walkdir = "2"
+zstd = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "debuginfo"
+# panic = "unwind" (the default) is deliberate: temp-file guards must run on a panic.
+
+[profile.dev]
+# Compression is unusably slow at opt-level 0; keep tests fast.
+opt-level = 1

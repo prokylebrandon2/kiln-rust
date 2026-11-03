@@ -1,0 +1,63 @@
+# Roadmap
+
+Phase 1 (this delivery) is the audit and a working, tested foundation. Phases 2-5 below are a
+**plan**, with each target tied to a measurement in `BASELINE.md`. Targets are hypotheses to
+validate, not promises.
+
+## Phase 1 - Audit and foundation  (done)
+
+Audit of the original; baseline against ZIP/7-Zip/xz/zstd/lz4; Rust workspace with a
+replaceable codec layer (store, lz4, zstd, lzma), a provisional block container, parallel
+ordered pipeline, traversal, integrity, CLI (`pack unpack list test bench`), 81 tests including
+exhaustive corruption tests.
+
+## Phase 2 - Throughput and memory
+
+*Why:* a single core caps fast codecs near 400 MiB/s (producer does read + BLAKE3 + zero-fill);
+multicore scaling is unmeasured.
+
+* Measure scaling on a multicore machine (1/2/4/8/16 threads) for lz4, zstd:3, zstd:19, lzma:6.
+* Move per-file hashing off the producer (hash on workers, combine in order), avoid zero-filling
+  blocks, add a buffer pool, read-ahead and parallel file opening for many small files.
+* Cheap entropy pre-check to skip compression attempts on incompressible blocks.
+* `--memory-limit` that derives threads/in-flight from a budget; progress reporting.
+* **Exit:** documented speedup curve; at least 90% of the `store` ceiling for lz4 on all cores;
+  memory formula validated with measurements at >1 thread.
+
+## Phase 3 - Ratio and format
+
+*Why:* the original is 3.2% (text) and 9.6% (binary) better than the current best; independent
+blocks cost ~4% on text.
+
+* x86/ARM64 **BCJ filter** for executable data via liblzma filters (measured potential: -8.6%
+  on the binary corpus). Delta filter for tables/audio.
+* Reduce the block-independence cost: larger blocks for LZMA, zstd long-distance matching,
+  solid groups (several blocks sharing a window), grouping similar files (by extension) before
+  blocking, dictionaries for many small files. Each change must show a measured gain.
+* Whole-file and block deduplication (evaluate content-defined chunking).
+* Presets (`fast`, `balanced`, `max`) chosen from the data, replacing raw level numbers.
+* Symlinks, hard links, ownership, xattrs. **Freeze format version 1** (or bump to 2) with a
+  written compatibility policy and golden test archives.
+* **Exit:** text >= 6.4x and binary >= 5.2x at a documented speed, or a documented reason why not.
+
+## Phase 4 - Features and the legacy question
+
+* Encryption (authenticated, per block, password KDF) and authenticated index.
+* Append / update / delete / compact without rewriting everything.
+* **Decision gate on `.kln` compatibility:** read-only support for the original `KLNA` format
+  requires porting its range-coder decoder, filters and encryption (a large task); an optional
+  native range-coder backend behind `BlockCodec` is the other candidate. Decide with data: does
+  the ratio gain over LZMA2+BCJ justify the complexity?
+* Android: the Rust core could replace the Python engine through JNI. Out of scope until the
+  format is frozen.
+* Import/export of ZIP/7z/tar for interoperability.
+
+## Phase 5 - Hardening and release
+
+* Fuzzing (`cargo-fuzz`) of `Archive::open`, record and index decoding, and extraction.
+* Hardened extraction against hostile output directories (`openat`-style, e.g. `cap-std`).
+* CI on Linux, macOS and Windows (the Phase 1 CI file is untested; Windows paths and permission
+  code are written but unverified).
+* Benchmarks vs 7-Zip/ZIP on large, many-core, SSD and HDD setups; reproducible release
+  profile; packaging; choose a license (the original has none).
+* Security review, semantic-versioning commitment, user documentation.

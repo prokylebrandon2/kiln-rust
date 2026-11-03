@@ -170,6 +170,22 @@ public class SettingsActivity extends Activity {
                     sh.button("Cancel", Ui.TEXT, null).show();
                 });
 
+        heading("DELETING");
+        LinearLayout dl = card();
+        choiceRow(dl, "When deleting", Defaults.DELETE_NAMES[Defaults.deleteMode(this)],
+                "Deleted items kept in the recycle bin can be restored. Open it from the \u22ee menu on the file list.", () -> {
+                    Sheet sh = new Sheet(this, "When deleting");
+                    String[] det = {"Choose each time", "Keep deleted items so they can be restored", "Delete at once, can't be undone"};
+                    for (int i = 0; i < Defaults.DELETE_NAMES.length; i++) {
+                        final int v = i;
+                        sh.radio(Defaults.DELETE_NAMES[i], det[i], i == Defaults.deleteMode(this), () -> {
+                            Defaults.setDeleteMode(this, v);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
         heading("PACKING");
         LinearLayout pk = card();
         toggle(pk, "Delete source files after packing",

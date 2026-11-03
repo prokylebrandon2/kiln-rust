@@ -21,6 +21,8 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -127,7 +129,7 @@ public class MainActivity extends Activity {
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
-            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19, M_ICON = 20;
+            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19, M_ICON = 20, M_BIN = 21;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -703,9 +705,14 @@ public class MainActivity extends Activity {
                         previewsOn);
             } else {
                 icon.setTag(null);
-                Thumbs.showIcon(icon, r.icon, r.folder || r.dir || r.up ? accent
+                int tint = r.folder || r.dir || r.up ? accent
                         : r.item != null && !r.item.kind.equals("file") ? Ui.text2(getContext())
-                        : Icons.tintFor(getContext(), r.title));
+                        : Icons.tintFor(getContext(), r.title);
+                if (r.item != null && "dir".equals(r.item.kind) && arc == null && cwd != null) {
+                    int picked = Defaults.folderColor(getContext(), new File(cwd, r.item.name).getPath());
+                    if (picked != 0) tint = picked;               // a colour chosen for this folder
+                }
+                Thumbs.showIcon(icon, r.icon, tint);
             }
             if (selected != wasSelected) {                    // a little pop when selection flips
                 icon.setScaleX(0.7f);
@@ -1245,6 +1252,7 @@ public class MainActivity extends Activity {
     private static int menuIcon(int id) {
         switch (id) {
             case M_SETTINGS: return R.drawable.ic_settings;
+            case M_BIN: return R.drawable.ic_delete;
             case M_REFRESH: return R.drawable.ic_refresh;
             case M_SELECT_ALL: return R.drawable.ic_check;
             case M_CLEAR: return R.drawable.ic_close;
@@ -1287,7 +1295,7 @@ public class MainActivity extends Activity {
             l.add("Select all"); id.add(M_SELECT_ALL);
             l.add("Properties"); id.add(M_PROPS);
             if (sel.size() == 1 && !sel.iterator().next().contains("/") && !Priv.readOnly(cwd.getPath())) { l.add("Rename"); id.add(M_RENAME); }
-            if (sel.size() == 1 && selectedDir() != null) { l.add("Change icon..."); id.add(M_ICON); }
+            if (sel.size() == 1 && selectedDir() != null) { l.add("Icon and color..."); id.add(M_ICON); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
             if (sel.size() == 1 && selectedArchive() != null) { l.add("Extract..."); id.add(M_EXTRACT); }
             if (sel.size() == 1 && selectedSet() != null) { l.add("Browse as plain folder"); id.add(M_PLAIN); }
@@ -1297,6 +1305,7 @@ public class MainActivity extends Activity {
             l.add(showAll ? "Show archives only" : "Show all files"); id.add(M_ALL_FILES);
             l.add(showHidden ? "Hide hidden files" : "Show hidden files"); id.add(M_HIDDEN);
             l.add("Refresh"); id.add(M_REFRESH);
+            l.add("Recycle bin"); id.add(M_BIN);
             l.add("Settings"); id.add(M_SETTINGS);
             l.add("About"); id.add(M_ABOUT);
         }
@@ -1320,6 +1329,9 @@ public class MainActivity extends Activity {
             case M_REFRESH:
                 forceAnim = true;
                 loadDir(cwd, true);
+                break;
+            case M_BIN:
+                binSheet();
                 break;
             case M_SETTINGS:
                 startActivity(new Intent(this, SettingsActivity.class));
@@ -1370,7 +1382,7 @@ public class MainActivity extends Activity {
                     File f = new File(cwd, it.name);
                     sel.clear();
                     redraw();
-                    iconPicker(f.getPath(), f.getName(), this::refreshDirIcons);
+                    iconPicker(f.getPath(), f.getName(), true, this::refreshDirIcons);
                 }
                 break;
             }
@@ -1882,10 +1894,73 @@ public class MainActivity extends Activity {
 
     /** A grid of folder icons to choose from, for a folder or a bookmark. `done` runs after a change. */
     private void iconPicker(final String path, String name, final Runnable done) {
-        final Sheet s = new Sheet(this, "Icon for " + name);
+        iconPicker(path, name, false, done);
+    }
+
+    /** Colours a folder can be given (the first, "default", is the app's accent). */
+    private static final int[] FOLDER_COLORS = {0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0,
+            0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3, 0xFFC45BA3, 0xFF8D99AE};
+
+    /** With `colors`, a row of colour swatches comes first (for folders in the list, not bookmarks). */
+    private void iconPicker(final String path, String name, final boolean colors, final Runnable done) {
+        final Sheet s = new Sheet(this, (colors ? "Icon and color for " : "Icon for ") + name);
+        final List<ImageView> iconViews = new ArrayList<>();
         final String cur = Defaults.folderIcon(this, path);
         final int cols = 4;
         int accent = Ui.accent(this);
+        if (colors) {
+            final LinearLayout swatches = new LinearLayout(this);
+            swatches.setOrientation(LinearLayout.VERTICAL);
+            final Runnable[] fill = new Runnable[1];
+            fill[0] = () -> {
+                swatches.removeAllViews();
+                int now = Defaults.folderColor(this, path);
+                int per = 6;
+                LinearLayout rowL = null;
+                for (int i = 0; i <= FOLDER_COLORS.length; i++) {
+                    if (i % per == 0) {
+                        rowL = new LinearLayout(this);
+                        rowL.setOrientation(LinearLayout.HORIZONTAL);
+                        swatches.addView(rowL, new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                    }
+                    final int col = i == 0 ? 0 : FOLDER_COLORS[i - 1];       // 0 = the normal accent
+                    final int shown = col == 0 ? Ui.accent(this) : col;
+                    boolean on = col == now;
+                    FrameLayout cell = new FrameLayout(this);
+                    View dot = new View(this);
+                    GradientDrawable g = new GradientDrawable();
+                    g.setShape(GradientDrawable.OVAL);
+                    g.setColor(shown);
+                    g.setStroke(dp(on ? 3 : 1), on ? Ui.text(this) : Ui.line(this));
+                    dot.setBackground(g);
+                    FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER);
+                    cell.addView(dot, dl);
+                    if (on) {
+                        TextView ck = Ui.label(this, "\u2713", 16, true, false);
+                        ck.setTextColor(Color.WHITE);
+                        ck.setGravity(Gravity.CENTER);
+                        cell.addView(ck, new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                    }
+                    cell.setOnClickListener(v -> {
+                        Defaults.setFolderColor(this, path, col);
+                        for (ImageView iv : iconViews) Ui.tint(iv, shown);
+                        fill[0].run();
+                        if (done != null) done.run();                          // the list behind updates at once
+                    });
+                    LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, dp(42), 1f);
+                    rowL.addView(cell, cl);
+                }
+                for (int i = (FOLDER_COLORS.length + 1) % per; i != 0 && i < per; i++) {
+                    rowL.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+                }
+            };
+            fill[0].run();
+            s.content(swatches).space(10);
+        }
+        int cur0 = colors ? Defaults.folderColor(this, path) : 0;
+        final int iconTint = cur0 != 0 ? cur0 : accent;
         LinearLayout grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
         LinearLayout line = null;
@@ -1906,7 +1981,8 @@ public class MainActivity extends Activity {
             cell.setBackground(Ui.pressable(this, on ? getColor(R.color.k_chip) : 0, on ? accent : 0, 12));
             ImageView iv = new ImageView(this);
             iv.setImageResource(Icons.byKey(key));
-            Ui.tint(iv, accent);
+            Ui.tint(iv, iconTint);
+            iconViews.add(iv);
             cell.addView(iv, new LinearLayout.LayoutParams(dp(40), dp(40)));
             TextView t = Ui.label(this, Icons.FOLDER_KEYS[i][1], 11, on, !on);
             t.setSingleLine(true);
@@ -1929,6 +2005,7 @@ public class MainActivity extends Activity {
         s.content(grid);
         s.button("Use default", Ui.OUTLINE, () -> {
             Defaults.setFolderIcon(this, path, null);
+            if (colors) Defaults.setFolderColor(this, path, 0);
             if (done != null) done.run();
             return true;
         });
@@ -3813,15 +3890,209 @@ public class MainActivity extends Activity {
     private void deleteSelected() {
         final List<File> victims = selectedFiles();
         if (victims.isEmpty()) return;
-        String what = victims.size() == 1 ? "\"" + victims.get(0).getName() + "\""
+        final String what = victims.size() == 1 ? "\"" + victims.get(0).getName() + "\""
                 : plural(victims.size(), "item", "items");
-        confirm("Delete " + what + "?", "This can't be undone.", "Delete", Ui.DANGER, () ->
+        final int mode = Defaults.deleteMode(this);
+        // the recycle bin works on the storage's own files; protected folders and anything outside a storage
+        // (or already in a bin) can only be deleted for good
+        boolean binnable = !Priv.involves(pathsJson(victims), "");
+        for (File f : victims) if (Trash.rootOf(f, binRoots()) == null) binnable = false;
+        if (!binnable || mode == 2) {
+            deleteForGood(victims, what, !binnable && mode != 2
+                    ? "These can't go to the recycle bin here, so this can't be undone." : "This can't be undone.");
+        } else if (mode == 1) {
+            toBin(victims);
+        } else {
+            new Sheet(this, "Delete " + what + "?")
+                    .option(R.drawable.ic_delete, "Move to recycle bin", false, () -> toBin(victims))
+                    .option(R.drawable.ic_close, "Delete permanently", false, () ->
+                            deleteForGood(victims, what, "This can't be undone."))
+                    .button("Cancel", Ui.TEXT, null).show();
+        }
+    }
+
+    private void deleteForGood(final List<File> victims, String what, String warning) {
+        confirm("Delete " + what + "?", warning, "Delete", Ui.DANGER, () ->
                 runOp("Deleting...", true, p -> Priv.involves(pathsJson(victims), "") ? Priv.delete(pathsJson(victims))
                         : call("fs_delete", pathsJson(victims), p), r -> {
                     if (r.optBoolean("cancelled")) toast("Cancelled");
                     else if (!r.optBoolean("ok")) message("Couldn't delete everything", r.optString("message"));
                     loadDir(cwd);
                 }));
+    }
+
+    // ------------------------------------------------------------------ recycle bin
+
+    /** The storages that each keep a recycle bin: Internal storage and any mounted SD card or drive. */
+    private List<File> binRoots() {
+        List<File> out = new ArrayList<>();
+        out.add(root);
+        for (File[] v : volumes()) out.add(v[0]);
+        return out;
+    }
+
+    private void toBin(final List<File> victims) {
+        final List<File> roots = binRoots();
+        runOp("Moving to recycle bin...", true, p -> {
+            int moved = 0;
+            StringBuilder bad = new StringBuilder();
+            int failed = 0;
+            boolean stopped = false;
+            for (File f : victims) {
+                if (p != null && p.cancelled()) {
+                    stopped = true;
+                    break;
+                }
+                File r = Trash.rootOf(f, roots);
+                String er = r == null ? "isn't on a storage with a recycle bin" : Trash.put(f, r);
+                if (er == null) {
+                    moved++;
+                } else {
+                    failed++;
+                    if (failed <= 3) bad.append("\u2022 ").append(er).append('\n');
+                }
+            }
+            JSONObject o = new JSONObject();
+            o.put("ok", failed == 0 && !stopped);
+            o.put("cancelled", stopped);
+            o.put("moved", moved);
+            o.put("message", bad.toString().trim());
+            return o;
+        }, r -> {
+            int n = r.optInt("moved");
+            if (r.optBoolean("cancelled")) {
+                toast(n > 0 ? "Cancelled after " + plural(n, "item", "items") : "Cancelled");
+            } else if (!r.optBoolean("ok")) {
+                message("Couldn't move everything", r.optString("message")
+                        + "\n\nNothing that failed was deleted.");
+            } else {
+                toast(n == 1 ? "Moved to the recycle bin" : "Moved " + n + " items to the recycle bin");
+            }
+            sel.clear();
+            loadDir(cwd);
+        });
+    }
+
+    /** The recycle bin: everything deleted into it, from every storage. Tap an item to restore it or delete it for good. */
+    private void binSheet() {
+        final List<File> roots = binRoots();
+        new Thread(() -> {
+            final List<Trash.Entry> all = new ArrayList<>();
+            for (File r : roots) all.addAll(Trash.list(r));
+            java.util.Collections.sort(all, (a, b) -> Long.compare(b.when, a.when));
+            long total = 0;
+            for (Trash.Entry e : all) {
+                e.size = Trash.size(e.data);
+                total += e.size;
+            }
+            final long sum = total;
+            ui.post(() -> showBin(all, sum));
+        }).start();
+    }
+
+    private void showBin(final List<Trash.Entry> all, long total) {
+        if (isFinishing()) return;
+        final Sheet s = new Sheet(this, "Recycle bin");
+        if (all.isEmpty()) {
+            s.text("The recycle bin is empty.").button("Close", Ui.FILLED, null).show();
+            return;
+        }
+        s.text(plural(all.size(), "item", "items") + " \u00b7 " + Fmt.size(total));
+        ListView lv = new ListView(this);
+        lv.setDivider(null);
+        lv.setSelector(android.R.color.transparent);
+        lv.setAdapter(new BaseAdapter() {
+            @Override public int getCount() { return all.size(); }
+            @Override public Object getItem(int i) { return all.get(i); }
+            @Override public long getItemId(int i) { return i; }
+
+            @Override
+            public View getView(int i, View convert, ViewGroup parent) {
+                Trash.Entry e = all.get(i);
+                LinearLayout row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.setPadding(dp(8), dp(9), dp(8), dp(9));
+                row.setBackground(Ui.pressable(MainActivity.this, 0, 0, 12));
+                TextView t = Ui.label(MainActivity.this, e.name, 16, false, false);
+                t.setSingleLine(true);
+                t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                row.addView(t);
+                File from = new File(e.orig).getParentFile();
+                TextView sub = Ui.label(MainActivity.this, (e.dir ? "Folder" : Fmt.size(e.size)) + (e.dir ? " \u00b7 " + Fmt.size(e.size) : "")
+                        + " \u00b7 " + Fmt.date(e.when) + (from != null ? "\n" + from.getPath() : ""), 12, false, true);
+                row.addView(sub);
+                return row;
+            }
+        });
+        lv.setOnItemClickListener((av, v, pos, id) -> {
+            final Trash.Entry e = all.get(pos);
+            s.dismiss();
+            binItem(e);
+        });
+        s.fixed(lv, 330)
+                .button("Close", Ui.TEXT, null)
+                .button("Empty", Ui.DANGER, () -> {
+                    confirm("Empty the recycle bin?", "All " + plural(all.size(), "item", "items")
+                            + " will be deleted for good. This can't be undone.", "Empty", Ui.DANGER, () ->
+                            runOp("Emptying recycle bin...", true, p -> {
+                                int gone = 0, failed = 0;
+                                boolean stopped = false;
+                                for (Trash.Entry e : all) {
+                                    if (p != null && p.cancelled()) {
+                                        stopped = true;
+                                        break;
+                                    }
+                                    if (Trash.purge(e)) gone++;
+                                    else failed++;
+                                }
+                                JSONObject o = new JSONObject();
+                                o.put("ok", failed == 0 && !stopped);
+                                o.put("cancelled", stopped);
+                                o.put("gone", gone);
+                                o.put("failed", failed);
+                                return o;
+                            }, r -> {
+                                if (r.optInt("failed") > 0) {
+                                    message("Couldn't delete everything", plural(r.optInt("failed"), "item", "items")
+                                            + " couldn't be deleted.");
+                                } else {
+                                    toast(r.optBoolean("cancelled") ? "Cancelled" : "Recycle bin emptied");
+                                }
+                            }));
+                    return true;
+                }).show();
+    }
+
+    private void binItem(final Trash.Entry e) {
+        File from = new File(e.orig).getParentFile();
+        Sheet.nextBack = this::binSheet;                         // Back / Cancel returns to the list
+        new Sheet(this, e.name)
+                .text((from != null ? "From " + from.getPath() + "\n" : "") + "Deleted " + Fmt.date(e.when)
+                        + " \u00b7 " + Fmt.size(e.size))
+                .option(R.drawable.ic_refresh, "Restore", false, () ->
+                        bg(p -> {
+                            File to = Trash.restore(e);
+                            JSONObject o = new JSONObject();
+                            o.put("ok", to != null);
+                            o.put("path", to == null ? "" : to.getPath());
+                            return o;
+                        }, r -> {
+                            if (r.optBoolean("ok")) toast("Restored to " + new File(r.optString("path")).getParent());
+                            else message("Couldn't restore", "The original folder can't be written to.");
+                            loadDir(cwd);
+                            binSheet();
+                        }))
+                .option(R.drawable.ic_close, "Delete permanently", false, () ->
+                        confirm("Delete \"" + e.name + "\" for good?", "This can't be undone.", "Delete", Ui.DANGER, () ->
+                                runOp("Deleting...", true, p -> {
+                                    JSONObject o = new JSONObject();
+                                    o.put("ok", Trash.purge(e));
+                                    return o;
+                                }, r -> {
+                                    if (!r.optBoolean("ok")) message("Couldn't delete it", "It may be in use.");
+                                    binSheet();
+                                })))
+                .button("Cancel", Ui.TEXT, null).show();
     }
 
     // ------------------------------------------------------------------ new, rename

@@ -52,6 +52,13 @@ final class Defaults {
         p(c).edit().putBoolean("delete_after_pack", v).apply();
     }
 
+    // ---- what Delete does: 0 ask every time (default), 1 always to the recycle bin, 2 always for good
+
+    static final String[] DELETE_NAMES = {"Ask", "Recycle bin", "Permanently"};
+
+    static int deleteMode(Context c) { return Math.max(0, Math.min(2, p(c).getInt("delete_mode", 0))); }
+    static void setDeleteMode(Context c, int v) { p(c).edit().putInt("delete_mode", v).apply(); }
+
     // ---- parallel jobs for packing (1 is safest inside an app)
 
     static int jobs(Context c) { return Math.max(1, Math.min(8, p(c).getInt("jobs", 1))); }
@@ -151,6 +158,43 @@ final class Defaults {
         saveIcons(c);
     }
 
+    // ---- folder colours: the colour a person picked for a folder's icon (path -> ARGB, absent = the normal accent)
+
+    private static Map<String, Integer> colorMap;
+
+    private static synchronized Map<String, Integer> colors(Context c) {
+        if (colorMap == null) {
+            colorMap = new HashMap<>();
+            try {
+                JSONObject o = new JSONObject(p(c).getString("folder_colors", "{}"));
+                Iterator<String> it = o.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    int v = o.optInt(k, 0);
+                    if (v != 0) colorMap.put(k, v);
+                }
+            } catch (JSONException ignored) {
+            }
+        }
+        return colorMap;
+    }
+
+    private static void saveColors(Context c) {
+        p(c).edit().putString("folder_colors", new JSONObject(colors(c)).toString()).apply();
+    }
+
+    /** The colour (ARGB) picked for this folder, or 0 when it has none. */
+    static synchronized int folderColor(Context c, String path) {
+        Integer v = colors(c).get(path);
+        return v == null ? 0 : v;
+    }
+
+    /** Remembers a colour for a folder; 0 goes back to the normal accent colour. */
+    static synchronized void setFolderColor(Context c, String path, int color) {
+        if (color == 0) colors(c).remove(path); else colors(c).put(path, color);
+        saveColors(c);
+    }
+
     /** A folder was renamed or moved: its icon (and its subfolders' icons) follow it. */
     static synchronized void moveFolderIcons(Context c, String from, String to) {
         Map<String, String> m = icons(c);
@@ -163,9 +207,23 @@ final class Defaults {
                 it.remove();
             }
         }
-        if (moved.isEmpty()) return;
-        m.putAll(moved);
-        saveIcons(c);
+        if (!moved.isEmpty()) {
+            m.putAll(moved);
+            saveIcons(c);
+        }
+        Map<String, Integer> cm = colors(c);
+        Map<String, Integer> cmoved = new HashMap<>();
+        for (Iterator<Map.Entry<String, Integer>> it = cm.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Integer> e = it.next();
+            String k = e.getKey();
+            if (k.equals(from) || k.startsWith(from + "/")) {
+                cmoved.put(to + k.substring(from.length()), e.getValue());
+                it.remove();
+            }
+        }
+        if (cmoved.isEmpty()) return;
+        cm.putAll(cmoved);
+        saveColors(c);
     }
 
     // ---- default apps

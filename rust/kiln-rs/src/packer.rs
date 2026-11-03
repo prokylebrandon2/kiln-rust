@@ -389,6 +389,10 @@ pub fn build_table_bytes(table: &Table) -> Vec<u8> {
 
 // ---------------------------------------------------------------- one archive
 
+/// Index (in the `files` list) of the file the packer is reading right now, for progress display.
+/// Only the UI reads it; it never affects the archive bytes.
+pub static CUR_FILE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 pub struct PackFile {
     pub full: String,
     pub rel: String,
@@ -473,6 +477,7 @@ fn pack_to(tmp: &str, files: &[PackFile], opts: &PackOpts, progress: Option<Prog
                 let mut enc = Encoder::new($sink, opts.store, opts.segment, if opts.store { 1 } else { opts.jobs }, progress);
                 for f in files {
                     enc.maybe_checkpoint(table.entries.len() as u32)?;
+                    CUR_FILE.store(table.entries.len(), std::sync::atomic::Ordering::Relaxed);
                     let e = pack_file(&mut enc, f, opts.store)?;
                     table.entries.push(e);
                 }

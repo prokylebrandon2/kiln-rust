@@ -111,6 +111,7 @@ pub fn pack(a: &Value, prog: &mut dyn Progress) -> String {
     let nfiles = files.len();
     let t0 = Instant::now();
     let mut done_bytes = 0u64;
+    packer::CUR_FILE.store(0, std::sync::atomic::Ordering::Relaxed);
     let mut last = Instant::now();
     let mut stopped = false;
     let mut jobs_used = 1usize;
@@ -120,7 +121,8 @@ pub fn pack(a: &Value, prog: &mut dyn Progress) -> String {
             if last.elapsed().as_millis() >= 50 {
                 last = Instant::now();
                 let frac = if total > 0 { (done_bytes as f64 / total as f64).min(1.0) } else { -1.0 };
-                prog.event(&json!({"frac": frac, "done": 0, "total": nfiles, "file": ""}).to_string());
+                let cur = packer::CUR_FILE.load(std::sync::atomic::Ordering::Relaxed).min(nfiles - 1);
+                prog.event(&json!({"frac": frac, "done": cur, "total": nfiles, "file": files[cur].rel}).to_string());
             }
             if prog.cancelled() {
                 stopped = true;

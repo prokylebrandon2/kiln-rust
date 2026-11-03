@@ -322,7 +322,106 @@ fn run(a: &EachArgs, prog: &mut dyn Progress) -> Result<Value> {
     let mut done_bytes = 0u64;
     let mut last = Instant::now();
     let frac_of = |done: u64| if total_bytes > 0 { (done as f64 / total_bytes as f64).min(1.0) } else { -1.0 };
-    for (k, (i, dest)) in todo.iter().enumerate() {
+    // Several archives at once: each archive is a single file, so instead of splitting one file into
+    // segments (jobs) the files themselves are spread over worker threads. A user-set thread count of
+    // 1 keeps the old one-after-another behaviour.
+    let cores = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(1).min(8);
+    let workers = (if a.jobs_arg > 0 { a.jobs_arg } else { cores }).min(todo.len());
+    let parallel = workers > 1;
+    if parallel {
+        use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+        use std::sync::Mutex;
+        struct Done<'a>(&'a AtomicUsize);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Relaxed); // also when a worker panics, so the main loop never waits forever
+            }
+        }
+        let next = AtomicUsize::new(0);
+        let exited = AtomicUsize::new(0);
+        let completed = AtomicUsize::new(0);
+        let latest = AtomicUsize::new(0);
+        let bytes = AtomicU64::new(0);
+        let stop = AtomicBool::new(false);
+        let sizes: Mutex<Vec<u64>> = Mutex::new(vec![0; todo.len()]);
+        let failure: Mutex<Option<KilnError>> = Mutex::new(None);
+        let (files_r, todo_r) = (&files, &todo);
+        std::thread::scope(|sc| {
+            for _ in 0..workers {
+                sc.spawn(|| {
+                    let _guard = Done(&exited);
+                    loop {
+                        if stop.load(Relaxed) {
+                            break;
+                        }
+                        let k = next.fetch_add(1, Relaxed);
+                        if k >= todo_r.len() {
+                            break;
+                        }
+                        let (i, dest) = &todo_r[k];
+                        let e = &files_r[*i];
+                        latest.store(k, Relaxed);
+                        let res = (|| -> Result<u64> {
+                            if let Some(parent) = Path::new(dest).parent() {
+                                fs::create_dir_all(parent).map_err(|er| ioerr(&parent.to_string_lossy(), er))?;
+                            }
+                            let base = Path::new(&e.full).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| e.rel.clone());
+                            let pf = PackFile { full: e.full.clone(), rel: base, size: e.size, mtime: e.mtime, mode: e.mode, filt: filter_for(e, store), pre: e.pre };
+                            let (segment, jobs) = plan(pf.size, store, 1);
+                            let opts = PackOpts { store, password: pw, segment, jobs };
+                            let mut cb = |n: u64| -> bool {
+                                bytes.fetch_add(n, Relaxed);
+                                stop.load(Relaxed)
+                            };
+                            packer::pack_archive(dest, std::slice::from_ref(&pf), &opts, Some(&mut cb as &mut dyn FnMut(u64) -> bool))?;
+                            Ok(fs::metadata(dest).map(|m| m.len()).unwrap_or(0))
+                        })();
+                        match res {
+                            Ok(asize) => {
+                                sizes.lock().unwrap()[k] = asize;
+                                completed.fetch_add(1, Relaxed);
+                            }
+                            Err(er) => {
+                                let er = if er.0 == CANCELLED { er } else { KilnError(format!("{}: {}", e.rel, er.0)) };
+                                let mut f = failure.lock().unwrap();
+                                // a real error beats the "cancelled" the other workers report after it
+                                if f.is_none() || (f.as_ref().map_or(false, |x| x.0 == CANCELLED) && er.0 != CANCELLED) {
+                                    *f = Some(er);
+                                }
+                                stop.store(true, Relaxed);
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            loop {
+                if exited.load(Relaxed) >= workers {
+                    break;
+                }
+                if prog.cancelled() {
+                    stop.store(true, Relaxed);
+                }
+                let k = latest.load(Relaxed).min(todo_r.len() - 1);
+                prog.event(&json!({"frac": frac_of(bytes.load(Relaxed)), "done": completed.load(Relaxed), "total": nfiles,
+                                   "file": files_r[todo_r[k].0].rel}).to_string());
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        });
+        if let Some(er) = failure.into_inner().unwrap() {
+            return Err(er);
+        }
+        if completed.load(Relaxed) < todo.len() {
+            return Err(KilnError(CANCELLED.to_string())); // stopped between archives
+        }
+        for (k, (i, _)) in todo.iter().enumerate() {
+            raw += files[*i].size;
+            packed_size += sizes.lock().unwrap()[k];
+            packed.push(files[*i].full.clone());
+        }
+    }
+    let serial: &[(usize, String)] = if parallel { &[] } else { &todo };
+    for (k, (i, dest)) in serial.iter().enumerate() {
         let e = &files[*i];
         if prog.cancelled() {
             return Err(KilnError(CANCELLED.to_string()));
@@ -473,6 +572,50 @@ mod tests {
         let bad = EachArgs { password: "another-long-password", ..args };
         let r: Value = serde_json::from_str(&pack_each(&bad, &mut NoProgress)).unwrap();
         assert_eq!(r["ok"], json!(false));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    struct Stop;
+    impl Progress for Stop {
+        fn event(&mut self, _j: &str) {}
+        fn cancelled(&mut self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn parallel_equals_serial_and_cancels() {
+        let d = tmpdir("par");
+        fs::create_dir_all(d.join("in")).unwrap();
+        let mut items = Vec::new();
+        for n in 0..12u32 {
+            let p = d.join(format!("in/f{n}.dat"));
+            let body: Vec<u8> = (0..20000u32 + n * 1000).map(|i| ((i * (n + 3)) % 97) as u8).collect();
+            fs::write(&p, body).unwrap();
+            items.push(p.to_string_lossy().into_owned());
+        }
+        let (o1, o4) = (d.join("o1").to_string_lossy().into_owned(), d.join("o4").to_string_lossy().into_owned());
+        let one = EachArgs { items: &items, out_dir: &o1, encrypt: false, store: false, force: false, password: "", jobs_arg: 1 };
+        let many = EachArgs { items: &items, out_dir: &o4, encrypt: false, store: false, force: false, password: "", jobs_arg: 4 };
+        let r1: Value = serde_json::from_str(&pack_each(&one, &mut NoProgress)).unwrap();
+        let r4: Value = serde_json::from_str(&pack_each(&many, &mut NoProgress)).unwrap();
+        assert_eq!(r1["ok"], json!(true), "{r1}");
+        assert_eq!(r4["ok"], json!(true), "{r4}");
+        assert_eq!(r4["done"], json!(12));
+        assert_eq!(r4["packed"].as_array().unwrap().len(), 12);
+        for n in 0..12 {
+            let a = fs::read(format!("{o1}/f{n}.dat.kln")).unwrap();
+            let b = fs::read(format!("{o4}/f{n}.dat.kln")).unwrap();
+            assert_eq!(a, b, "archive {n} differs");
+        }
+        // cancel: no archives left half-written, reported as cancelled
+        let o5 = d.join("o5").to_string_lossy().into_owned();
+        let c = EachArgs { items: &items, out_dir: &o5, encrypt: false, store: false, force: false, password: "", jobs_arg: 4 };
+        let r: Value = serde_json::from_str(&pack_each(&c, &mut Stop)).unwrap();
+        assert_eq!(r["ok"], json!(false), "{r}");
+        assert_eq!(r["cancelled"], json!(true), "{r}");
+        let leftovers = fs::read_dir(&o5).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count()).unwrap_or(0);
+        assert_eq!(leftovers, 0);
         let _ = fs::remove_dir_all(&d);
     }
 

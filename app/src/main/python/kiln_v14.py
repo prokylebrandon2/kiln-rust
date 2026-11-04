@@ -1910,8 +1910,6 @@ def cmd_pack_each(args):
     files get random names in one flat directory and an encrypted _index.kln maps them back.
     One password prompt;
     every file still gets its own salt and key, so nonces are never reused across archives."""
-    if getattr(args, "store", False) and not args.encrypt:
-        raise KilnError("-s/--store is the encryption-only level and needs -e")
     rnd = bool(args.encrypt)  # -i with -e: random names + encrypted index (always)
     out_dir = args.archive
     if os.path.exists(out_dir) and not os.path.isdir(out_dir):
@@ -2005,9 +2003,6 @@ def cmd_pack(args):
     if getattr(args, "individual", False):
         return cmd_pack_each(args)
     store = getattr(args, "store", False)
-    if store and not args.encrypt:
-        raise KilnError("-s/--store is the encryption-only level and needs -e "
-                        "(without encryption, storing without compression is pointless)")
     if os.path.exists(args.archive) and not args.force:
         raise KilnError(f"{args.archive} already exists (use -f to overwrite)")
     cipher = None

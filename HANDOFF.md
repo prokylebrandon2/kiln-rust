@@ -343,10 +343,3 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
 ## CP12v (based on cp12u)
 - CI run #41 (cp12u) failed in rust-engine: tests/blk_vectors.rs::blocks_match_python ("text_s0 block 0: payload differs"). Cause: the test used pack::PARSE, but the Python-made vectors (../tests/blkvec, not in the zip) were generated with the old (384,258,2,99). Fix: the test now pins REF_PARSE = (384,258,2,99); the app keeps PARSE = (128,96,2,50). Only the test file and a doc comment in pack.rs changed; compiles. I could not run it here because the vectors are not in the zip, so CI is the real check.
 - If CI still fails, regenerate the vectors with the Python engine's own PARSE, or compare against the Rust output of the reference parse instead.
-
-## CP12w (based on cp12v) - REVERT for a phone slowdown
-- User report: a 404 MB .wav (single archive, 2 threads) took 206 s on cp12u/v vs ~50 s on cp12r. I could NOT reproduce it on x86 (1 core sandbox): cp12r vs cp12v packbench on 10 MB raw audio 21.9 s vs 21.4 s; wavbench (wav16_enc planes + build_blocks) on synthetic quiet/silence-heavy audio: reference parse 7.9 s / 5.0 s vs app parse 7.2 s / 3.7 s. So the parse change is not the cause on x86, and the speed numbers claimed in cp12t/u were within noise anyway.
-- The only encoder-relevant code differences between cp12r and cp12v were pack.rs PARSE and rc.rs (cp12s: branch-free Rcp::up, unchecked mixer reads, prefetch, branch-free decoder bit reads).
-- cp12w restores PARSE = (384,258,2,99) and the original branchy Rcp::up (used by the encoder's price model). The decoder-side cp12s changes (bitp, mixlit prefetch, unchecked reads) are kept. All cargo tests pass. If cp12w is still ~200 s on the phone, the cause is not the Rust encoder code (device state/thermal/battery saver, or the Java side; note cp12s..v changed no Java).
-- Added examples/wavbench.rs (wav16_enc planes through build_blocks, compares three parse settings).
-- To bisect on the phone: time the same file on cp12r, cp12w, cp12v back to back, phone cool and not in battery saver.

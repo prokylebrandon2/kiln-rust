@@ -64,7 +64,7 @@ pub fn pack(a: &Value, prog: &mut dyn Progress) -> String {
         .unwrap_or_default();
     let dest = a.get("dest").and_then(|v| v.as_str()).unwrap_or("");
     let encrypt = a.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(false);
-    let store = a.get("store").and_then(|v| v.as_bool()).unwrap_or(false) && encrypt;
+    let store = a.get("store").and_then(|v| v.as_bool()).unwrap_or(false);
     let overwrite = a.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
     let password = a.get("password").and_then(|v| v.as_str()).unwrap_or("");
     if dest.is_empty() || items.is_empty() {

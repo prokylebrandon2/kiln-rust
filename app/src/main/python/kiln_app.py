@@ -403,7 +403,9 @@ def decrypt_in_place(path, password, total, progress):
 # under a size limit by dropping the least recently used entries.
 
 CACHE_LIMIT = 1 << 30          # bytes of extracted files kept between uses
-CACHE_MAX_AGE = 7 * 86400      # and nothing older than a week
+CACHE_MAX_AGE = 24 * 3600      # and nothing unused for a day
+DONE_GRACE = 3600              # files of a closed archive go after this long (a player may still read them)
+DONE_MARK = ".kiln-done"
 _FREE_MARGIN = 64 << 20        # keep this much storage free when extracting
 
 
@@ -435,6 +437,33 @@ def _rm(path):
             pass
 
 
+def _mark_time(d):
+    try:
+        return os.stat(os.path.join(d, DONE_MARK)).st_mtime
+    except OSError:
+        return 0
+
+
+def mark_done(cache_dir, path):
+    """The archive was closed: its extracted files may go once nothing can still be using them."""
+    src_path = os.path.abspath(path)
+    try:
+        names = os.listdir(cache_dir)
+    except OSError:
+        return _j(ok=True)
+    for n in names:
+        d = os.path.join(cache_dir, n)
+        try:
+            with open(os.path.join(d, SRC_MARK), encoding="utf-8") as f:
+                if f.read() != src_path:
+                    continue
+            with open(os.path.join(d, DONE_MARK), "w") as f:
+                f.write("1")
+        except OSError:
+            pass
+    return _j(ok=True)
+
+
 def trim_cache(cache_dir, limit=None, keep=None):
     """Drop unfinished copies, entries older than a week, then the least recently used ones
     until the cache fits the limit. `keep` (a key) is never dropped. -> bytes left."""
@@ -456,7 +485,8 @@ def trim_cache(cache_dir, limit=None, keep=None):
     rows.sort()
     keep_rows = []
     for r in rows:
-        if r[1] != keep and now - r[0] > CACHE_MAX_AGE:
+        done = _mark_time(os.path.join(cache_dir, r[1]))
+        if r[1] != keep and (now - r[0] > CACHE_MAX_AGE or (done and now - done > DONE_GRACE)):
             _rm(os.path.join(cache_dir, r[1]))
         else:
             keep_rows.append(r)
@@ -469,6 +499,33 @@ def trim_cache(cache_dir, limit=None, keep=None):
         _rm(os.path.join(cache_dir, r[1]))
         total -= r[2]
     return total
+
+
+SRC_MARK = ".kiln-src"
+
+
+def drop_cache_for(cache_dir, paths_json):
+    """Delete the cached files that came out of archives under the given paths, but only for
+    archives that are really gone now. Anything unreadable or still there is left alone."""
+    try:
+        paths = [os.path.abspath(p) for p in json.loads(paths_json)]
+        names = os.listdir(cache_dir)
+    except (OSError, ValueError):
+        return _j(ok=True, dropped=0)
+    dropped = 0
+    for n in names:
+        d = os.path.join(cache_dir, n)
+        try:
+            with open(os.path.join(d, SRC_MARK), encoding="utf-8") as f:
+                src = f.read()
+        except OSError:
+            continue
+        if os.path.exists(src):
+            continue
+        if any(src == p or src.startswith(p + os.sep) for p in paths):
+            _rm(d)
+            dropped += 1
+    return _j(ok=True, dropped=dropped)
 
 
 def cache_size(cache_dir):
@@ -508,6 +565,7 @@ def cached_extract(path, password, member, cache_dir, size=0, progress=None):
     if os.path.isfile(target):
         try:
             os.utime(final, None)       # most recently used
+            os.remove(os.path.join(final, DONE_MARK))     # in use again: no longer up for cleanup
         except OSError:
             pass
         return _j(ok=True, file=target, cached=True, key=key)
@@ -522,6 +580,11 @@ def cached_extract(path, password, member, cache_dir, size=0, progress=None):
         if res.get("ok") and not os.path.isfile(os.path.join(part, *member.split("/"))):
             res = {"ok": False, "message": "the file wasn't found in the archive"}
         if res.get("ok"):
+            try:                        # remember which archive this came from (see drop_cache_for)
+                with open(os.path.join(part, SRC_MARK), "w", encoding="utf-8") as f:
+                    f.write(os.path.abspath(path))
+            except OSError:
+                pass
             os.replace(part, final)
             res["file"] = target
             res["cached"] = False
@@ -592,7 +655,7 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, delete_src
         keep = [type("P", (), {"packed": packed or []})()] if out.get("ok") else []
         res = _j(**out)
     else:
-        args = ["pack"] + (["-e"] if encrypt else []) + (["-s"] if encrypt and store else []) \
+        args = ["pack"] + (["-e"] if encrypt else []) + (["-s"] if store else []) \
             + (["-i"] if each else []) + (["-f"] if overwrite else []) + ["--", dest] + items
         keep = []
         res = _run(args, password, len(files), progress, not each,

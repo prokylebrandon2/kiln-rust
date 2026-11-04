@@ -70,6 +70,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -378,6 +379,16 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** After archives are deleted for good, drops what was extracted from them into the preview cache. */
+    private void dropArchiveCache(List<String> paths) {
+        try {
+            if (app != null && !paths.isEmpty())
+                app.callAttr("drop_cache_for", new File(getCacheDir(), "preview").getPath(),
+                        new org.json.JSONArray(paths).toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static boolean deleteTree(File f) {
         if (f.isDirectory()) {
             File[] kids = f.listFiles();
@@ -513,7 +524,6 @@ public class MainActivity extends Activity {
             @Override
             public void onScrollStateChanged(AbsListView v, int state) {
                 if (state == SCROLL_STATE_TOUCH_SCROLL && searching) hideKeyboard();
-                if (state != SCROLL_STATE_IDLE) settleRows();   // scrolling right after a refresh: finish the slide-in now
             }
 
             @Override
@@ -701,8 +711,12 @@ public class MainActivity extends Activity {
                 icon.setTag(null);
             } else if (r.path != null && !r.up) {
                 File f = new File(r.path);
-                Thumbs.bind(icon, f, r.icon, r.folder || r.dir ? accent : Icons.tintFor(getContext(), r.title),
-                        previewsOn);
+                int base = r.folder || r.dir ? accent : Icons.tintFor(getContext(), r.title);
+                if (r.folder || r.dir) {
+                    int pc = Defaults.folderColor(getContext(), r.path);
+                    if (pc != 0) base = pc;                   // keep the chosen folder colour
+                }
+                Thumbs.bind(icon, f, r.icon, base, previewsOn);
             } else {
                 icon.setTag(null);
                 int tint = r.folder || r.dir || r.up ? accent
@@ -1010,6 +1024,43 @@ public class MainActivity extends Activity {
         }
     }
 
+    private int selGen;
+    private final java.util.concurrent.ExecutorService sizePool = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    private static long dirBytes(File d, int gen, MainActivity a) {
+        long t = 0;
+        File[] fs = d.listFiles();
+        if (fs == null) return 0;
+        for (File f : fs) {
+            if (gen != a.selGen) return t;
+            t += f.isDirectory() ? dirBytes(f, gen, a) : f.length();
+        }
+        return t;
+    }
+
+    /** Shows the total size of the selected items under the "N selected" title (folders are summed in the background). */
+    private void showSelSize() {
+        final int gen = ++selGen;
+        long files = 0;
+        final List<File> dirs = new ArrayList<>();
+        for (Row r : rows) {
+            if (r.key == null || !sel.contains(r.key)) continue;
+            if (arc == null && r.item != null && "dir".equals(r.item.kind) && cwd != null) dirs.add(new File(cwd, r.item.name));
+            else if (!r.folder && !r.dir) files += r.size;
+        }
+        final long base = files;
+        sub.setText(Fmt.size(base) + (dirs.isEmpty() ? "" : " + folders..."));
+        if (dirs.isEmpty()) return;
+        sizePool.execute(() -> {
+            long t = base;
+            for (File d : dirs) t += dirBytes(d, gen, this);
+            final long total = t;
+            runOnUiThread(() -> {
+                if (gen == selGen && !sel.isEmpty()) sub.setText(Fmt.size(total));
+            });
+        });
+    }
+
     private void renderHeader() {
         boolean selecting = !sel.isEmpty();
         left.setVisibility(View.VISIBLE);
@@ -1023,7 +1074,7 @@ public class MainActivity extends Activity {
         if (selecting) {
             setLeft(R.drawable.ic_close, true);
             title.setText(sel.size() + " selected");
-            sub.setText("");
+            showSelSize();
         } else if (arc != null) {
             setLeft(R.drawable.ic_up, true);
             title.setText(arc.file.getName() + (arc.dirty ? " *" : ""));
@@ -1341,9 +1392,11 @@ public class MainActivity extends Activity {
                 Item it = selectedPlainFile();
                 if (it != null) {
                     File f = new File(cwd, it.name);
-                    sel.clear();
-                    redraw();
-                    fileSheet(f, it);
+                    fileSheet(f, it);                       // open first, tidy the selection after (no stutter)
+                    getWindow().getDecorView().postDelayed(() -> {
+                        sel.clear();
+                        redraw();
+                    }, 300);
                 }
                 break;
             }
@@ -3084,6 +3137,15 @@ public class MainActivity extends Activity {
             incomingFile = null;                                  // another app: free the space now
             new Thread(() -> deleteTree(gone)).start();
         }
+        if (arc != null && arc.file != null) {                // its extracted previews become eligible for cleanup
+            final String ap = arc.file.getPath();
+            new Thread(() -> {
+                try {
+                    if (app != null) app.callAttr("mark_done", new File(getCacheDir(), "preview").getPath(), ap);
+                } catch (Throwable ignored) {
+                }
+            }).start();
+        }
         closeSession(arc);
         arcClip.clear();
         sel.clear();
@@ -3913,8 +3975,14 @@ public class MainActivity extends Activity {
 
     private void deleteForGood(final List<File> victims, String what, String warning) {
         confirm("Delete " + what + "?", warning, "Delete", Ui.DANGER, () ->
-                runOp("Deleting...", true, p -> Priv.involves(pathsJson(victims), "") ? Priv.delete(pathsJson(victims))
-                        : call("fs_delete", pathsJson(victims), p), r -> {
+                runOp("Deleting...", true, p -> {
+                    JSONObject res = Priv.involves(pathsJson(victims), "") ? Priv.delete(pathsJson(victims))
+                            : call("fs_delete", pathsJson(victims), p);
+                    List<String> gone = new ArrayList<>();
+                    for (File v : victims) gone.add(v.getPath());
+                    dropArchiveCache(gone);
+                    return res;
+                }, r -> {
                     if (r.optBoolean("cancelled")) toast("Cancelled");
                     else if (!r.optBoolean("ok")) message("Couldn't delete everything", r.optString("message"));
                     loadDir(cwd);
@@ -4042,8 +4110,10 @@ public class MainActivity extends Activity {
                                         stopped = true;
                                         break;
                                     }
-                                    if (Trash.purge(e)) gone++;
-                                    else failed++;
+                                    if (Trash.purge(e)) {
+                                        gone++;
+                                        dropArchiveCache(java.util.Collections.singletonList(e.orig));
+                                    } else failed++;
                                 }
                                 JSONObject o = new JSONObject();
                                 o.put("ok", failed == 0 && !stopped);
@@ -4086,7 +4156,9 @@ public class MainActivity extends Activity {
                         confirm("Delete \"" + e.name + "\" for good?", "This can't be undone.", "Delete", Ui.DANGER, () ->
                                 runOp("Deleting...", true, p -> {
                                     JSONObject o = new JSONObject();
-                                    o.put("ok", Trash.purge(e));
+                                    boolean okp = Trash.purge(e);
+                                    if (okp) dropArchiveCache(java.util.Collections.singletonList(e.orig));
+                                    o.put("ok", okp);
                                     return o;
                                 }, r -> {
                                     if (!r.optBoolean("ok")) message("Couldn't delete it", "It may be in use.");
@@ -4100,6 +4172,7 @@ public class MainActivity extends Activity {
     private void newSheet() {
         new Sheet(this, "New")
                 .option(R.drawable.ic_new_folder, "Folder", false, this::newFolderHere)
+                .option(R.drawable.ic_archive, "Kiln archive", false, () -> pickItems(cwd, files -> packDialog(files)))
                 .option(R.drawable.ic_new_file, "Text file", false, () ->
                         nameSheet("New text file", "untitled.txt", "Create", n -> {
                             if (Priv.wants(cwd.getPath())) {
@@ -4646,7 +4719,6 @@ public class MainActivity extends Activity {
             p1.setVisibility(vis);
             p2.setVisibility(vis);
             show.setVisibility(vis);
-            store.setVisibility(vis);
             String n = name.getText().toString();
             if (each.isChecked() && n.endsWith(".kln")) {
                 name.setText(n.substring(0, n.length() - 4));
@@ -4958,6 +5030,117 @@ public class MainActivity extends Activity {
                 .button("Cancel", Ui.TEXT, null)
                 .button("Select this folder", Ui.FILLED, () -> {
                     cb.got(cur[0]);
+                    return true;
+                }).show();
+    }
+
+    /** Multi-select chooser: tick files or folders (any folder, any depth), tap a folder's name to open it. */
+    private void pickItems(File start, final java.util.function.Consumer<List<File>> cb) {
+        if (!hasStorage()) {
+            askStorage();
+            return;
+        }
+        File s0 = start;
+        while (s0 != null && !s0.isDirectory()) s0 = s0.getParentFile();
+        final File[] cur = {s0 != null ? s0 : root};
+        final List<File> entries = new ArrayList<>();     // null entry = ".." row
+        final LinkedHashSet<String> chosen = new LinkedHashSet<>();
+        final LinkedHashMap<String, File> byPath = new LinkedHashMap<>();
+        final TextView path = Ui.label(this, "", 13, false, true);
+        path.setEllipsize(TextUtils.TruncateAt.START);
+        path.setSingleLine(true);
+        final ListView lv = new ListView(this);
+        lv.setDivider(null);
+        lv.setSelector(android.R.color.transparent);
+        final BaseAdapter ad = new BaseAdapter() {
+            @Override public int getCount() { return entries.size(); }
+            @Override public Object getItem(int i) { return entries.get(i); }
+            @Override public long getItemId(int i) { return i; }
+
+            @Override
+            public View getView(int i, View convert, ViewGroup parent) {
+                LinearLayout row = new LinearLayout(MainActivity.this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(4), dp(6), dp(4), dp(6));
+                row.setBackground(Ui.pressable(MainActivity.this, 0, 0, 12));
+                ImageView icon = Thumbs.box(MainActivity.this);
+                row.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                TextView name = Ui.label(MainActivity.this, "", 16, false, false);
+                name.setSingleLine(true);
+                name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                np.leftMargin = dp(14);
+                row.addView(name, np);
+                int accent = Ui.accent(MainActivity.this);
+                File f = entries.get(i);
+                if (f == null) {
+                    Thumbs.showIcon(icon, R.drawable.ic_up_dir, accent);
+                    name.setText("..");
+                    return row;
+                }
+                if (f.isDirectory()) {
+                    int pc = Defaults.folderColor(MainActivity.this, f.getPath());
+                    Thumbs.showIcon(icon, dirIcon(f), pc != 0 ? pc : accent);
+                } else {
+                    Thumbs.bind(icon, f, Thumbs.iconFor(f.getName()),
+                            Icons.tintFor(MainActivity.this, f.getName()), previewsOn);
+                }
+                name.setText(f.getName());
+                final CheckBox cb2 = new CheckBox(MainActivity.this);
+                cb2.setChecked(chosen.contains(f.getPath()));
+                cb2.setOnClickListener(v -> {
+                    if (cb2.isChecked()) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
+                    else { chosen.remove(f.getPath()); byPath.remove(f.getPath()); }
+                });
+                row.addView(cb2);
+                return row;
+            }
+        };
+        lv.setAdapter(ad);
+        final Runnable fill = () -> {
+            entries.clear();
+            File parent = cur[0].getParentFile();
+            if (parent != null && !isStorageRoot(cur[0])) entries.add(null);
+            File[] kids = Priv.wants(cur[0].getPath()) ? Priv.kids(cur[0]) : cur[0].listFiles();
+            List<File> dirs = new ArrayList<>(), files = new ArrayList<>();
+            if (kids != null) {
+                for (File k : kids) {
+                    if (k.getName().startsWith(".")) continue;
+                    (k.isDirectory() ? dirs : files).add(k);
+                }
+            }
+            java.util.Comparator<File> byName = (x, y) -> x.getName().compareToIgnoreCase(y.getName());
+            Collections.sort(dirs, byName);
+            Collections.sort(files, byName);
+            entries.addAll(dirs);
+            entries.addAll(files);
+            path.setText(cur[0].getPath());
+            ad.notifyDataSetChanged();
+        };
+        lv.setOnItemClickListener((av, v, pos, id) -> {
+            File f = entries.get(pos);
+            if (f == null) {
+                cur[0] = cur[0].getParentFile();
+                fill.run();
+            } else if (f.isDirectory()) {
+                cur[0] = f;
+                fill.run();
+            } else {                                      // a file: tapping ticks it
+                if (!chosen.remove(f.getPath())) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
+                else byPath.remove(f.getPath());
+                ad.notifyDataSetChanged();
+            }
+        });
+        fill.run();
+        new Sheet(this, "Choose what to pack").content(path).space(6).fixed(lv, 320)
+                .button("Cancel", Ui.TEXT, null)
+                .button("Next", Ui.FILLED, () -> {
+                    if (byPath.isEmpty()) {
+                        toast("Tick at least one file or folder");
+                        return false;
+                    }
+                    cb.accept(new ArrayList<>(byPath.values()));
                     return true;
                 }).show();
     }

@@ -35,7 +35,7 @@ fn every_codec_and_thread_count_round_trips_exactly() {
     for codec in ["store", "lz4", "zstd", "zstd:19", "lzma:3"] {
         for threads in [1, 3] {
             let work = tempfile::tempdir().unwrap();
-            let arc = work.path().join("a.kr");
+            let arc = work.path().join("a.kiln");
             // 64 KiB blocks: the fixture spans dozens of blocks and files straddle boundaries.
             let stats = pack(&arc, &proj(src.path()), &opts(codec, 16, threads)).unwrap();
             assert!(stats.blocks > 20, "{codec}: only {} blocks", stats.blocks);
@@ -62,7 +62,7 @@ fn every_codec_and_thread_count_round_trips_exactly() {
 fn compression_is_real_and_incompressible_blocks_are_stored() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     let stats = pack(&arc, &proj(src.path()), &opts("zstd", 16, 2)).unwrap();
     assert!(stats.archive_bytes < stats.raw_bytes / 2, "{stats:?}");
     assert!(
@@ -78,7 +78,7 @@ fn output_is_byte_identical_regardless_of_thread_count() {
     let work = tempfile::tempdir().unwrap();
     let mut outputs = Vec::new();
     for (i, threads) in [1, 2, 7, 0].into_iter().enumerate() {
-        let arc = work.path().join(format!("a{i}.kr"));
+        let arc = work.path().join(format!("a{i}.kiln"));
         pack(&arc, &proj(src.path()), &opts("zstd:5", 16, threads)).unwrap();
         outputs.push(fs::read(arc).unwrap());
     }
@@ -92,7 +92,7 @@ fn output_is_byte_identical_regardless_of_thread_count() {
 fn verify_and_listing() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     let stats = pack(&arc, &proj(src.path()), &opts("lz4", 15, 2)).unwrap();
     let archive = Archive::open(&arc).unwrap();
     let v = verify(&archive, 2).unwrap();
@@ -113,7 +113,7 @@ fn verify_and_listing() {
 fn selective_extraction_decodes_only_what_it_needs() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     pack(&arc, &proj(src.path()), &opts("zstd", 14, 2)).unwrap();
     let archive = Archive::open(&arc).unwrap();
 
@@ -181,7 +181,7 @@ fn empty_inputs_round_trip_with_zero_blocks() {
     let root = dir.path().join("e");
     fs::create_dir_all(root.join("sub/deeper")).unwrap();
     fs::write(root.join("sub/zero.txt"), b"").unwrap();
-    let arc = dir.path().join("e.kr");
+    let arc = dir.path().join("e.kiln");
     let stats = pack(&arc, std::slice::from_ref(&root), &opts("zstd", 16, 2)).unwrap();
     assert_eq!((stats.blocks, stats.raw_bytes), (0, 0));
     let out = dir.path().join("out");
@@ -201,7 +201,7 @@ fn many_small_files_share_blocks() {
         )
         .unwrap();
     }
-    let arc = dir.path().join("m.kr");
+    let arc = dir.path().join("m.kiln");
     let stats = pack(&arc, std::slice::from_ref(&root), &opts("zstd", 16, 3)).unwrap();
     assert_eq!(stats.files, 1500);
     assert!(
@@ -218,7 +218,7 @@ fn many_small_files_share_blocks() {
 fn refuses_to_overwrite_unless_forced() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     pack(&arc, &proj(src.path()), &opts("lz4", 16, 1)).unwrap();
     let first = fs::read(&arc).unwrap();
 
@@ -258,7 +258,7 @@ fn refuses_to_overwrite_unless_forced() {
 fn forced_extraction_replaces_a_planted_symlink_instead_of_following_it() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     pack(
         &arc,
         &[src.path().join("proj/readme.txt")],
@@ -298,7 +298,7 @@ fn forced_extraction_replaces_a_planted_symlink_instead_of_following_it() {
 fn failed_pack_leaves_no_output_and_no_temp_files() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     let err = pack(
         &arc,
         &[src.path().join("proj"), src.path().join("does_not_exist")],
@@ -327,7 +327,7 @@ fn failed_pack_leaves_no_output_and_no_temp_files() {
 #[test]
 fn archive_inside_the_input_tree_does_not_archive_itself() {
     let src = fixture();
-    let arc = src.path().join("proj/self.kr");
+    let arc = src.path().join("proj/self.kiln");
     let stats = pack(
         &arc,
         &proj(src.path()),
@@ -342,7 +342,7 @@ fn archive_inside_the_input_tree_does_not_archive_itself() {
         archive
             .entries()
             .iter()
-            .all(|e| !e.path.ends_with("self.kr") && !e.path.ends_with(".tmp"))
+            .all(|e| !e.path.ends_with("self.kiln") && !e.path.ends_with(".tmp"))
     );
     assert_eq!(archive.total_raw(), stats.raw_bytes);
 }
@@ -351,7 +351,7 @@ fn archive_inside_the_input_tree_does_not_archive_itself() {
 fn invalid_options_are_rejected_up_front() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     let bad_block = PackOptions {
         block_log2: 5,
         ..PackOptions::default()
@@ -373,7 +373,7 @@ fn symlinks_are_reported_not_followed() {
     let src = fixture();
     std::os::unix::fs::symlink("/etc", src.path().join("proj/etc_link")).unwrap();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     let stats = pack(&arc, &proj(src.path()), &opts("lz4", 16, 1)).unwrap();
     assert_eq!(stats.skipped.len(), 1);
     assert_eq!(stats.skipped[0].reason, "symbolic link");
@@ -390,7 +390,7 @@ fn symlinks_are_reported_not_followed() {
 fn restores_modification_times_and_permissions() {
     let src = fixture();
     let work = tempfile::tempdir().unwrap();
-    let arc = work.path().join("a.kr");
+    let arc = work.path().join("a.kiln");
     pack(&arc, &proj(src.path()), &opts("zstd", 16, 2)).unwrap();
     let out = work.path().join("out");
     extract(&Archive::open(&arc).unwrap(), &ExtractOptions::new(&out)).unwrap();

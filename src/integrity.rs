@@ -3,13 +3,14 @@
 //! Two layers, with different jobs:
 //! * **CRC-32** of every stored block payload: cheap, computed on the worker threads, and checked
 //!   *before* a decoder ever sees the bytes, so corrupt data is rejected early.
-//! * **BLAKE3** of every file's original content: the end-to-end check that extraction produced
-//!   exactly what was packed.
+//! * **BLAKE3** of every file's original content, truncated to 128 bits: the end-to-end check that
+//!   extraction produced exactly what was packed. 128 bits is far beyond what accidental
+//!   corruption can collide with, and halves the per-file metadata (see `docs/PHASE3.md`).
 
-/// Length of a file hash in bytes.
-pub const HASH_LEN: usize = 32;
+/// Length of a stored file hash in bytes (BLAKE3 output truncated to 128 bits).
+pub const HASH_LEN: usize = 16;
 
-/// A BLAKE3 digest of one file's contents.
+/// A truncated BLAKE3 digest of one file's contents.
 pub type FileHash = [u8; HASH_LEN];
 
 /// Streaming file hasher.
@@ -27,9 +28,12 @@ impl FileHasher {
         self.0.update(data);
     }
 
-    /// Finish and return the digest.
+    /// Finish and return the (truncated) digest.
     pub fn finalize(&self) -> FileHash {
-        *self.0.finalize().as_bytes()
+        let full = self.0.finalize();
+        let mut out = [0u8; HASH_LEN];
+        out.copy_from_slice(&full.as_bytes()[..HASH_LEN]);
+        out
     }
 }
 
@@ -55,10 +59,7 @@ mod tests {
     #[test]
     fn known_vectors() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(
-            to_hex(&empty_hash()),
-            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
-        );
+        assert_eq!(to_hex(&empty_hash()), "af1349b9f5f9a1a6a0404dea36dcc949");
     }
 
     #[test]

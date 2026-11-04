@@ -9,13 +9,13 @@ use clap::{Args, Parser, Subcommand};
 use kiln::bench::{self, BenchConfig};
 use kiln::codec::CodecSpec;
 use kiln::format::index::EntryKind;
-use kiln::format::{DEFAULT_BLOCK_LOG2, MAX_BLOCK_LOG2, MIN_BLOCK_LOG2};
+use kiln::format::{DEFAULT_BLOCK_LOG2, FOOTER_LEN, MAX_BLOCK_LOG2, MIN_BLOCK_LOG2};
 use kiln::integrity::to_hex;
 use kiln::parallel::resolve_threads;
 use kiln::util::{format_size, format_utc, mib_per_sec, parse_size, ratio};
-use kiln::{Archive, ExtractOptions, PackOptions};
+use kiln::{Archive, ExtractOptions, PackOptions, Profile};
 
-/// Kiln: a fast multicore archiver (Rust rewrite, phase 2: working archiver).
+/// Kiln: a fast multicore archiver with its own `.kiln` container format (Rust rewrite, phase 3).
 ///
 /// Exit codes: 0 success, 1 other error, 2 usage error, 3 I/O error, 4 not a Kiln archive or
 /// unsupported version, 5 corrupt archive or checksum mismatch, 6 request refused (output exists,
@@ -53,12 +53,22 @@ struct PackArgs {
     /// Files and directories to add
     #[arg(required = true)]
     inputs: Vec<PathBuf>,
-    /// Compression: store, lz4, zstd[:-7..22], lzma[:0..9]
-    #[arg(short, long, default_value = "zstd:3")]
-    codec: String,
-    /// Block size, a power of two from 4KiB to 128MiB (bigger = better ratio, more memory)
-    #[arg(short, long, default_value = "4MiB", value_parser = parse_block_size)]
-    block_size: u8,
+    /// Preset: fastest, balanced (default), maximum, store or adaptive
+    #[arg(short, long, value_name = "NAME")]
+    profile: Option<String>,
+    /// Override the profile's codec: store, lz4, zstd[:-7..22], lzma[:0..9]
+    #[arg(short, long)]
+    codec: Option<String>,
+    /// Override the profile's chunk size: a power of two from 4KiB to 128MiB
+    #[arg(short, long, value_parser = parse_block_size)]
+    block_size: Option<u8>,
+    /// Sample every file and store incompressible ones separately (on by default for the
+    /// `maximum` and `adaptive` profiles)
+    #[arg(long, conflicts_with = "no_classify")]
+    classify: bool,
+    /// Never classify files, whatever the profile says
+    #[arg(long)]
+    no_classify: bool,
     /// Worker threads (0 = all cores)
     #[arg(short = 'j', long, default_value_t = 0)]
     threads: usize,
@@ -100,6 +110,9 @@ struct UnpackArgs {
     /// Keep estimated peak memory under this size (e.g. 256MiB) by using fewer threads/blocks
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     memory_limit: Option<u64>,
+    /// Refuse to extract more than this many bytes (guards against decompression bombs)
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    max_size: Option<u64>,
     /// Show a progress line on stderr
     #[arg(long)]
     progress: bool,
@@ -109,7 +122,7 @@ struct UnpackArgs {
 struct ListArgs {
     /// Archive to read
     archive: PathBuf,
-    /// Show size, modification time, permissions and hash for every entry
+    /// Show size, class, codec, modification time, permissions and hash for every entry
     #[arg(short, long)]
     long: bool,
 }
@@ -242,14 +255,28 @@ pub fn run(cli: Cli) -> Result<Outcome> {
 }
 
 fn pack(a: PackArgs) -> Result<Outcome> {
-    let options = PackOptions {
-        codec: CodecSpec::parse(&a.codec)?,
-        block_log2: a.block_size,
-        threads: a.threads,
-        overwrite: a.force,
-        memory_limit: a.memory_limit,
-        skip_incompressible: !a.no_precheck,
+    let profile = match (&a.profile, &a.codec) {
+        (Some(name), _) => Profile::parse(name)?,
+        (None, Some(_)) => Profile::Custom,
+        (None, None) => Profile::Balanced,
     };
+    let mut options = PackOptions::from_profile(profile);
+    if let Some(codec) = &a.codec {
+        options.codec = CodecSpec::parse(codec)?;
+    }
+    if let Some(log2) = a.block_size {
+        options.block_log2 = log2;
+    }
+    if a.classify {
+        options.classify = true;
+    }
+    if a.no_classify {
+        options.classify = false;
+    }
+    options.threads = a.threads;
+    options.overwrite = a.force;
+    options.memory_limit = a.memory_limit;
+    options.skip_incompressible = !a.no_precheck;
     let started = Instant::now();
     let mut meter = Meter::new(a.progress);
     let stats = kiln::pack_with_progress(&a.archive, &a.inputs, &options, &mut |d, t| {
@@ -270,16 +297,26 @@ fn pack(a: PackArgs) -> Result<Outcome> {
     let warned = !stats.skipped.is_empty() || !stats.grew.is_empty();
     if !a.quiet {
         println!(
-            "packed {} files, {} dirs: {} -> {} ({:.2}x) in {secs:.2}s, {:.0} MiB/s  [{}, {} blocks, {} threads]",
+            "packed {} files, {} dirs: {} -> {} ({:.2}x) in {secs:.2}s, {:.0} MiB/s  [{} {}, {} chunks, {} threads{}]",
             stats.files,
             stats.dirs,
             format_size(stats.raw_bytes),
             format_size(stats.archive_bytes),
             ratio(stats.raw_bytes, stats.archive_bytes),
             mib_per_sec(stats.raw_bytes, secs),
+            options.profile.name(),
             options.codec,
             format_size(1 << options.block_log2),
             resolve_threads(a.threads),
+            if stats.classified_stored_files > 0 {
+                format!(
+                    ", {} files ({}) stored without compression",
+                    stats.classified_stored_files,
+                    format_size(stats.classified_stored_bytes)
+                )
+            } else {
+                String::new()
+            },
         );
     }
     Ok(if warned {
@@ -297,6 +334,7 @@ fn unpack(a: UnpackArgs) -> Result<Outcome> {
         threads: a.threads,
         members: a.members,
         memory_limit: a.memory_limit,
+        max_bytes: a.max_size,
     };
     let started = Instant::now();
     let mut meter = Meter::new(a.progress);
@@ -312,7 +350,7 @@ fn unpack(a: UnpackArgs) -> Result<Outcome> {
     }
     if !a.quiet {
         println!(
-            "extracted {} files, {} dirs ({}) in {secs:.2}s, {:.0} MiB/s  [{} of {} blocks decoded]",
+            "extracted {} files, {} dirs ({}) in {secs:.2}s, {:.0} MiB/s  [{} of {} chunks decoded]",
             stats.files,
             stats.dirs,
             format_size(stats.bytes),
@@ -330,12 +368,19 @@ fn unpack(a: UnpackArgs) -> Result<Outcome> {
 
 fn list(a: ListArgs) -> Result<()> {
     let archive = Archive::open(&a.archive)?;
-    for e in archive.entries() {
+    // Stored in data order (grouped by compressibility); shown in name order.
+    let mut order: Vec<usize> = (0..archive.entries().len()).collect();
+    order.sort_by(|&x, &y| archive.entries()[x].path.cmp(&archive.entries()[y].path));
+    for i in order {
+        let e = &archive.entries()[i];
         let suffix = if e.kind == EntryKind::Dir { "/" } else { "" };
         if a.long {
+            let method = archive.entry_method(i).map_or("-", |m| m.name());
             println!(
-                "{:>12}  {}  {:04o}  {}  {}{suffix}",
+                "{:>12}  {:<10} {:<5} {}  {:04o}  {}  {}{suffix}",
                 e.size,
+                e.class.name(),
+                method,
                 format_utc(e.mtime_secs),
                 e.mode & 0o7777,
                 &to_hex(&e.hash)[..12],
@@ -351,7 +396,7 @@ fn list(a: ListArgs) -> Result<()> {
         .filter(|e| e.kind == EntryKind::File)
         .count();
     eprintln!(
-        "{} files, {} dirs, {} -> {} ({:.2}x), {} blocks of {}, default codec {}",
+        "{} files, {} dirs, {} -> {} ({:.2}x), {} chunks of up to {}, profile {}",
         files,
         archive.entries().len() - files,
         format_size(archive.total_raw()),
@@ -359,7 +404,7 @@ fn list(a: ListArgs) -> Result<()> {
         ratio(archive.total_raw(), archive.file_len()),
         archive.block_count(),
         format_size(archive.header().block_size()),
-        archive.header().default_method.name(),
+        archive.header().profile.name(),
     );
     Ok(())
 }
@@ -380,14 +425,18 @@ fn info(a: InfoArgs) -> Result<()> {
     let h = archive.header();
     println!("Archive:         {}", archive.path().display());
     println!(
-        "Format:          Kiln container, version {}",
-        kiln::format::FORMAT_VERSION
+        "Format:          .kiln container, version {}{}",
+        kiln::format::FORMAT_VERSION,
+        archive
+            .index()
+            .creator()
+            .map_or(String::new(), |c| format!(" (written by {c})"))
     );
-    println!("Codec:           {}", h.default_method.name());
-    println!("Block size:      {}", format_size(h.block_size()));
+    println!("Profile:         {}", h.profile.name());
+    println!("Chunk size:      up to {}", format_size(h.block_size()));
     println!("Files:           {files} ({empty} empty)");
     println!("Directories:     {dirs}");
-    let blocks = archive.block_stats()?;
+    let blocks = archive.block_stats();
     let mut kinds = Vec::new();
     for (n, name) in [
         (blocks.zstd, "zstd"),
@@ -399,7 +448,24 @@ fn info(a: InfoArgs) -> Result<()> {
             kinds.push(format!("{n} {name}"));
         }
     }
-    println!("Blocks:          {} ({})", blocks.total, kinds.join(", "));
+    println!("Chunks:          {} ({})", blocks.total, kinds.join(", "));
+    let classes = archive.class_totals();
+    if classes
+        .iter()
+        .any(|(c, _)| *c != kiln::classify::Class::Unknown)
+    {
+        let parts: Vec<String> = classes
+            .iter()
+            .map(|(c, t)| format!("{} {} ({})", t.files, c.name(), format_size(t.bytes)))
+            .collect();
+        println!("Content classes: {}", parts.join(", "));
+    }
+    let index_bytes = archive.file_len() - FOOTER_LEN as u64 - archive.index().data_end;
+    println!(
+        "Index:           {} ({:.2}% of the archive)",
+        format_size(index_bytes),
+        100.0 * index_bytes as f64 / archive.file_len() as f64
+    );
     println!(
         "Uncompressed:    {} ({} bytes)",
         format_size(archive.total_raw()),
@@ -414,7 +480,9 @@ fn info(a: InfoArgs) -> Result<()> {
         "Ratio:           {:.3}x",
         ratio(archive.total_raw(), archive.file_len())
     );
-    println!("Integrity:       CRC-32 per block, BLAKE3 per file (run `kiln test` to verify)");
+    println!(
+        "Integrity:       CRC-32 per chunk and header/footer, 128-bit BLAKE3 per file (run `kiln test` to verify)"
+    );
     Ok(())
 }
 

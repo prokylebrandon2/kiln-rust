@@ -1,10 +1,13 @@
-# Kiln (Rust rewrite) - Phase 2: working archiver (complete)
+# Kiln (Rust rewrite) - Phase 3: `.kiln` format v2 and performance (partial scope)
 
-A multicore archiver built on proven compression libraries (Zstandard, LZ4, LZMA2), aiming to
-compete with ZIP and 7-Zip. This is **Phase 2 of 5**: the Phase 1 foundation (audit, baseline,
-architecture, block container) is now a usable command-line archiver with `create`, `extract`,
-`list`, `test` and `info`. See [`docs/PHASE2.md`](docs/PHASE2.md) for what was verified and what
-is not done, and [Status](#status-and-honest-limitations).
+A multicore archiver built on proven compression libraries (Zstandard, LZ4, LZMA2). This is
+**Phase 3 of 5** (built to roughly half of the Phase 3 spec, as requested): the documented,
+versioned `.kiln` container **v2** ([`docs/FORMAT.md`](docs/FORMAT.md)), compression profiles
+(`fastest`, `balanced`, `maximum`, `store`, `adaptive`), content classification that stores
+already-compressed data, parallel small-file extraction, resource limits, and measured
+benchmarks against Phase 2, 7-Zip and Info-ZIP in [`docs/PHASE3.md`](docs/PHASE3.md). In those
+benchmarks Kiln creates archives 9-250x faster than 7-Zip but **7-Zip's archives are smaller**
+(8-46 % at its default level). Phase 2 notes: [`docs/PHASE2.md`](docs/PHASE2.md).
 
 **Kiln archives are not ZIP, 7z or tar.** The container is Kiln's own documented format
 ([`docs/FORMAT.md`](docs/FORMAT.md)); other tools cannot open it and Kiln cannot open theirs.
@@ -27,7 +30,7 @@ system libraries are needed. The first build downloads crates from crates.io and
 
 ```sh
 cargo build --release          # binary: target/release/kiln
-cargo test                     # 101 tests, ~20 s
+cargo test --locked            # 130 tests
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 ```
 
@@ -37,7 +40,9 @@ With `rustup`, `rust-toolchain.toml` selects stable with rustfmt and clippy auto
 ## Use
 
 ```sh
-kiln create  backup.kiln photos/ notes.txt        # zstd level 3, 4 MiB blocks, all cores
+kiln create  backup.kiln photos/ notes.txt        # zstd level 3, 4 MiB chunks, all cores
+kiln create  -p fastest|balanced|maximum|store|adaptive out.kiln data/   # named profiles
+kiln extract out.kiln -o dir/ --max-size 10GiB    # refuse to write more than this (bomb guard)
 kiln create  -c zstd:19 -b 32MiB big.kiln data/   # slower, smaller
 kiln create  -c lzma:6  -b 32MiB max.kiln data/   # best ratio currently available
 kiln list    -l backup.kiln                       # instant: reads only the index
@@ -89,7 +94,9 @@ extract(&archive, &ExtractOptions::new("restored"))?;
 src/            library (codec/, format/, archive/, parallel, walk, path, integrity, fsutil, bench) + CLI
 tests/          integration tests: round trips, corruption/hostile archives, CLI, write failures
 android/        minimal Android shell that runs the CLI as libkiln.so (see below)
-docs/           AUDIT.md  BASELINE.md  ARCHITECTURE.md  FORMAT.md  ROADMAP.md
+docs/           AUDIT.md  BASELINE.md  ARCHITECTURE.md  FORMAT.md (v2)  PHASE2.md  PHASE3.md  ROADMAP.md
+bench-results/  raw benchmark JSON/logs behind PHASE3.md
+tools/bench/    benchmark harness, dataset generator, 7-Zip comparison (see PHASE3.md section 8)
 tools/baseline/ scripts and raw results behind BASELINE.md (Python 3; not needed to build)
 .github/        ci.yml and android-apk.yml workflows (neither has been run on a real runner)
 ```
@@ -122,18 +129,19 @@ What it is **not** yet:
 * **Not ratio-competitive with the original or with 7-Zip on binaries** (9.6% larger than the
   original on the binary corpus; the missing x86 filter alone accounts for ~8.6%). Text is within
   3.2% of the original and 0.5% *better* than 7-Zip `-mx=5`. Details and plan: BASELINE, ROADMAP.
-* **Multicore speedup is not characterised** - development machines had 1-2 cores. Correctness
+* **Multicore speedup is not characterised** - all measurements are on 2 vCPUs, warm page cache. Correctness
   under many threads is tested; a 4/8/16-thread speedup curve has not been measured.
-* **The format is provisional** (version 1) and **not compatible with `.kln`**. Do not rely on
-  archives surviving format changes until the format is frozen (Phase 3).
+* **Format version 2** has a written compatibility policy and one golden test archive, but it is
+  **not compatible with Phase 2's `.kr` (v1) or the original `.kln`**. LZ4/LZMA2 chunks and
+  extensions have no golden files yet.
 * Stores regular files and directories only: symlinks and special files are skipped with a
   warning; no ownership or extended attributes. Names containing a backslash are refused.
-* No encryption, no append/update, no fuzzing yet.
+* No encryption, no append/update, no fuzzing, no archive repair mode yet.
 * Still open from the Phase 1 throughput plan: per-file hashing runs on the producer thread, no
   buffer pool, no read-ahead. See `docs/PHASE2.md`.
 * Extraction is not transactional and is not hardened against a hostile output directory;
   extract into a directory you control.
-* Tested with a 4.25 GiB file; archives larger than 4 GiB have not been tested.
+* Archives larger than 4 GiB: Phase 2 tested one 4.25 GiB file on format v1; not re-tested for v2.
 * Tested on Linux only. Windows/macOS code paths are written but unverified; neither CI workflow
   has been run.
 * **License: none chosen.** The original repository contains no LICENSE file, so no license is

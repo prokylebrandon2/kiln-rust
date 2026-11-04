@@ -10,6 +10,7 @@
 
 use std::io::{self, Read, Write};
 
+use super::index::ChunkInfo;
 use crate::codec::{BlockCodec, Method, decoder_for};
 use crate::error::{Error, Result};
 use crate::integrity::crc32;
@@ -74,6 +75,17 @@ impl RecordHeader {
     pub fn total_len(&self) -> u64 {
         RECORD_HEADER_LEN as u64 + u64::from(self.comp_len)
     }
+
+    /// The total record length the index promises for `info` (header plus payload).
+    pub fn len_for(info: &ChunkInfo) -> u64 {
+        RECORD_HEADER_LEN as u64 + u64::from(info.comp_len)
+    }
+
+    /// True when the record header agrees with what the index says about this chunk. The two are
+    /// redundant on purpose: a mismatch means one of them was damaged.
+    pub fn agrees_with(&self, info: &ChunkInfo) -> bool {
+        self.method == info.method && self.raw_len == info.raw_len && self.comp_len == info.comp_len
+    }
 }
 
 /// A fully compressed block, ready to be written.
@@ -127,6 +139,15 @@ impl EncodedBlock {
             },
             payload: raw,
         })
+    }
+
+    /// What the index must record for this chunk.
+    pub fn info(&self) -> ChunkInfo {
+        ChunkInfo {
+            raw_len: self.header.raw_len,
+            comp_len: self.header.comp_len,
+            method: self.header.method,
+        }
     }
 
     /// Write header and payload; returns the bytes written.

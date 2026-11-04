@@ -1,0 +1,22 @@
+{
+ "d1_pytree (8,305 files; 125 MiB in 32 chunks)": {
+  "p2": {
+   "median_ms": 11.734,
+   "max_ms": 15.803999999999998
+  },
+  "p3": {
+   "median_ms": 11.987,
+   "max_ms": 16.301
+  }
+ },
+ "d2_tiny (30,000 files; 88 MiB in 23 chunks)": {
+  "p2": {
+   "median_ms": 23.464,
+   "max_ms": 30.721999999999998
+  },
+  "p3": {
+   "median_ms": 23.506,
+   "max_ms": 32.543
+  }
+ }
+}

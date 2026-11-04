@@ -42,7 +42,7 @@ fn pack_list_test_unpack_round_trip() {
 
     let summary = ok(
         &[
-            "pack", "a.kr", "proj", "-c", "zstd:5", "-b", "64KiB", "-j", "2",
+            "pack", "a.kiln", "proj", "-c", "zstd:5", "-b", "64KiB", "-j", "2",
         ],
         dir.path(),
     );
@@ -51,7 +51,7 @@ fn pack_list_test_unpack_round_trip() {
         "{summary}"
     );
 
-    let listing = ok(&["list", "a.kr"], dir.path());
+    let listing = ok(&["list", "a.kiln"], dir.path());
     assert!(
         listing.lines().any(|l| l == "proj/src/main.rs"),
         "{listing}"
@@ -60,22 +60,22 @@ fn pack_list_test_unpack_round_trip() {
         listing.lines().any(|l| l == "proj/empty_dir/"),
         "directories get a trailing slash"
     );
-    let long = ok(&["list", "-l", "a.kr"], dir.path());
+    let long = ok(&["list", "-l", "a.kiln"], dir.path());
     assert!(
         long.contains("proj/readme.txt") && long.contains("3000"),
         "{long}"
     );
 
-    let t = ok(&["test", "a.kr", "-j", "2"], dir.path());
+    let t = ok(&["test", "a.kiln", "-j", "2"], dir.path());
     assert!(t.starts_with("OK:"), "{t}");
 
-    let u = ok(&["unpack", "a.kr", "-o", "out", "-j", "3"], dir.path());
+    let u = ok(&["unpack", "a.kiln", "-o", "out", "-j", "3"], dir.path());
     assert!(u.contains("extracted"), "{u}");
     assert_same_tree(&dir.path().join("proj"), &dir.path().join("out/proj"));
 
     // Subset extraction.
     ok(
-        &["unpack", "a.kr", "proj/readme.txt", "-o", "one"],
+        &["unpack", "a.kiln", "proj/readme.txt", "-o", "one"],
         dir.path(),
     );
     assert!(dir.path().join("one/proj/readme.txt").is_file());
@@ -86,36 +86,39 @@ fn pack_list_test_unpack_round_trip() {
 fn quiet_mode_prints_nothing_on_success() {
     let dir = tempfile::tempdir().unwrap();
     make_tree(dir.path());
-    assert_eq!(ok(&["pack", "-q", "a.kr", "proj"], dir.path()), "");
-    assert_eq!(ok(&["unpack", "-q", "a.kr", "-o", "o"], dir.path()), "");
+    assert_eq!(ok(&["pack", "-q", "a.kiln", "proj"], dir.path()), "");
+    assert_eq!(ok(&["unpack", "-q", "a.kiln", "-o", "o"], dir.path()), "");
 }
 
 #[test]
 fn errors_are_reported_with_a_message_and_nonzero_exit() {
     let dir = tempfile::tempdir().unwrap();
     make_tree(dir.path());
-    ok(&["pack", "-q", "a.kr", "proj"], dir.path());
+    ok(&["pack", "-q", "a.kiln", "proj"], dir.path());
 
-    assert!(fails(&["pack", "a.kr", "proj"], dir.path()).contains("already exists"));
-    ok(&["pack", "-q", "-f", "a.kr", "proj"], dir.path());
-    assert!(fails(&["pack", "b.kr", "proj", "-c", "gzip"], dir.path()).contains("unknown codec"));
-    assert!(fails(&["pack", "b.kr", "proj", "-c", "zstd:99"], dir.path()).contains("level"));
-    assert!(fails(&["pack", "b.kr", "nope"], dir.path()).starts_with("error: nope"));
-    assert!(fails(&["list", "missing.kr"], dir.path()).starts_with("error:"));
+    assert!(fails(&["pack", "a.kiln", "proj"], dir.path()).contains("already exists"));
+    ok(&["pack", "-q", "-f", "a.kiln", "proj"], dir.path());
+    assert!(fails(&["pack", "b.kiln", "proj", "-c", "gzip"], dir.path()).contains("unknown codec"));
+    assert!(fails(&["pack", "b.kiln", "proj", "-c", "zstd:99"], dir.path()).contains("level"));
+    assert!(fails(&["pack", "b.kiln", "nope"], dir.path()).starts_with("error: nope"));
+    assert!(fails(&["list", "missing.kiln"], dir.path()).starts_with("error:"));
     assert!(
-        fails(&["unpack", "a.kr", "no/such/member", "-o", "o"], dir.path())
-            .contains("no such member")
+        fails(
+            &["unpack", "a.kiln", "no/such/member", "-o", "o"],
+            dir.path()
+        )
+        .contains("no such member")
     );
 
-    fs::write(dir.path().join("junk.kr"), b"definitely not an archive").unwrap();
-    assert!(fails(&["test", "junk.kr"], dir.path()).contains("not a Kiln archive"));
+    fs::write(dir.path().join("junk.kiln"), b"definitely not an archive").unwrap();
+    assert!(fails(&["test", "junk.kiln"], dir.path()).contains("not a Kiln archive"));
 
     // Corrupt one byte in the middle: `test` must fail loudly.
-    let mut bytes = fs::read(dir.path().join("a.kr")).unwrap();
+    let mut bytes = fs::read(dir.path().join("a.kiln")).unwrap();
     let mid = bytes.len() / 2;
     bytes[mid] ^= 0xFF;
-    fs::write(dir.path().join("bad.kr"), bytes).unwrap();
-    let err = fails(&["test", "bad.kr"], dir.path());
+    fs::write(dir.path().join("bad.kiln"), bytes).unwrap();
+    let err = fails(&["test", "bad.kiln"], dir.path());
     assert!(err.contains("corrupt") || err.contains("checksum"), "{err}");
 }
 
@@ -124,10 +127,10 @@ fn block_size_must_be_a_sane_power_of_two() {
     let dir = tempfile::tempdir().unwrap();
     make_tree(dir.path());
     for bad in ["3000", "1KiB", "1GiB", "lots"] {
-        let err = fails(&["pack", "b.kr", "proj", "-b", bad], dir.path());
+        let err = fails(&["pack", "b.kiln", "proj", "-b", bad], dir.path());
         assert!(err.contains("block"), "{bad}: {err}");
     }
-    assert!(!dir.path().join("b.kr").exists());
+    assert!(!dir.path().join("b.kiln").exists());
 }
 
 #[test]

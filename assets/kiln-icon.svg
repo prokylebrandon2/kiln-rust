@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <title>Kiln</title>
+  <!-- Artwork and colours copied from the original Kiln Android app (ic_launcher_fg.xml, ic_bg). -->
+  <rect width="108" height="108" rx="24" fill="#2B2D42"/>
+  <path fill="#F2E9DC" d="M34,78 L34,52 C34,38 43,30 54,30 C65,30 74,38 74,52 L74,78 Z"/>
+  <path fill="#E8590C" d="M44,78 L44,58 C44,52 48.5,48 54,48 C59.5,48 64,52 64,58 L64,78 Z"/>
+  <path fill="#FFA94D" d="M49,78 L49,62 C49,59 51.2,57 54,57 C56.8,57 59,59 59,62 L59,78 Z"/>
+  <path fill="#8A5A44" d="M28,78 L80,78 L80,83 L28,83 Z"/>
+</svg>

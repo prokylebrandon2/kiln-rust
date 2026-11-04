@@ -1,0 +1,24 @@
+{
+ "dataset": "data/d1_pytree",
+ "rounds": 1,
+ "result": {
+  "p2-zstd19-16M": {
+   "archive_bytes": 21579441,
+   "wall": 39.953024,
+   "cpu": 77.79043,
+   "rss_mib": 257.016,
+   "walls": [
+    39.953
+   ]
+  },
+  "p3-maximum": {
+   "archive_bytes": 21406882,
+   "wall": 40.539017,
+   "cpu": 79.367606,
+   "rss_mib": 259.871,
+   "walls": [
+    40.539
+   ]
+  }
+ }
+}

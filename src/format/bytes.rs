@@ -60,6 +60,34 @@ impl<'a> Reader<'a> {
     pub fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
         self.array()
     }
+
+    /// Read an unsigned LEB128 varint. Rejects encodings longer than 10 bytes, values above
+    /// `u64::MAX`, and non-canonical encodings (a trailing zero group), so every value has
+    /// exactly one encoding.
+    pub fn varint(&mut self) -> Result<u64> {
+        let mut value = 0u64;
+        for i in 0..10 {
+            let byte = self.u8()?;
+            let low = u64::from(byte & 0x7F);
+            if i == 9 && low > 1 {
+                return Err(Error::corrupt("varint overflows 64 bits"));
+            }
+            value |= low << (7 * i);
+            if byte & 0x80 == 0 {
+                if i > 0 && byte == 0 {
+                    return Err(Error::corrupt("non-canonical varint"));
+                }
+                return Ok(value);
+            }
+        }
+        Err(Error::corrupt("varint is too long"))
+    }
+
+    /// Read a zigzag-encoded signed varint.
+    pub fn svarint(&mut self) -> Result<i64> {
+        let v = self.varint()?;
+        Ok(((v >> 1) as i64) ^ -((v & 1) as i64))
+    }
 }
 
 /// Growable little-endian writer.
@@ -91,6 +119,20 @@ impl Writer {
     pub fn raw(&mut self, v: &[u8]) {
         self.0.extend_from_slice(v);
     }
+
+    /// Append an unsigned LEB128 varint.
+    pub fn varint(&mut self, mut v: u64) {
+        while v >= 0x80 {
+            self.0.push((v as u8 & 0x7F) | 0x80);
+            v >>= 7;
+        }
+        self.0.push(v as u8);
+    }
+
+    /// Append a zigzag-encoded signed varint.
+    pub fn svarint(&mut self, v: i64) {
+        self.varint(((v << 1) ^ (v >> 63)) as u64);
+    }
 }
 
 #[cfg(test)]
@@ -115,5 +157,40 @@ mod tests {
         assert!(r.u8().is_err());
         assert!(Reader::new(&[1, 2, 3]).u32().is_err());
         assert!(Reader::new(&[]).take(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn varints_round_trip_and_reject_malformed_input() {
+        for v in [
+            0u64,
+            1,
+            127,
+            128,
+            300,
+            16_383,
+            16_384,
+            u32::MAX as u64,
+            u64::MAX,
+        ] {
+            let mut w = Writer::default();
+            w.varint(v);
+            let mut r = Reader::new(&w.0);
+            assert_eq!(r.varint().unwrap(), v);
+            assert_eq!(r.remaining(), 0);
+        }
+        for v in [0i64, -1, 1, i64::MIN, i64::MAX, -123_456_789] {
+            let mut w = Writer::default();
+            w.svarint(v);
+            assert_eq!(Reader::new(&w.0).svarint().unwrap(), v);
+        }
+        assert!(Reader::new(&[0x80]).varint().is_err(), "truncated");
+        assert!(
+            Reader::new(&[0x80, 0x00]).varint().is_err(),
+            "non-canonical"
+        );
+        assert!(Reader::new(&[0xFF; 11]).varint().is_err(), "too long");
+        let mut overflow = [0xFFu8; 9].to_vec();
+        overflow.push(0x02);
+        assert!(Reader::new(&overflow).varint().is_err(), "overflow");
     }
 }

@@ -1,0 +1,3 @@
+d2_tiny     p2-zstd3               size    28.56MB x 3.25 | create   1.16s cpu   1.63 rss    55 | extract   9.61s rss   47 | test   0.27s
+d2_tiny     p3-balanced            size    27.87MB x 3.33 | create   1.08s cpu   1.55 rss    50 | extract  14.16s rss   53 | test   0.22s
+d2_tiny     p3-adaptive            size    27.87MB x 3.33 | create   1.19s cpu   1.82 rss    50 | extract  14.01s rss   61 | test   0.25s

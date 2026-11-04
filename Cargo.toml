@@ -1,9 +1,9 @@
 [package]
 name = "kiln"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
-description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 2 working archiver"
+description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 3 performance and the .kiln format"
 readme = "README.md"
 publish = false
 

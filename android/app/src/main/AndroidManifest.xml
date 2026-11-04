@@ -4,6 +4,8 @@
     <!-- extractNativeLibs=true: libkiln.so must exist as a real file so it can be executed. -->
     <application
         android:label="Kiln"
+        android:icon="@drawable/ic_launcher_icon"
+        android:roundIcon="@drawable/ic_launcher_icon"
         android:extractNativeLibs="true"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

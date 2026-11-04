@@ -4,31 +4,41 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::classify::Class;
 use crate::codec::Method;
 use crate::error::{Error, IoContext, Result};
-use crate::format::index::{Entry, Index};
-use crate::format::record::{RECORD_HEADER_LEN, RecordHeader, decode_payload, read_record};
+use crate::format::index::{Entry, EntryKind, Index};
+use crate::format::record::{decode_payload, read_record};
 use crate::format::{FOOTER_LEN, Footer, HEADER_LEN, Header, MAGIC, MAX_INDEX_RAW};
 use crate::fsutil::read_full;
 
-/// How the data blocks of an archive are encoded (from their 13-byte headers only).
+/// How the data chunks of an archive are encoded (taken from the index; no data is read).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockStats {
-    /// Total data blocks.
+    /// Total data chunks.
     pub total: u64,
-    /// Blocks stored verbatim (incompressible, or a `store` archive).
+    /// Chunks stored verbatim (incompressible, classified as such, or a `store` archive).
     pub stored: u64,
-    /// Blocks compressed with LZ4.
+    /// Chunks compressed with LZ4.
     pub lz4: u64,
-    /// Blocks compressed with Zstandard.
+    /// Chunks compressed with Zstandard.
     pub zstd: u64,
-    /// Blocks compressed with LZMA2.
+    /// Chunks compressed with LZMA2.
     pub lzma: u64,
-    /// Bytes of block payload as stored (headers excluded).
+    /// Bytes of chunk payload as stored (record headers excluded).
     pub payload_bytes: u64,
 }
 
-/// An opened archive. Opening reads only the header, footer and index - never the data blocks -
+/// Files and bytes of one content class.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClassTotals {
+    /// Number of files.
+    pub files: u64,
+    /// Their total size in bytes.
+    pub bytes: u64,
+}
+
+/// An opened archive. Opening reads only the header, footer and index - never the data chunks -
 /// so listing even a huge archive is instant.
 #[derive(Debug)]
 pub struct Archive {
@@ -36,19 +46,23 @@ pub struct Archive {
     pub(crate) header: Header,
     pub(crate) index: Index,
     pub(crate) file_len: u64,
-    /// Offset where data blocks end and the index record begins.
-    pub(crate) data_end: u64,
 }
 
 impl Archive {
     /// Open and validate `path`.
+    ///
+    /// Behaviour for damaged input is part of the format contract (`docs/FORMAT.md`): a file that
+    /// does not start with the magic is [`Error::NotAnArchive`]; a newer format version or
+    /// unknown required feature is [`Error::Unsupported`]; a file that is too short, has no valid
+    /// footer, or whose index fails any check is [`Error::Corrupt`] or [`Error::Checksum`].
+    /// Nothing is ever partially accepted.
     pub fn open(path: &Path) -> Result<Self> {
         let mut file = File::open(path).at(path)?;
         let file_len = file.metadata().at(path)?.len();
 
         let mut head = [0u8; HEADER_LEN];
         let got = read_full(&mut file, &mut head).at(path)?;
-        if got >= MAGIC.len() && head[..MAGIC.len()] != MAGIC || got < MAGIC.len() {
+        if got < MAGIC.len() || head[..MAGIC.len()] != MAGIC {
             return Err(Error::NotAnArchive("bad magic bytes"));
         }
         if got < HEADER_LEN || file_len < (HEADER_LEN + FOOTER_LEN) as u64 {
@@ -85,37 +99,54 @@ impl Archive {
             header,
             index,
             file_len,
-            data_end,
         })
     }
 
-    /// Read every block's 13-byte header (one seek per block; no payload is read) and count how
-    /// each block is encoded. Also checks that the blocks tile the data area exactly.
-    pub fn block_stats(&self) -> Result<BlockStats> {
-        let mut file = File::open(&self.path).at(&self.path)?;
-        let offsets = &self.index.block_offsets;
+    /// Count how the chunks are encoded, from the index alone.
+    pub fn block_stats(&self) -> BlockStats {
         let mut stats = BlockStats::default();
-        for (i, &offset) in offsets.iter().enumerate() {
-            let next = offsets.get(i + 1).copied().unwrap_or(self.data_end);
-            file.seek(SeekFrom::Start(offset)).at(&self.path)?;
-            let mut raw = [0u8; RECORD_HEADER_LEN];
-            file.read_exact(&mut raw).at(&self.path)?;
-            let header = RecordHeader::decode(&raw, self.header.block_size() as u32)?;
-            if offset + header.total_len() != next {
-                return Err(Error::corrupt(format!(
-                    "block {i} does not end where the next block begins"
-                )));
-            }
+        for c in &self.index.chunks {
             stats.total += 1;
-            stats.payload_bytes += u64::from(header.comp_len);
-            match header.method {
+            stats.payload_bytes += u64::from(c.comp_len);
+            match c.method {
                 Method::Store => stats.stored += 1,
                 Method::Lz4 => stats.lz4 += 1,
                 Method::Zstd => stats.zstd += 1,
                 Method::Lzma2 => stats.lzma += 1,
             }
         }
-        Ok(stats)
+        stats
+    }
+
+    /// File counts and bytes per content class (all [`Class::Unknown`] for profiles that do not
+    /// classify).
+    pub fn class_totals(&self) -> Vec<(Class, ClassTotals)> {
+        let mut totals = [ClassTotals::default(); 6];
+        for e in self
+            .index
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::File)
+        {
+            let t = &mut totals[e.class.id() as usize];
+            t.files += 1;
+            t.bytes += e.size;
+        }
+        (0..6u8)
+            .filter_map(|id| {
+                let t = totals[id as usize];
+                (t.files > 0).then(|| (Class::from_id(id).expect("id below 6"), t))
+            })
+            .collect()
+    }
+
+    /// The method of the chunk that holds the first byte of entry `i` (`None` for empty files and
+    /// directories). This is the file's "compression metadata": which codec its data went through.
+    pub fn entry_method(&self, i: usize) -> Option<Method> {
+        let e = &self.index.entries[i];
+        (e.kind == EntryKind::File && e.size > 0).then(|| {
+            self.index.chunks[self.index.chunk_containing(self.index.entry_starts[i])].method
+        })
     }
 
     /// Where the archive lives.
@@ -123,7 +154,7 @@ impl Archive {
         &self.path
     }
 
-    /// The archive header (codec and block size).
+    /// The archive header (profile and chunk size).
     pub fn header(&self) -> &Header {
         &self.header
     }
@@ -133,14 +164,19 @@ impl Archive {
         &self.index.entries
     }
 
+    /// The decoded index.
+    pub fn index(&self) -> &Index {
+        &self.index
+    }
+
     /// Total uncompressed size of all files.
     pub fn total_raw(&self) -> u64 {
         self.index.total_raw
     }
 
-    /// Number of data blocks.
+    /// Number of data chunks.
     pub fn block_count(&self) -> usize {
-        self.index.block_offsets.len()
+        self.index.chunks.len()
     }
 
     /// Size of the archive file in bytes.

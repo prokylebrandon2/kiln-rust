@@ -186,6 +186,20 @@ pub fn set_dir_mtime(path: &Path, secs: i64, nanos: u32) -> io::Result<()> {
 
 /// Apply Unix permission bits. Only the lower nine bits are honoured: set-uid, set-gid and
 /// sticky bits are never restored from an archive. No-op on non-Unix platforms.
+pub fn set_file_mode(file: &File, mode: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(mode & 0o777))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, mode);
+        Ok(())
+    }
+}
+
+/// Set permissions by path (used for directories and files reached by name).
 pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     #[cfg(unix)]
     {

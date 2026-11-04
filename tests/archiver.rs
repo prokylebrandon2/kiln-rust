@@ -53,11 +53,13 @@ fn create_list_test_info_extract_round_trip() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let info = stdout(&out);
     for needle in [
-        "version 1",
+        "version 2",
+        "balanced",
+        "Index:",
         "zstd",
         "Files:",
         "Directories:",
-        "Blocks:",
+        "Chunks:",
         "Ratio:",
     ] {
         assert!(info.contains(needle), "info lacks {needle:?}:\n{info}");
@@ -76,13 +78,19 @@ fn create_list_test_info_extract_round_trip() {
 fn phase1_command_names_still_work_as_aliases() {
     let dir = tempfile::tempdir().unwrap();
     make_tree(dir.path());
-    assert_eq!(code(&kiln(&["pack", "-q", "a.kr", "proj"], dir.path())), 0);
-    assert_eq!(code(&kiln(&["ls", "a.kr"], dir.path())), 0);
     assert_eq!(
-        code(&kiln(&["unpack", "-q", "a.kr", "-o", "o1"], dir.path())),
+        code(&kiln(&["pack", "-q", "a.kiln", "proj"], dir.path())),
         0
     );
-    assert_eq!(code(&kiln(&["x", "-q", "a.kr", "-o", "o2"], dir.path())), 0);
+    assert_eq!(code(&kiln(&["ls", "a.kiln"], dir.path())), 0);
+    assert_eq!(
+        code(&kiln(&["unpack", "-q", "a.kiln", "-o", "o1"], dir.path())),
+        0
+    );
+    assert_eq!(
+        code(&kiln(&["x", "-q", "a.kiln", "-o", "o2"], dir.path())),
+        0
+    );
     assert_same_tree(&dir.path().join("o1/proj"), &dir.path().join("o2/proj"));
 }
 
@@ -366,7 +374,7 @@ fn info_reports_how_blocks_are_encoded() {
     );
     let out = kiln(&["info", "a.kiln"], dir.path());
     let text = stdout(&out);
-    let line = text.lines().find(|l| l.starts_with("Blocks:")).unwrap();
+    let line = text.lines().find(|l| l.starts_with("Chunks:")).unwrap();
     assert!(
         line.contains("8 ") || line.contains("(") && line.contains("zstd"),
         "{line}"

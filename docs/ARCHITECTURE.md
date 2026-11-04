@@ -1,5 +1,10 @@
 # Architecture
 
+> Updated for Phase 3: the container is now `.kiln` v2 (see `FORMAT.md`; chunks are variable-size,
+> offsets implied, columnar index). Added modules: `profile.rs`, `classify.rs`; extraction uses a
+> parent-directory-lane writer pool with a byte budget (`archive/extract.rs`). The data-flow
+> text below is otherwise still the Phase 2 description of the same pipeline.
+
 ## Goals, in priority order
 
 1. **Correctness and integrity** - never silently produce wrong data.

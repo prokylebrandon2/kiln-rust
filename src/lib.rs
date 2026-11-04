@@ -15,10 +15,10 @@
 //! use std::path::{Path, PathBuf};
 //! use kiln::{Archive, ExtractOptions, PackOptions, extract, pack};
 //!
-//! let stats = pack(Path::new("out.kr"), &[PathBuf::from("my_dir")], &PackOptions::default())?;
+//! let stats = pack(Path::new("out.kiln"), &[PathBuf::from("my_dir")], &PackOptions::default())?;
 //! println!("{} files -> {} bytes", stats.files, stats.archive_bytes);
 //!
-//! let archive = Archive::open(Path::new("out.kr"))?;
+//! let archive = Archive::open(Path::new("out.kiln"))?;
 //! extract(&archive, &ExtractOptions::new("restored"))?;
 //! # Ok::<(), kiln::Error>(())
 //! ```
@@ -28,6 +28,7 @@
 
 pub mod archive;
 pub mod bench;
+pub mod classify;
 pub mod codec;
 pub mod error;
 pub mod format;
@@ -35,11 +36,13 @@ pub mod fsutil;
 pub mod integrity;
 pub mod parallel;
 pub mod path;
+pub mod profile;
 pub mod util;
 pub mod walk;
 
 pub use archive::{
-    Archive, BlockStats, ExtractOptions, ExtractStats, PackOptions, PackStats, extract,
-    extract_with_progress, pack, pack_with_progress, verify, verify_with,
+    Archive, BlockStats, ClassTotals, ExtractOptions, ExtractStats, PackOptions, PackStats,
+    extract, extract_with_progress, pack, pack_with_progress, verify, verify_with,
 };
 pub use error::{Error, Result};
+pub use profile::Profile;

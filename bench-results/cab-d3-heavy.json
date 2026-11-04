@@ -1,0 +1,72 @@
+{
+ "dataset": "data/d3_mixed",
+ "rounds": 3,
+ "result": {
+  "p2-zstd19-16M": {
+   "archive_bytes": 52839073,
+   "wall": 13.555291,
+   "cpu": 22.019342,
+   "rss_mib": 284.02,
+   "walls": [
+    13.555,
+    12.924,
+    14.092
+   ]
+  },
+  "p2-lzma6": {
+   "archive_bytes": 51773057,
+   "wall": 16.513995,
+   "cpu": 31.207262,
+   "rss_mib": 132.383,
+   "walls": [
+    16.514,
+    17.01,
+    16.282
+   ]
+  },
+  "p3-max-noclass": {
+   "archive_bytes": 52833562,
+   "wall": 14.033884,
+   "cpu": 22.436326,
+   "rss_mib": 284.328,
+   "walls": [
+    13.989,
+    14.339,
+    14.034
+   ]
+  },
+  "p3-maximum": {
+   "archive_bytes": 50656642,
+   "wall": 9.486779,
+   "cpu": 14.33776,
+   "rss_mib": 249.035,
+   "walls": [
+    9.487,
+    9.442,
+    9.515
+   ]
+  },
+  "p3-adaptive": {
+   "archive_bytes": 53118480,
+   "wall": 0.211841,
+   "cpu": 0.295251,
+   "rss_mib": 32.32,
+   "walls": [
+    0.212,
+    0.212,
+    0.188
+   ]
+  },
+  "p3-balanced": {
+   "archive_bytes": 53454630,
+   "wall": 0.270407,
+   "cpu": 0.389351,
+   "rss_mib": 40.012,
+   "walls": [
+    0.27,
+    0.271,
+    0.255
+   ]
+  }
+ }
+}

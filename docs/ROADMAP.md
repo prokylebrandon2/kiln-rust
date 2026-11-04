@@ -30,7 +30,11 @@ zero-fill); scaling is only measured up to 2 threads.
 * **Exit:** documented speedup curve; at least 90% of the `store` ceiling for lz4 on all cores;
   memory model validated at more than 2 threads.
 
-## Phase 3 - Ratio and format
+## Phase 3 - Ratio and format  (partly done; see `PHASE3.md`)
+
+Done: format v2 + compatibility policy, profiles, classification, parallel extraction, 7-Zip
+comparison. **Not done:** BCJ/delta filters, deduplication, dictionaries, links/ownership/xattrs
+(still listed below).
 
 *Why:* the original is 3.2% (text) and 9.6% (binary) better than the current best; independent
 blocks cost ~4% on text.

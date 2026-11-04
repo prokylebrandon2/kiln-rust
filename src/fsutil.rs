@@ -246,7 +246,10 @@ mod tests {
             (-86_400, 0),
         ] {
             let t = parts_to_mtime(s, n).unwrap();
-            assert_eq!(mtime_parts(t), (s, n));
+            // Windows represents SystemTime in 100-nanosecond ticks, so sub-tick precision
+            // is truncated when constructing the value. Compare at the platform's resolution.
+            let expected_nanos = if cfg!(windows) { n / 100 * 100 } else { n };
+            assert_eq!(mtime_parts(t), (s, expected_nanos));
         }
         assert!(parts_to_mtime(0, 1_000_000_000).is_none());
     }

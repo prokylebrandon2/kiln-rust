@@ -4723,7 +4723,7 @@ public class MainActivity extends Activity {
         name.setText(base + ".kln");
         final EditText where = Ui.field(this, "Save in", false);
         where.setText(cwd.getPath());
-        final CheckBox enc = Ui.check(this, "Encrypt with a password", true);
+        final CheckBox enc = Ui.check(this, "Encrypt with a password", false);
         final EditText p1 = Ui.field(this, "Password (8+ characters)", true);
         final EditText p2 = Ui.field(this, "Repeat password", true);
         final CheckBox show = Ui.check(this, "Show passwords", false);
@@ -5070,6 +5070,7 @@ public class MainActivity extends Activity {
         final List<File> entries = new ArrayList<>();     // null entry = ".." row
         final LinkedHashSet<String> chosen = new LinkedHashSet<>();
         final LinkedHashMap<String, File> byPath = new LinkedHashMap<>();
+        final Map<File, String> vols = new HashMap<>();   // other storages shown beside this one -> label
         final TextView path = Ui.label(this, "", 13, false, true);
         path.setEllipsize(TextUtils.TruncateAt.START);
         path.setSingleLine(true);
@@ -5103,7 +5104,16 @@ public class MainActivity extends Activity {
                     name.setText("..");
                     return row;
                 }
-                if (f.isDirectory()) {
+                if (vols.containsKey(f)) {                     // another storage: open it, not tick it
+                    Thumbs.showIcon(icon, f.equals(root) ? R.drawable.ic_home : R.drawable.ic_usb, accent);
+                    name.setText(vols.get(f));
+                    return row;
+                }
+                if (chosen.contains(f.getPath())) {            // picked: same look as a selected row in the list
+                    row.setBackground(Ui.ripple(MainActivity.this, getColor(R.color.k_sel), 0, 12,
+                            Ui.alpha(Ui.text(MainActivity.this), 0x22)));
+                    Thumbs.showIcon(icon, R.drawable.ic_check, accent);
+                } else if (f.isDirectory()) {
                     int pc = Defaults.folderColor(MainActivity.this, f.getPath());
                     Thumbs.showIcon(icon, dirIcon(f), pc != 0 ? pc : accent);
                 } else {
@@ -5111,21 +5121,26 @@ public class MainActivity extends Activity {
                             Icons.tintFor(MainActivity.this, f.getName()), previewsOn);
                 }
                 name.setText(f.getName());
-                final CheckBox cb2 = new CheckBox(MainActivity.this);
-                cb2.setChecked(chosen.contains(f.getPath()));
-                cb2.setOnClickListener(v -> {
-                    if (cb2.isChecked()) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
-                    else { chosen.remove(f.getPath()); byPath.remove(f.getPath()); }
-                });
-                row.addView(cb2);
                 return row;
             }
         };
         lv.setAdapter(ad);
+        final java.util.function.Consumer<File> toggle = f -> {
+            if (!chosen.remove(f.getPath())) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
+            else byPath.remove(f.getPath());
+            ad.notifyDataSetChanged();
+        };
         final Runnable fill = () -> {
             entries.clear();
+            vols.clear();
             File parent = cur[0].getParentFile();
             if (parent != null && !isStorageRoot(cur[0])) entries.add(null);
+            if (isStorageRoot(cur[0])) {                       // the other storages sit beside this one
+                if (!cur[0].equals(root)) { vols.put(root, "Internal storage"); entries.add(root); }
+                for (File[] v : volumes()) {
+                    if (!v[0].equals(cur[0])) { vols.put(v[0], v[1].getName()); entries.add(v[0]); }
+                }
+            }
             File[] kids = Priv.wants(cur[0].getPath()) ? Priv.kids(cur[0]) : cur[0].listFiles();
             List<File> dirs = new ArrayList<>(), files = new ArrayList<>();
             if (kids != null) {
@@ -5147,21 +5162,29 @@ public class MainActivity extends Activity {
             if (f == null) {
                 cur[0] = cur[0].getParentFile();
                 fill.run();
-            } else if (f.isDirectory()) {
-                cur[0] = f;
+            } else if (vols.containsKey(f)) {
+                cur[0] = f;                               // another storage: always opens
                 fill.run();
-            } else {                                      // a file: tapping ticks it
-                if (!chosen.remove(f.getPath())) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
-                else byPath.remove(f.getPath());
-                ad.notifyDataSetChanged();
+            } else if (f.isDirectory() && !chosen.contains(f.getPath())) {
+                cur[0] = f;                               // a folder opens, even with other things picked
+                fill.run();
+            } else {                                      // a file, or a picked folder: tapping toggles it
+                toggle.accept(f);
             }
         });
+        lv.setOnItemLongClickListener((av, v, pos, id) -> {   // hold: pick a folder (or a file) as a whole
+            File f = entries.get(pos);
+            if (f == null || vols.containsKey(f)) return false;
+            toggle.accept(f);
+            return true;
+        });
         fill.run();
-        new Sheet(this, "Choose what to pack").content(path).space(6).fixed(lv, 320)
+        final TextView hint = Ui.label(this, "Tap a file to pick it. Hold a folder to pick it whole.", 12, false, true);
+        new Sheet(this, "Choose what to pack").content(path).content(hint).space(6).fixed(lv, 320)
                 .button("Cancel", Ui.TEXT, null)
                 .button("Next", Ui.FILLED, () -> {
                     if (byPath.isEmpty()) {
-                        toast("Tick at least one file or folder");
+                        toast("Pick at least one file or folder");
                         return false;
                     }
                     cb.accept(new ArrayList<>(byPath.values()));

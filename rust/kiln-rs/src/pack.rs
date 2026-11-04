@@ -11,7 +11,7 @@ const LP_REPARSE: f64 = 0.02;
 const MODES: [u32; 6] = [0, 1, 2, 4, 5, 6];
 const BIG: u64 = 1 << 60;
 /// PARSE = (chain_max, nice, lazy, accel) in kiln_v14.py
-pub const PARSE: (i32, i32, i32, i32) = (384, 258, 2, 99);
+pub const PARSE: (i32, i32, i32, i32) = (128, 96, 2, 50);
 
 /// One output block. `Stored` points into the input buffer (type 0), `Coded` owns its payload (type 1).
 #[derive(Debug, PartialEq, Eq)]

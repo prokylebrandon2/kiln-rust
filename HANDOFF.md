@@ -320,3 +320,22 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
   and engine roundtrip-checked. Re-run it if the corpus is missing.
 - CP1: FORMAT.md + tools/accel_reference.c written from kiln_v14.py (decoder-side only).
 - CP0: plan written. Nothing compiled. No Rust toolchain in sandbox.
+
+## CP12s (WIP, based on cp12r)
+- Rust decoder/range-coder speedups (output bit-identical, all cargo tests pass): branch-free Rcp::up and Dec::bitp, unchecked mixer reads, prefetch in mixlit/mixlitm. Decode ~17-28% faster (text 1.09->~0.9s, doc 1.08->~0.7s, bin 1.57->~1.3s). Still slower than xz to decode.
+- New benchmark examples: rust/kiln-rs/examples/tune.rs, fullbench.rs, unpackbench.rs.
+- Encoder parse NOT changed (PARSE=(384,258,2,99)). Idea untested: chain 96/nice 64 (~13-20% faster, ~0.1% bigger).
+- Not verified on phone. Note 8 untouched. Note 3 (zip/7z) work is NOT in this zip.
+
+## CP12t (based on cp12s)
+- Encoder parse default changed in rust/kiln-rs/src/pack.rs: PARSE (384,258,2,99) -> (128,96,2,99). Measured on 8 MB samples (1 core, tune example):
+  text 10.633% 4.65 s -> 10.632% 3.88 s; bin 25.136% 5.69 s -> 25.145% 5.24 s (same ratio within 0.01%, about 8-17% faster).
+  Cheaper settings lose more: 96/64 +0.15% size, 48/48 +1.8% on text. Timings are noisy (+-5%) on this 1-core sandbox.
+- Reference xz -9e (python lzma) on the same files: text 10.572% 4.6 s, bin 25.474% 4.5 s. Kiln beats xz on ratio for bin only; xz is still ~0.6% smaller on text and decodes far faster (0.07-0.13 s vs ~1 s).
+- Format is unchanged (parser choice only affects the encoder). All cargo tests pass (rustc 1.89 via apt: rustc-1.89 cargo-1.89, PATH=/usr/lib/rust-1.89/bin).
+- NOT done: a big compression speedup (the optimal parser's cost model is the hot spot), decode still slower than xz, note 3 (zip/7z viewing), phone test.
+
+## CP12u (based on cp12t)
+- PARSE accel 99 -> 50 in rust/kiln-rs/src/pack.rs: PARSE = (128,96,2,50). accel<99 enables the "dry" skip after 32 misses (lz.rs ~1098); accel>=31 means no step skipping, so 50 and 30 behave the same.
+  8 MB samples: text 10.632% -> 10.618%, bin 25.145% -> 25.146%; time about 4-13% lower (noisy); random data 0.18 -> 0.16 s. Format unchanged; all cargo tests pass (rustc 1.89).
+- Profile (4 MB text, 1 core): lz77 parse ~1.6 s, rc encode of all 6 modes ~0.36 s, rnd 0.01 s. The parse is ~80% of pack time; lazy 0/1 are 2-4x faster but 14-25% bigger (not usable). Further speed must come from lz.rs opt_window/find_all, which has to stay token-identical to the C reference.

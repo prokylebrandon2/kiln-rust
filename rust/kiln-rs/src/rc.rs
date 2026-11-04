@@ -106,19 +106,23 @@ impl Rcp {
     }
     #[inline(always)]
     pub(crate) fn up(&mut self, bit: u32, t: &Tables) {
+        // Branch-free (the bit is unpredictable): same arithmetic as
+        //   bit=1: x -= (x * r) >> 16      bit=0: x += ((65535 - x) * r) >> 16
         let n = self.n as usize;
-        if self.n < RC_NMAX {
-            self.n += 1;
-        }
-        let ra = t.ra[n] as u32;
-        let rb = t.rb[n] as u32;
-        if bit != 0 {
-            self.a = self.a.wrapping_sub(((self.a as u32 * ra) >> 16) as u16);
-            self.b = self.b.wrapping_sub(((self.b as u32 * rb) >> 16) as u16);
-        } else {
-            self.a = self.a.wrapping_add(((((65535 - self.a as u32) * ra) >> 16)) as u16);
-            self.b = self.b.wrapping_add(((((65535 - self.b as u32) * rb) >> 16)) as u16);
-        }
+        self.n += (self.n < RC_NMAX) as u8;
+        // SAFETY: n is a u8 and both rate tables have 256 entries
+        let (ra, rb) = unsafe { (*t.ra.get_unchecked(n) as u32, *t.rb.get_unchecked(n) as u32) };
+        let m = 0u32.wrapping_sub(bit); // all ones when bit = 1
+        let a = self.a as u32;
+        let b = self.b as u32;
+        let ia = 65535 - a;
+        let ib = 65535 - b;
+        let xa = ia ^ ((ia ^ a) & m);
+        let xb = ib ^ ((ib ^ b) & m);
+        let da = (xa * ra) >> 16;
+        let db = (xb * rb) >> 16;
+        self.a = a.wrapping_add((da ^ m).wrapping_sub(m)) as u16;
+        self.b = b.wrapping_add((db ^ m).wrapping_sub(m)) as u16;
     }
 }
 
@@ -220,32 +224,18 @@ impl<'a> Dec<'a> {
     }
     #[inline(always)]
     fn bit(&mut self, p: &mut Rcp) -> u32 {
-        let bound = (self.range >> 12) * p.p();
-        let bit;
-        if self.code < bound {
-            self.range = bound;
-            bit = 0;
-        } else {
-            self.code -= bound;
-            self.range -= bound;
-            bit = 1;
-        }
+        let bit = self.bitp(p.p());
         p.up(bit, self.t);
-        self.norm();
         bit
     }
     #[inline(always)]
     fn bitp(&mut self, p: u32) -> u32 {
+        // branch-free: bit = code >= bound; bit 0 keeps [0, bound), bit 1 keeps [bound, range)
         let bound = (self.range >> 12) * p;
-        let bit;
-        if self.code < bound {
-            self.range = bound;
-            bit = 0;
-        } else {
-            self.code -= bound;
-            self.range -= bound;
-            bit = 1;
-        }
+        let bit = (self.code >= bound) as u32;
+        let m = 0u32.wrapping_sub(bit);
+        self.code -= bound & m;
+        self.range = (bound & !m) | (self.range.wrapping_sub(bound) & m);
         self.norm();
         bit
     }
@@ -295,27 +285,35 @@ fn mix_h2(prev2: u32, prev: u32) -> usize {
     ((prev2.wrapping_mul(0x9E3779B1) ^ prev.wrapping_mul(0x85EBCA6B)) >> 20) as usize
 }
 
+/// Cache hint only (no effect on results): the literal tables are bigger than the cache.
+#[inline(always)]
+fn prefetch<T>(p: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::x86_64::_mm_prefetch(p as *const i8, core::arch::x86_64::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("prfm pldl1keep, [{0}]", in(reg) p, options(nostack, preserves_flags, readonly));
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = p;
+}
+
 /// returns (P(bit=0) in 1..4095, the three stretched inputs)
 #[inline(always)]
 fn mix_pred(t: &Tables, a: &Rcp, b: &Rcp, c: &Rcp, w: &[i32]) -> (u32, [i32; MIX_N]) {
-    let s = [
-        t.mixstr[a.p() as usize] as i32,
-        t.mixstr[b.p() as usize] as i32,
-        t.mixstr[c.p() as usize] as i32,
-    ];
+    // SAFETY: Rcp::p() is (a + b) >> 5 <= 4095 and mixstr has 4096 entries; d + 2048 is in 1..=4095
+    let s = unsafe {
+        [
+            *t.mixstr.get_unchecked(a.p() as usize) as i32,
+            *t.mixstr.get_unchecked(b.p() as usize) as i32,
+            *t.mixstr.get_unchecked(c.p() as usize) as i32,
+        ]
+    };
     let dot = s[0] as i64 * w[0] as i64 + s[1] as i64 * w[1] as i64 + s[2] as i64 * w[2] as i64;
-    let mut d = (dot >> 16) as i32;
-    if d > 2047 {
-        d = 2047;
-    } else if d < -2047 {
-        d = -2047;
-    }
-    let mut p = t.mixsq[(d + 2048) as usize] as i32;
-    if p < 1 {
-        p = 1;
-    } else if p > 4095 {
-        p = 4095;
-    }
+    let d = ((dot >> 16) as i32).clamp(-2047, 2047);
+    let p = (unsafe { *t.mixsq.get_unchecked((d + 2048) as usize) } as i32).clamp(1, 4095);
     (p as u32, s)
 }
 
@@ -330,16 +328,27 @@ fn mix_upd(w: &mut [i32], s: &[i32; MIX_N], p: u32, bit: u32) {
 fn mixlit(d: &mut Dec, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32) -> u32 {
     let b1 = (prev as usize) * 256;
     let b2 = mix_h2(prev2, prev) * 256;
+    assert!(lp.len() >= 256 && x.t1.len() >= b1 + 256 && x.t2.len() >= b2 + 256 && x.w.len() >= 256 * 3);
+    let (t1, t2, w) = (x.t1.as_mut_ptr(), x.t2.as_mut_ptr(), x.w.as_mut_ptr());
+    let lpp = lp.as_mut_ptr();
     let mut c0 = 1usize;
     for _ in 0..8 {
-        let wi = c0 * 3;
-        let (p, s) = mix_pred(d.t, &lp[c0], &x.t1[b1 + c0], &x.t2[b2 + c0], &x.w[wi..wi + 3]);
-        let bit = d.bitp(p);
-        mix_upd(&mut x.w[wi..wi + 3], &s, p, bit);
-        lp[c0].up(bit, d.t);
-        x.t1[b1 + c0].up(bit, d.t);
-        x.t2[b2 + c0].up(bit, d.t);
-        c0 = (c0 << 1) | bit as usize;
+        // SAFETY: c0 < 256 here (it has at most 7 bits before the last step) and the asserts above
+        // cover every row; the children 2*c0 and 2*c0+1 are only prefetched, never dereferenced.
+        unsafe {
+            prefetch(t2.add(b2 + 2 * c0));
+            prefetch(t1.add(b1 + 2 * c0));
+            prefetch(lpp.add(2 * c0));
+            let wi = c0 * 3;
+            let ws = std::slice::from_raw_parts_mut(w.add(wi), 3);
+            let (p, s) = mix_pred(d.t, &*lpp.add(c0), &*t1.add(b1 + c0), &*t2.add(b2 + c0), ws);
+            let bit = d.bitp(p);
+            mix_upd(ws, &s, p, bit);
+            (*lpp.add(c0)).up(bit, d.t);
+            (*t1.add(b1 + c0)).up(bit, d.t);
+            (*t2.add(b2 + c0)).up(bit, d.t);
+            c0 = (c0 << 1) | bit as usize;
+        }
     }
     (c0 & 0xFF) as u32
 }
@@ -347,6 +356,9 @@ fn mixlit(d: &mut Dec, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32) -> u3
 fn mixlitm(d: &mut Dec, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32, mut mb: u32) -> u32 {
     let b1 = (prev as usize) * 256;
     let b2 = mix_h2(prev2, prev) * 256;
+    assert!(lp.len() >= 0x300 && x.t1.len() >= b1 + 256 && x.t2.len() >= b2 + 256 && x.wm.len() >= 256 * 3);
+    let (t1, t2, wm) = (x.t1.as_mut_ptr(), x.t2.as_mut_ptr(), x.wm.as_mut_ptr());
+    let lpp = lp.as_mut_ptr();
     let mut offs: u32 = 0x100;
     let mut sym: u32 = 1;
     while sym < 0x100 {
@@ -354,18 +366,22 @@ fn mixlitm(d: &mut Dec, x: &mut Mix, lp: &mut [Rcp], prev: u32, prev2: u32, mut 
         let mbit = mb & offs;
         let wi = sym as usize * 3;
         let ai = (offs + mbit + sym) as usize;
-        let (p, s) = mix_pred(d.t, &lp[ai], &x.t1[b1 + sym as usize], &x.t2[b2 + sym as usize], &x.wm[wi..wi + 3]);
-        let bit = d.bitp(p);
-        mix_upd(&mut x.wm[wi..wi + 3], &s, p, bit);
-        lp[ai].up(bit, d.t);
-        x.t1[b1 + sym as usize].up(bit, d.t);
-        x.t2[b2 + sym as usize].up(bit, d.t);
+        // SAFETY: sym < 256 so wi + 3 <= 768 and b1/b2 + sym < row end; ai <= 0x100 + 0x100 + 0xFF < 0x300
+        let bit = unsafe {
+            prefetch(t2.add(b2 + 2 * sym as usize));
+            prefetch(t1.add(b1 + 2 * sym as usize));
+            let ws = std::slice::from_raw_parts_mut(wm.add(wi), 3);
+            let (p, s) = mix_pred(d.t, &*lpp.add(ai), &*t1.add(b1 + sym as usize), &*t2.add(b2 + sym as usize), ws);
+            let bit = d.bitp(p);
+            mix_upd(ws, &s, p, bit);
+            (*lpp.add(ai)).up(bit, d.t);
+            (*t1.add(b1 + sym as usize)).up(bit, d.t);
+            (*t2.add(b2 + sym as usize)).up(bit, d.t);
+            bit
+        };
         sym = (sym << 1) | bit;
-        if bit != 0 {
-            offs &= mbit;
-        } else {
-            offs &= !mbit;
-        }
+        let keep = if bit != 0 { mbit } else { !mbit };
+        offs &= keep;
     }
     sym & 0xFF
 }

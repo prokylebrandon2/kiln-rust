@@ -339,3 +339,7 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
 - PARSE accel 99 -> 50 in rust/kiln-rs/src/pack.rs: PARSE = (128,96,2,50). accel<99 enables the "dry" skip after 32 misses (lz.rs ~1098); accel>=31 means no step skipping, so 50 and 30 behave the same.
   8 MB samples: text 10.632% -> 10.618%, bin 25.145% -> 25.146%; time about 4-13% lower (noisy); random data 0.18 -> 0.16 s. Format unchanged; all cargo tests pass (rustc 1.89).
 - Profile (4 MB text, 1 core): lz77 parse ~1.6 s, rc encode of all 6 modes ~0.36 s, rnd 0.01 s. The parse is ~80% of pack time; lazy 0/1 are 2-4x faster but 14-25% bigger (not usable). Further speed must come from lz.rs opt_window/find_all, which has to stay token-identical to the C reference.
+
+## CP12v (based on cp12u)
+- CI run #41 (cp12u) failed in rust-engine: tests/blk_vectors.rs::blocks_match_python ("text_s0 block 0: payload differs"). Cause: the test used pack::PARSE, but the Python-made vectors (../tests/blkvec, not in the zip) were generated with the old (384,258,2,99). Fix: the test now pins REF_PARSE = (384,258,2,99); the app keeps PARSE = (128,96,2,50). Only the test file and a doc comment in pack.rs changed; compiles. I could not run it here because the vectors are not in the zip, so CI is the real check.
+- If CI still fails, regenerate the vectors with the Python engine's own PARSE, or compare against the Rust output of the reference parse instead.

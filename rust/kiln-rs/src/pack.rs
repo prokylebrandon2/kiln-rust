@@ -10,7 +10,8 @@ const MODE_TIE: f64 = 1.01;
 const LP_REPARSE: f64 = 0.02;
 const MODES: [u32; 6] = [0, 1, 2, 4, 5, 6];
 const BIG: u64 = 1 << 60;
-/// PARSE = (chain_max, nice, lazy, accel) in kiln_v14.py
+/// App default (chain_max, nice, lazy, accel). Faster than kiln_v14.py's (384, 258, 2, 99) at the same ratio;
+/// the Python-vector test (tests/blk_vectors.rs) pins the reference values itself.
 pub const PARSE: (i32, i32, i32, i32) = (128, 96, 2, 50);
 
 /// One output block. `Stored` points into the input buffer (type 0), `Coded` owns its payload (type 1).

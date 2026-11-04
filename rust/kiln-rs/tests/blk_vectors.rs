@@ -1,6 +1,10 @@
 // cargo test --release --test blk_vectors   (vectors: tools/make_lz_vectors.py then tools/make_blk_vectors.py)
 // build_blocks in Rust must give exactly the blocks of the Python engine (same types, sizes, payload bytes).
-use kiln_rs::pack::{build_blocks, Block, PARSE};
+use kiln_rs::pack::{build_blocks, Block};
+
+// The Python engine's parse settings, which the vectors were made with. The app's own pack::PARSE is
+// tuned for speed and is deliberately different, so it must not be used here.
+const REF_PARSE: (i32, i32, i32, i32) = (384, 258, 2, 99);
 use std::fs;
 
 #[test]
@@ -29,7 +33,7 @@ fn blocks_match_python() {
             want.push((t, r, raw[p + 17..p + 17 + l].to_vec()));
             p += 17 + l;
         }
-        let got = build_blocks(&buf, start, PARSE).unwrap_or_else(|| panic!("{tag}: failed"));
+        let got = build_blocks(&buf, start, REF_PARSE).unwrap_or_else(|| panic!("{tag}: failed"));
         assert_eq!(got.len(), want.len(), "{tag}: block count");
         let mut pos = start;
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {

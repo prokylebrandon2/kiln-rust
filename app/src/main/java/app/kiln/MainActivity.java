@@ -5034,7 +5034,7 @@ public class MainActivity extends Activity {
         List<String[]> rows = new ArrayList<>();
         rows.add(new String[]{"Version", ver + (build > 0 ? " (build " + build + ")" : "")});
         if (!engine.isEmpty()) rows.add(new String[]{"Engine", "kiln " + engine});
-        if (app != null) rows.add(new String[]{"Fast mode", helper.isEmpty() ? "On" : "Off \u2013 " + helper});
+        if (!engine.isEmpty()) rows.add(new String[]{"Fast mode", helper.isEmpty() ? "On" : "Off \u2013 " + helper});
         rows.add(new String[]{"Encryption", "AES-256-GCM"});
 
         LinearLayout card = detailCard(rows);

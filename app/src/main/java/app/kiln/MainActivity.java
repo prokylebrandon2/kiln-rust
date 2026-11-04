@@ -4832,13 +4832,6 @@ public class MainActivity extends Activity {
         return m.isFile() ? m : null;
     }
 
-    private static void listNames(StringBuilder b, String title, JSONArray a, int total) {
-        if (total <= 0) return;
-        b.append('\n').append(title).append(" (").append(total).append("):\n");
-        for (int i = 0; i < a.length() && i < 8; i++) b.append("\u2022 ").append(a.optString(i)).append('\n');
-        if (total > 8) b.append("and ").append(total - 8).append(" more\n");
-    }
-
     private void shaGenerate(final List<File> items) {
         if (items.isEmpty()) return;
         List<String> exist = new ArrayList<>();
@@ -4850,13 +4843,16 @@ public class MainActivity extends Activity {
             runSha(items);
             return;
         }
-        StringBuilder b = new StringBuilder();
-        for (int i = 0; i < exist.size() && i < 5; i++) b.append("\u2022 ").append(exist.get(i)).append('\n');
-        if (exist.size() > 5) b.append("and ").append(exist.size() - 5).append(" more\n");
-        confirm(exist.size() == 1 ? "Replace \"" + exist.get(0) + "\"?" : "Replace " + exist.size() + " checksum files?",
-                (exist.size() == 1 ? "It already exists and will be replaced with a new one."
-                        : "These already exist and will be replaced with new ones:\n" + b.toString().trim()),
-                "Replace", Ui.DANGER, () -> runSha(items));
+        Sheet s = new Sheet(this, exist.size() == 1 ? "Replace checksum file?" : "Replace checksum files?");
+        s.text(exist.size() == 1 ? "This checksum file already exists. A new one will take its place."
+                : "These checksum files already exist. New ones will take their place.");
+        Results.add(s, Results.section(this, Results.WARN, "Will be replaced", exist, false), 4);
+        s.button("Cancel", Ui.TEXT, null);
+        s.button("Replace", Ui.DANGER, () -> {
+            runSha(items);
+            return true;
+        });
+        s.show();
     }
 
     private void runSha(final List<File> items) {
@@ -4870,23 +4866,28 @@ public class MainActivity extends Activity {
                 return;
             }
             JSONArray made = r.optJSONArray("made");
-            StringBuilder b = new StringBuilder();
-            for (int i = 0; made != null && i < made.length(); i++) {
-                JSONObject o = made.optJSONObject(i);
-                if (o == null) continue;
-                b.append(o.optString("name")).append('\n');
-                if (o.has("hash")) b.append("SHA-256: ").append(o.optString("hash")).append("\n\n");
-                else if (o.optBoolean("folder")) b.append(plural(o.optInt("files"), "file", "files")).append(" hashed\n\n");
-                else b.append('\n');
-            }
-            listNames(b, "Left out", r.optJSONArray("skipped"), r.optInt("skippedN"));
-            listNames(b, "Couldn't read", r.optJSONArray("failed"), r.optJSONArray("failed") == null ? 0
-                    : r.optJSONArray("failed").length());
+            int n = made == null ? 0 : made.length();
+            JSONArray failed = r.optJSONArray("failed");
+            int failedN = failed == null ? 0 : failed.length();
             sel.clear();
             forceRefresh = true;
             loadDir(cwd, true);
             redraw();
-            message(made != null && made.length() > 1 ? "Checksums created" : "Checksum created", b.toString().trim());
+            Sheet s = new Sheet(this, "SHA-256");
+            s.content(Results.header(this, Results.GOOD,
+                    n == 1 ? "Checksum created" : n + " checksums created",
+                    "Saved next to the original" + (n == 1 ? "" : "s"))).space(14);
+            for (int i = 0; i < n; i++) {
+                JSONObject o = made.optJSONObject(i);
+                if (o == null) continue;
+                String files = o.optBoolean("folder")
+                        ? plural(o.optInt("files"), "file", "files") + " hashed" : null;
+                Results.add(s, Results.made(this, o, files), 8);
+            }
+            Results.add(s, Results.section(this, Results.WARN, "Left out", r.optJSONArray("skipped"),
+                    r.optInt("skippedN"), false), 8);
+            Results.add(s, Results.section(this, Results.BAD, "Couldn't read", failed, failedN, false), 8);
+            s.button("Done", Ui.FILLED, null).show();
         });
     }
 
@@ -4900,18 +4901,35 @@ public class MainActivity extends Activity {
                 message("Couldn't check", r.optString("error", "Something went wrong."));
                 return;
             }
-            StringBuilder b = new StringBuilder();
+            boolean match = r.optBoolean("match");
             int checked = r.optInt("checked"), good = r.optInt("good");
-            b.append(r.optString("manifest")).append('\n');
-            b.append(good).append(" of ").append(plural(checked, "file", "files")).append(" match.\n");
-            listNames(b, "Changed", r.optJSONArray("changed"), r.optInt("changedN"));
-            listNames(b, "Missing", r.optJSONArray("missing"), r.optInt("missingN"));
-            listNames(b, "Not in the checksum file", r.optJSONArray("added"), r.optInt("addedN"));
-            if (r.optInt("malformed") > 0) {
-                b.append('\n').append(plural(r.optInt("malformed"), "line", "lines")).append(" couldn't be read.\n");
+            int changedN = r.optInt("changedN"), missingN = r.optInt("missingN");
+            Sheet s = new Sheet(this, "Verify SHA-256");
+            s.content(Results.header(this, match ? Results.GOOD : Results.BAD,
+                    match ? "Checksums match" : "Checksums don't match",
+                    r.optString("manifest"))).space(14);
+            int problems = changedN + missingN;
+            s.content(Results.tiles(this, new String[][]{
+                    {String.valueOf(checked), checked == 1 ? "file checked" : "files checked"},
+                    {String.valueOf(good), "match"},
+                    {String.valueOf(problems), problems == 1 ? "problem" : "problems"}},
+                    new int[]{-1, Results.GOOD, problems > 0 ? Results.BAD : -1})).space(14);
+            if (checked > 0) {
+                Results.add(s, Results.bar(this, (double) good / checked,
+                        match ? Results.GOOD : Results.BAD, "Matching",
+                        Math.round(100.0 * good / checked) + "%"), 14);
             }
-            if (r.optBoolean("match")) b.append("\nNothing has changed.");
-            message(r.optBoolean("match") ? "Checksums match" : "Checksums don't match", b.toString().trim());
+            Results.add(s, Results.section(this, Results.BAD, "Changed", r.optJSONArray("changed"),
+                    changedN, false), 8);
+            Results.add(s, Results.section(this, Results.BAD, "Missing", r.optJSONArray("missing"),
+                    missingN, false), 8);
+            Results.add(s, Results.section(this, Results.WARN, "Not in the checksum file",
+                    r.optJSONArray("added"), r.optInt("addedN"), false), 8);
+            if (r.optInt("malformed") > 0) {
+                Results.add(s, Results.note(this, plural(r.optInt("malformed"), "line", "lines")
+                        + " in the checksum file couldn't be read."), 8);
+            }
+            s.button("Done", Ui.FILLED, null).show();
         });
     }
 
@@ -4937,37 +4955,77 @@ public class MainActivity extends Activity {
                 message("Couldn't compare", r.optString("error", "Something went wrong."));
                 return;
             }
-            StringBuilder s = new StringBuilder();
-            s.append("A: ").append(a.getName()).append("\nB: ").append(b.getName()).append("\n\n");
             boolean same = r.optBoolean("same");
             if (!dirs) {
-                if (same) {
-                    s.append("Same size (").append(Fmt.size(r.optLong("sizeA"))).append(") and same content.\n")
-                            .append("SHA-256: ").append(r.optString("hash"));
-                } else if ("size".equals(r.optString("reason"))) {
-                    s.append("A is ").append(Fmt.size(r.optLong("sizeA"))).append(", B is ")
-                            .append(Fmt.size(r.optLong("sizeB"))).append(".");
-                } else {
-                    s.append("Same size, but the content differs (first difference at byte ")
-                            .append(r.optLong("at")).append(").");
-                }
-                message(same ? "Files are identical" : "Files are different", s.toString());
+                showFileCompare(a, b, r, same);
                 return;
             }
-            s.append(plural(r.optInt("compared"), "file", "files")).append(" compared, ")
-                    .append(r.optInt("identical")).append(" identical.\n");
-            listNames(s, "Different content", r.optJSONArray("changed"), r.optInt("changedN"));
-            listNames(s, "Only in A", r.optJSONArray("onlyA"), r.optInt("onlyAN"));
-            listNames(s, "Only in B", r.optJSONArray("onlyB"), r.optInt("onlyBN"));
-            listNames(s, "Folders only in A", r.optJSONArray("dirsOnlyA"), r.optInt("dirsOnlyAN"));
-            listNames(s, "Folders only in B", r.optJSONArray("dirsOnlyB"), r.optInt("dirsOnlyBN"));
-            listNames(s, "Couldn't read", r.optJSONArray("unreadable"), r.optInt("unreadableN"));
-            if (r.optInt("skipped") > 0) {
-                s.append('\n').append(plural(r.optInt("skipped"), "link or unreadable item was", "links or unreadable items were"))
-                        .append(" left out.");
+            int compared = r.optInt("compared"), identical = r.optInt("identical");
+            int diff = Math.max(compared - identical, 0);
+            Sheet s = new Sheet(this, "Compare folders");
+            s.content(Results.header(this, same ? Results.GOOD : Results.BAD,
+                    same ? "Folders are identical" : "Folders are different",
+                    compared == 0 ? "Neither folder has any files"
+                            : same ? "All " + plural(compared, "file", "files") + " match"
+                            : identical + " of " + plural(compared, "file", "files") + " match")).space(14);
+            Results.add(s, Results.pair(this, a.getName(), "Folder", b.getName(), "Folder"), 14);
+            if (compared > 0) {
+                s.content(Results.tiles(this, new String[][]{
+                        {String.valueOf(compared), "compared"},
+                        {String.valueOf(identical), "identical"},
+                        {String.valueOf(diff), "different"}},
+                        new int[]{-1, Results.GOOD, diff > 0 ? Results.BAD : -1})).space(14);
+                Results.add(s, Results.bar(this, (double) identical / compared,
+                        same ? Results.GOOD : Results.BAD, "Identical",
+                        Math.round(100.0 * identical / compared) + "%"), 14);
             }
-            message(same ? "Folders are identical" : "Folders are different", s.toString().trim());
+            Results.add(s, Results.section(this, Results.BAD, "Different content",
+                    r.optJSONArray("changed"), r.optInt("changedN"), false), 8);
+            Results.add(s, Results.section(this, Results.WARN, "Only in A", r.optJSONArray("onlyA"),
+                    r.optInt("onlyAN"), false), 8);
+            Results.add(s, Results.section(this, Results.WARN, "Only in B", r.optJSONArray("onlyB"),
+                    r.optInt("onlyBN"), false), 8);
+            Results.add(s, Results.section(this, Results.WARN, "Folders only in A",
+                    r.optJSONArray("dirsOnlyA"), r.optInt("dirsOnlyAN"), true), 8);
+            Results.add(s, Results.section(this, Results.WARN, "Folders only in B",
+                    r.optJSONArray("dirsOnlyB"), r.optInt("dirsOnlyBN"), true), 8);
+            Results.add(s, Results.section(this, Results.BAD, "Couldn't read",
+                    r.optJSONArray("unreadable"), r.optInt("unreadableN"), false), 8);
+            if (r.optInt("skipped") > 0) {
+                Results.add(s, Results.note(this, plural(r.optInt("skipped"),
+                        "link or unreadable item was", "links or unreadable items were") + " left out."), 8);
+            }
+            s.button("Done", Ui.FILLED, null).show();
         });
+    }
+
+    private void showFileCompare(File a, File b, JSONObject r, boolean same) {
+        long sa = r.optLong("sizeA"), sb = r.optLong("sizeB");
+        boolean bySize = "size".equals(r.optString("reason"));
+        Sheet s = new Sheet(this, "Compare files");
+        s.content(Results.header(this, same ? Results.GOOD : Results.BAD,
+                same ? "Files are identical" : "Files are different",
+                same ? "Same size and same content"
+                        : bySize ? "The sizes are different" : "Same size, different content")).space(14);
+        Results.add(s, Results.pair(this, a.getName(), Fmt.size(sa), b.getName(), Fmt.size(sb)), 14);
+        if (bySize) {
+            long big = Math.max(Math.max(sa, sb), 1);
+            s.content(Results.bar(this, (double) sa / big, Results.NEUTRAL, "A", Fmt.size(sa))).space(12);
+            s.content(Results.bar(this, (double) sb / big, Results.NEUTRAL, "B", Fmt.size(sb))).space(14);
+        }
+        List<String[]> rows = new ArrayList<>();
+        if (same) {
+            rows.add(new String[]{"Size", Fmt.size(sa)});
+            rows.add(new String[]{"SHA-256", r.optString("hash"), "stack"});
+        } else if (bySize) {
+            rows.add(new String[]{"Difference", Fmt.size(Math.abs(sa - sb))});
+        } else {
+            rows.add(new String[]{"Size", Fmt.size(sa)});
+            rows.add(new String[]{"First difference", "byte " + String.format(java.util.Locale.getDefault(),
+                    "%,d", r.optLong("at"))});
+        }
+        Results.add(s, detailCard(rows), 4);
+        s.button("Done", Ui.FILLED, null).show();
     }
 
     private void infoDialog() {

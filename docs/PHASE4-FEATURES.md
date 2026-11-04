@@ -1,4 +1,4 @@
-# Phase 4 feature report (part 3)
+# Phase 4 feature report (part 4)
 
 Nothing here was compiled or run. Status is what the code is written to do, not what was observed.
 
@@ -16,12 +16,22 @@ Nothing here was compiled or run. Status is what the code is written to do, not 
 | Settings off Python | `SettingsActivity.java` | WAV row and viewer removed; Chaquopy imports and `py()` gone; cache size/clear and tools go through `Engine`. |
 | Engine temp folder | `Engine.java` | The bridge runs with `TMPDIR` set to `cache/engine-tmp`, so scratch copies are inside the app cache (covered by Settings > Cache). |
 
-## Not done in this slice
+## Done in part 4
 
-* **Editing sessions** (`begin`, `close`, `save`, `discard`, `remove`, `transfer`, `add`, `new_text`, `set_file`, `file_for`, `state`): no bridge functions yet, so "Edit" inside an archive reports "unknown engine function". Sessions must live on disk between bridge processes (one process per call), and Save needs a rebuild path because the engine has no append/rewrite API.
-* **`tool` / benchmark / self-test**: no bridge function yet. The Settings rows call `Engine.call("tool", ...)` and will show "unknown engine function: tool" until it exists. The bench and self-test result views in Settings are unchanged.
+| Feature | Where | Behaviour |
+|---|---|---|
+| Editing sessions | `bridge/src/edit.rs` | `begin`, `state`, `close`, `discard`, `add`, `remove`, `transfer`, `set_file`, `new_text`, `file_for`, `save`. Session state lives on disk in `$TMPDIR/kiln-edit-<sid>/` (`session.json`, mode 0600, plus `staged/`); folders older than 24 h are swept at `begin`. `save` rebuilds the archive in scratch, packs it beside the original and renames it into place; locked archives are re-locked with the session password. |
+| Tool: benchmark, self-test | `bridge/src/tool.rs` | `tool("bench", path)` and `tool("selftest", "")` return `{ok, text, view}` in the shapes `SettingsActivity` reads; cancel returns `{ok:false, cancelled:true}`. |
+
+## Not done
+
+Nothing remains from the Phase 4 list. Part 4 has not been compiled; the first CI run is the first compile of `edit.rs` and `tool.rs`.
 
 ## Limits worth knowing
+
+* Random-name sets cannot be edited ("Editing a random-name set isn't supported yet").
+* `save` needs scratch space about the size of the archive, more for a locked one.
+* `session.json` holds the archive password until the session closes.
 
 * Extract, test and preview of a locked archive decrypt the whole archive into the scratch folder first, so they need free space equal to the archive size. Listing does not.
 * Preview of one file from a locked archive therefore costs a full decrypt.

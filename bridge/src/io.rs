@@ -92,6 +92,10 @@ pub struct Meter {
     /// archive spends the first part of the bar on decrypting).
     base: f64,
     span: f64,
+    /// A job made of several stretches (extract, pack, lock) places this whole meter inside part
+    /// of the bar: `outer_base`/`outer_span` (both 0..1).
+    outer_base: f64,
+    outer_span: f64,
 }
 
 impl Meter {
@@ -101,7 +105,15 @@ impl Meter {
             last: None,
             base: 0.0,
             span: 1.0,
+            outer_base: 0.0,
+            outer_span: 1.0,
         }
+    }
+
+    /// Everything this meter sends from now on lies in `span` of the bar starting at `base`.
+    pub fn set_outer(&mut self, base: f64, span: f64) {
+        self.outer_base = base;
+        self.outer_span = span;
     }
 
     /// The next events cover `span` of the bar starting at `base` (both 0..1).
@@ -124,7 +136,8 @@ impl Meter {
         let frac = if total == 0 {
             -1.0
         } else {
-            self.base + self.span * (done as f64 / total as f64).min(1.0)
+            let inner = self.base + self.span * (done as f64 / total as f64).min(1.0);
+            self.outer_base + self.outer_span * inner
         };
         write_line(&json!({
             "progress": { "frac": frac, "done": done, "total": total, "file": file }

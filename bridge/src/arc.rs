@@ -34,7 +34,7 @@ pub(crate) enum Fail {
 }
 
 impl Fail {
-    fn into_json(self) -> Value {
+    pub(crate) fn into_json(self) -> Value {
         match self {
             Fail::Msg(m, done) => text::failed(&m, done),
             Fail::Engine(e) => from_error(&e),
@@ -57,7 +57,7 @@ pub(crate) struct Member {
 }
 
 /// `[{"p": path inside the archive, "dir": bool}, ...]`; empty = everything.
-fn parse_members(json_text: &str) -> Vec<Member> {
+pub(crate) fn parse_members(json_text: &str) -> Vec<Member> {
     let v: Value = serde_json::from_str(json_text).unwrap_or(Value::Null);
     let Value::Array(items) = v else {
         return Vec::new();
@@ -178,6 +178,39 @@ fn open_fail(f: Fail) -> Value {
     }
 }
 
+/// What an editing session needs to know about an archive file.
+pub(crate) struct Listing {
+    /// Files: `(path, size, modified seconds, unix mode)`.
+    pub files: Vec<(String, u64, i64, u32)>,
+    /// Folders recorded in the archive (empty ones matter).
+    pub dirs: Vec<String>,
+    /// The archive is locked.
+    pub encrypted: bool,
+    /// The archive was made with "no compression".
+    pub store: bool,
+}
+
+/// Read the table of contents of the archive file `path` (not a set).
+pub(crate) fn listing(path: &str, password: &str) -> Result<Listing, Fail> {
+    let mut meter = Meter::new();
+    let ready = open_file(path, password, false, &mut meter)?;
+    let a = &ready.archive;
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    for e in a.entries() {
+        match e.kind {
+            EntryKind::File => files.push((e.path.clone(), e.size, e.mtime_secs, e.mode)),
+            EntryKind::Dir => dirs.push(e.path.clone()),
+        }
+    }
+    Ok(Listing {
+        files,
+        dirs,
+        encrypted: ready._scratch.is_some(),
+        store: a.header().profile == kiln::Profile::Store,
+    })
+}
+
 // ---------------------------------------------------------------------------------- extract
 
 pub(crate) struct Done {
@@ -215,6 +248,20 @@ fn do_extract(
     jobs: usize,
 ) -> Result<Done, Fail> {
     let mut meter = Meter::new();
+    do_extract_m(path, password, members, dest, overwrite, jobs, &mut meter)
+}
+
+/// [`do_extract`] reporting progress on the caller's meter (editing sessions place it inside a
+/// longer job).
+pub(crate) fn do_extract_m(
+    path: &str,
+    password: &str,
+    members: &[Member],
+    dest: &str,
+    overwrite: bool,
+    jobs: usize,
+    meter: &mut Meter,
+) -> Result<Done, Fail> {
     if Path::new(path).is_dir() {
         return sets::extract(
             Path::new(path),
@@ -223,10 +270,10 @@ fn do_extract(
             dest,
             overwrite,
             jobs,
-            &mut meter,
+            meter,
         );
     }
-    let ready = open_file(path, password, true, &mut meter)?;
+    let ready = open_file(path, password, true, meter)?;
     let archive = &ready.archive;
     let entries = archive.entries();
 

@@ -14,6 +14,7 @@ mod arc;
 mod args;
 mod browse;
 mod cache;
+mod edit;
 mod fsops;
 mod io;
 mod lock;
@@ -21,6 +22,7 @@ mod packing;
 mod rx;
 mod sets;
 mod text;
+mod tool;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -90,6 +92,29 @@ fn dispatch(name: &str, a: &Args, jobs: usize) -> Value {
             delete_src: a.bool(7),
             jobs,
         }),
+        // Editing sessions (session state lives on disk between calls). The Progress argument
+        // never reaches us, so file_for is (sid, member, cache_dir, readonly) and save is (sid).
+        "begin" => edit::begin(&a.str(0), &a.str(1)),
+        "state" => edit::state(&a.str(0)),
+        "close" => edit::close(&a.str(0)),
+        "discard" => edit::discard(&a.str(0)),
+        "add" => edit::add(&a.str(0), &a.list(1), &a.str(2)),
+        "remove" => edit::remove(&a.str(0), &arc::parse_members(&a.str(1))),
+        "transfer" => edit::transfer(
+            &a.str(0),
+            &arc::parse_members(&a.str(1)),
+            &a.str(2),
+            a.bool(3),
+            &a.str(4),
+            &a.str(5),
+            jobs,
+        ),
+        "set_file" => edit::set_file(&a.str(0), &a.str(1), &a.str(2)),
+        "new_text" => edit::new_text(&a.str(0), &a.str(1)),
+        "file_for" => edit::file_for(&a.str(0), &a.str(1), &a.str(2), a.bool(3), jobs),
+        "save" => edit::save(&a.str(0), jobs),
+        // tool(name, arg): "selftest" or "bench"
+        "tool" => tool::tool(&a.str(0), &a.str(1), jobs),
         other => fail(&format!("unknown engine function: {other}")),
     }
 }

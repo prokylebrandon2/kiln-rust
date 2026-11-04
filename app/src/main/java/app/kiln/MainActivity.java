@@ -524,10 +524,10 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         np.leftMargin = dp(10);
         filterRow.addView(filterNote, np);
-        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams filterLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        fp.topMargin = dp(6);
-        searchRow.addView(filterRow, fp);
+        filterLp.topMargin = dp(6);
+        searchRow.addView(filterRow, filterLp);
         page.addView(searchRow);
 
         View line = new View(this);

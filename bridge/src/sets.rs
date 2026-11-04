@@ -61,7 +61,8 @@ fn plain_name(n: &str) -> bool {
 pub fn read_index(dir: &Path, ring: &mut Ring) -> Result<Vec<Item>, Fail> {
     let ix = index_path(dir);
     let damaged = || Fail::Msg(DAMAGED_INDEX.to_string(), 0);
-    let mut f = File::open(&ix).map_err(|e| Fail::Msg(format!("{}: {}", ix.display(), os_msg(&e)), 0))?;
+    let mut f =
+        File::open(&ix).map_err(|e| Fail::Msg(format!("{}: {}", ix.display(), os_msg(&e)), 0))?;
     let lock = match lock::peek(&mut f).map_err(Fail::Lock)? {
         Some(l) if l.kind() == lock::KIND_INDEX => l,
         _ => return Err(damaged()),
@@ -70,7 +71,10 @@ pub fn read_index(dir: &Path, ring: &mut Ring) -> Result<Vec<Item>, Fail> {
     let mut op = Opened::open(&ix, lock, ring).map_err(Fail::Lock)?;
     let data = op.read_all().map_err(Fail::Lock)?;
     let v: Value = serde_json::from_slice(&data).map_err(|_| damaged())?;
-    let files = v.get("files").and_then(|f| f.as_array()).ok_or_else(damaged)?;
+    let files = v
+        .get("files")
+        .and_then(|f| f.as_array())
+        .ok_or_else(damaged)?;
     let mut items = Vec::with_capacity(files.len());
     for o in files {
         let name = o.get("n").and_then(|x| x.as_str()).ok_or_else(damaged)?;
@@ -133,7 +137,12 @@ fn open_item(dir: &Path, item: &Item, ring: &mut Ring, scratch: &Scratch) -> Res
     })?;
     let lock = match lock::peek(&mut f).map_err(Fail::Lock)? {
         Some(l) if l.kind() == lock::KIND_ARCHIVE => l,
-        _ => return Err(Fail::Msg(format!("{}: not a locked Kiln archive", item.path), 0)),
+        _ => {
+            return Err(Fail::Msg(
+                format!("{}: not a locked Kiln archive", item.path),
+                0,
+            ));
+        }
     };
     drop(f);
     let mut op = Opened::open(&path, lock, ring).map_err(Fail::Lock)?;
@@ -194,7 +203,13 @@ pub fn extract(
     if selected.is_empty() {
         let names: Vec<String> = members
             .iter()
-            .map(|m| if m.dir { format!("{}/*", m.p) } else { m.p.clone() })
+            .map(|m| {
+                if m.dir {
+                    format!("{}/*", m.p)
+                } else {
+                    m.p.clone()
+                }
+            })
             .collect();
         return Err(Fail::Msg(
             format!("no files in the archive match: {}", names.join(", ")),
@@ -217,7 +232,10 @@ pub fn extract(
 
     let dest_existed = root.exists();
     fs::create_dir_all(root).map_err(|e| Fail::Msg(format!("{dest}: {}", os_msg(&e)), 0))?;
-    let stage = root.join(format!(".kiln-stage-{}", lock::random_name().map_err(Fail::Lock)?));
+    let stage = root.join(format!(
+        ".kiln-stage-{}",
+        lock::random_name().map_err(Fail::Lock)?
+    ));
     let stage_s = stage.to_string_lossy().into_owned();
     let scratch = Scratch::new().map_err(Fail::Lock)?;
     let started = Instant::now();
@@ -236,7 +254,8 @@ pub fn extract(
             let mut options = ExtractOptions::new(stage_s.as_str());
             options.overwrite = true;
             options.threads = jobs;
-            let stats = extract_with_progress(&archive, &options, &mut |_, _| {}).map_err(Fail::Engine)?;
+            let stats =
+                extract_with_progress(&archive, &options, &mut |_, _| {}).map_err(Fail::Engine)?;
             let Some(file) = only_file(&stage) else {
                 return Err(Fail::Msg(format!("{}: the archive is empty", it.path), 0));
             };
@@ -266,7 +285,11 @@ pub fn extract(
     match result {
         Ok(()) => {
             meter.tick(1, 1, "", true);
-            Ok(Done { files: placed, bytes, secs: secs(started.elapsed()) })
+            Ok(Done {
+                files: placed,
+                bytes,
+                secs: secs(started.elapsed()),
+            })
         }
         Err(e) => {
             if matches!(&e, Fail::Lock(LockError::Cancelled))
@@ -280,7 +303,12 @@ pub fn extract(
 }
 
 /// `test` for a set: every archive is decrypted (which checks its lock) and verified.
-pub fn test(dir: &Path, password: &str, jobs: usize, meter: &mut Meter) -> Result<(u64, u64, String), Fail> {
+pub fn test(
+    dir: &Path,
+    password: &str,
+    jobs: usize,
+    meter: &mut Meter,
+) -> Result<(u64, u64, String), Fail> {
     need_password(password)?;
     let mut ring = Ring::new(password);
     let items = read_index(dir, &mut ring)?;
@@ -293,7 +321,8 @@ pub fn test(dir: &Path, password: &str, jobs: usize, meter: &mut Meter) -> Resul
             return Err(Fail::Lock(LockError::Cancelled));
         }
         let archive = open_item(dir, it, &mut ring, &scratch)?;
-        let stats = verify_with_progress(&archive, jobs, None, &mut |_, _| {}).map_err(Fail::Engine)?;
+        let stats =
+            verify_with_progress(&archive, jobs, None, &mut |_, _| {}).map_err(Fail::Engine)?;
         files += stats.files;
         bytes += stats.bytes;
         meter.tick(k as u64 + 1, total, &it.path, false);
@@ -313,7 +342,15 @@ pub fn decrypt_in_place(
 ) -> Result<Done, Fail> {
     need_password(password)?;
     let items = read_index(dir, &mut Ring::new(password))?;
-    let done = extract(dir, password, &[], &dir.to_string_lossy(), true, jobs, meter)?;
+    let done = extract(
+        dir,
+        password,
+        &[],
+        &dir.to_string_lossy(),
+        true,
+        jobs,
+        meter,
+    )?;
     for it in &items {
         let _ = fs::remove_file(dir.join(&it.name));
     }

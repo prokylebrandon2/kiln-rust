@@ -109,7 +109,9 @@ pub fn random_name() -> Result<String, LockError> {
 
 fn derive(password: &str, log_n: u8, r: u32, p: u32, salt: &[u8]) -> Result<[u8; 32], LockError> {
     let cant = || {
-        LockError::Setup("this device can't run the key derivation with the archive's settings".to_string())
+        LockError::Setup(
+            "this device can't run the key derivation with the archive's settings".to_string(),
+        )
     };
     let pw: String = password.nfkc().collect();
     let params = scrypt::Params::new(log_n, r, p, 32).map_err(|_| cant())?;
@@ -134,7 +136,13 @@ impl Setup {
             .try_into()
             .map_err(|_| LockError::Io("no random bytes".to_string()))?;
         let key = derive(password, LOG_N, R, P, &salt)?;
-        Ok(Setup { log_n: LOG_N, r: R, p: P, salt, key })
+        Ok(Setup {
+            log_n: LOG_N,
+            r: R,
+            p: P,
+            salt,
+            key,
+        })
     }
 }
 
@@ -146,7 +154,10 @@ pub struct Ring {
 
 impl Ring {
     pub fn new(password: &str) -> Ring {
-        Ring { password: password.to_string(), last: None }
+        Ring {
+            password: password.to_string(),
+            last: None,
+        }
     }
 
     fn key(&mut self, l: &Lock) -> Result<[u8; 32], LockError> {
@@ -300,14 +311,22 @@ impl Opened {
             return Err(damaged("the file is cut short"));
         }
         let plain_len = (n - 1) * chunk + (last_rec - 4 - TAG);
-        let mut o = Opened { f, lock, cipher, chunk, n, plain_len };
+        let mut o = Opened {
+            f,
+            lock,
+            cipher,
+            chunk,
+            n,
+            plain_len,
+        };
         o.chunk(0)?; // the password check
         Ok(o)
     }
 
     fn chunk(&mut self, i: u64) -> Result<Vec<u8>, LockError> {
         let rec = 4 + self.chunk + TAG;
-        self.f.seek(SeekFrom::Start(LOCK_HEADER_LEN as u64 + i * rec))?;
+        self.f
+            .seek(SeekFrom::Start(LOCK_HEADER_LEN as u64 + i * rec))?;
         let cut = |e: std::io::Error| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 damaged("the file is cut short")
@@ -332,10 +351,13 @@ impl Opened {
         let mut aad = self.lock.raw.clone();
         aad.push(u8::from(last));
         let nc = nonce(&self.lock.prefix, i);
-        match self
-            .cipher
-            .decrypt(Nonce::from_slice(&nc), Payload { msg: &ct[..], aad: &aad[..] })
-        {
+        match self.cipher.decrypt(
+            Nonce::from_slice(&nc),
+            Payload {
+                msg: &ct[..],
+                aad: &aad[..],
+            },
+        ) {
             Ok(p) => Ok(p),
             Err(_) if i == 0 => Err(LockError::Wrong),
             Err(_) => Err(damaged("a record failed its check")),
@@ -377,8 +399,16 @@ impl Opened {
         let last = (end - 1) / self.chunk;
         for i in first..=last {
             let p = self.chunk(i)?;
-            let start = if i == first { (a - i * self.chunk) as usize } else { 0 };
-            let stop = if i == last { (end - i * self.chunk) as usize } else { p.len() };
+            let start = if i == first {
+                (a - i * self.chunk) as usize
+            } else {
+                0
+            };
+            let stop = if i == last {
+                (end - i * self.chunk) as usize
+            } else {
+                p.len()
+            };
             out.extend_from_slice(&p[start..stop]);
         }
         Ok(out)
@@ -472,16 +502,28 @@ fn seal_inner(
             return Err(LockError::Cancelled);
         }
         // Only a full chunk can be followed by another one: look ahead to know which is last.
-        let next_n = if cur_n == chunk { fill(src, &mut next)? } else { 0 };
+        let next_n = if cur_n == chunk {
+            fill(src, &mut next)?
+        } else {
+            0
+        };
         let last = next_n == 0;
         if i > u64::from(u32::MAX) {
-            return Err(LockError::Io("this archive is too large to lock".to_string()));
+            return Err(LockError::Io(
+                "this archive is too large to lock".to_string(),
+            ));
         }
         let mut aad = header.clone();
         aad.push(u8::from(last));
         let nc = nonce(&prefix, i);
         let ct = cipher
-            .encrypt(Nonce::from_slice(&nc), Payload { msg: &cur[..cur_n], aad: &aad[..] })
+            .encrypt(
+                Nonce::from_slice(&nc),
+                Payload {
+                    msg: &cur[..cur_n],
+                    aad: &aad[..],
+                },
+            )
             .map_err(|_| LockError::Io("couldn't encrypt".to_string()))?;
         f.write_all(&(ct.len() as u32).to_le_bytes())?;
         f.write_all(&ct)?;

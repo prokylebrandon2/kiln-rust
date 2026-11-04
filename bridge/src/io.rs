@@ -97,7 +97,11 @@ pub struct Meter {
 impl Meter {
     /// A meter that has not sent anything yet (so the first event always goes out).
     pub fn new() -> Self {
-        Self { last: None, base: 0.0, span: 1.0 }
+        Self {
+            last: None,
+            base: 0.0,
+            span: 1.0,
+        }
     }
 
     /// The next events cover `span` of the bar starting at `base` (both 0..1).

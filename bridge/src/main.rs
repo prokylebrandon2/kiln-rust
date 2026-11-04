@@ -61,10 +61,22 @@ fn dispatch(name: &str, a: &Args, jobs: usize) -> Value {
         "open_archive" => arc::open_archive(&a.str(0), &a.str(1)),
         "extract" => arc::extract(&a.str(0), &a.str(1), &a.str(2), &a.str(3), a.bool(4), jobs),
         "test" => arc::test(&a.str(0), &a.str(1), jobs),
-        "preview" => arc::preview(&a.str(0), &a.str(1), &a.str(2), &a.str(3), a.i64(4).max(0) as u64, jobs),
-        "cached_extract" => {
-            arc::cached_extract(&a.str(0), &a.str(1), &a.str(2), &a.str(3), a.i64(4).max(0) as u64, jobs)
-        }
+        "preview" => arc::preview(
+            &a.str(0),
+            &a.str(1),
+            &a.str(2),
+            &a.str(3),
+            a.i64(4).max(0) as u64,
+            jobs,
+        ),
+        "cached_extract" => arc::cached_extract(
+            &a.str(0),
+            &a.str(1),
+            &a.str(2),
+            &a.str(3),
+            a.i64(4).max(0) as u64,
+            jobs,
+        ),
         "decrypt_in_place" => arc::decrypt_in_place(&a.str(0), &a.str(1), jobs),
         // pack(items_json, dest, encrypt, each, store, overwrite, password, delete_src)
         "pack" => packing::pack(&packing::Request {

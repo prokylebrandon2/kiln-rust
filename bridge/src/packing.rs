@@ -128,7 +128,11 @@ fn remove_leftovers(dest: &str) {
 fn options(r: &Request, threads: usize) -> PackOptions {
     // Adaptive = zstd with content classification: already-compressed files are stored, not
     // recompressed. "No compression" is the Store profile.
-    let profile = if r.store { Profile::Store } else { Profile::Adaptive };
+    let profile = if r.store {
+        Profile::Store
+    } else {
+        Profile::Adaptive
+    };
     let mut o = PackOptions::from_profile(profile);
     o.threads = threads;
     o.overwrite = r.overwrite || r.encrypt; // for a locked archive this is only the temporary plain one
@@ -143,7 +147,11 @@ fn warnings(skipped: &[Skipped]) -> Vec<String> {
 }
 
 fn percent(raw: u64, packed: u64) -> f64 {
-    if raw > 0 { 100.0 * packed as f64 / raw as f64 } else { 100.0 }
+    if raw > 0 {
+        100.0 * packed as f64 / raw as f64
+    } else {
+        100.0
+    }
 }
 
 fn absolute(p: &Path) -> PathBuf {
@@ -157,7 +165,8 @@ fn pack_one(r: &Request) -> Result<Packed, Value> {
     // Only when the originals are to be deleted do we list them first, to know exactly which
     // files end up inside the archive. Otherwise the engine's own walk is the only one.
     let listed: Option<Vec<PathBuf>> = if r.delete_src {
-        let c = walk::collect(&inputs, &[PathBuf::from(&r.dest)]).map_err(|e| text::from_error(&e))?;
+        let c =
+            walk::collect(&inputs, &[PathBuf::from(&r.dest)]).map_err(|e| text::from_error(&e))?;
         Some(
             c.entries
                 .iter()
@@ -212,9 +221,8 @@ fn pack_one(r: &Request) -> Result<Packed, Value> {
             &mut |d, t| meter.tick(d, t, "", false),
         )
         .map_err(lock_fail)?;
-        fs::rename(&lock_tmp, &r.dest).map_err(|e| {
-            text::failed(&format!("{}: {}", r.dest, crate::io::os_msg(&e)), 0)
-        })?;
+        fs::rename(&lock_tmp, &r.dest)
+            .map_err(|e| text::failed(&format!("{}: {}", r.dest, crate::io::os_msg(&e)), 0))?;
     }
     drop(temps);
     meter.tick(1, 1, "", true);
@@ -361,7 +369,9 @@ fn pack_each(r: &Request) -> Result<Packed, Value> {
                                 break;
                             }
                             let k = next.fetch_add(1, Relaxed);
-                            let Some((e, target)) = todo.get(k) else { break };
+                            let Some((e, target)) = todo.get(k) else {
+                                break;
+                            };
                             let res = make_archive(e, target, &opts, setup.as_ref(), |delta| {
                                 bytes.fetch_add(delta, Relaxed);
                             });
@@ -488,16 +498,29 @@ fn make_archive(
     }
     let mut last = 0u64;
     // With a lock the engine writes a plain archive that is then locked into `target`.
-    let plain = if sealing.is_some() { sibling(target, ".plain.tmp") } else { target.to_path_buf() };
+    let plain = if sealing.is_some() {
+        sibling(target, ".plain.tmp")
+    } else {
+        target.to_path_buf()
+    };
     let _cleanup = Temps(if sealing.is_some() {
-        vec![plain.clone(), sibling(&plain, ".tmp"), sibling(target, ".tmp")]
+        vec![
+            plain.clone(),
+            sibling(&plain, ".tmp"),
+            sibling(target, ".tmp"),
+        ]
     } else {
         Vec::new()
     });
-    let stats = pack_with_progress(&plain, std::slice::from_ref(&e.fs_path), opts, &mut |done, _| {
-        bytes(done.saturating_sub(last));
-        last = done;
-    })
+    let stats = pack_with_progress(
+        &plain,
+        std::slice::from_ref(&e.fs_path),
+        opts,
+        &mut |done, _| {
+            bytes(done.saturating_sub(last));
+            last = done;
+        },
+    )
     .map_err(|er| {
         if kiln::cancel::is_cancelled(&er) {
             Stop::Cancelled
@@ -509,10 +532,12 @@ fn make_archive(
         return Ok(stats.archive_bytes);
     };
     let tmp = sibling(target, ".tmp");
-    let size = lock::seal(&plain, &tmp, setup, lock::KIND_ARCHIVE, &mut |_, _| {}).map_err(|er| match er {
-        LockError::Cancelled => Stop::Cancelled,
-        other => fail(other.message()),
-    })?;
+    let size = lock::seal(&plain, &tmp, setup, lock::KIND_ARCHIVE, &mut |_, _| {}).map_err(
+        |er| match er {
+            LockError::Cancelled => Stop::Cancelled,
+            other => fail(other.message()),
+        },
+    )?;
     fs::rename(&tmp, target)
         .map_err(|er| fail(format!("{}: {}", target.display(), crate::io::os_msg(&er))))?;
     Ok(size)

@@ -101,7 +101,10 @@ fn open_file(path: &str, password: &str, full: bool, meter: &mut Meter) -> Resul
     drop(f);
     let Some(found) = found else {
         let archive = Archive::open(p).map_err(|e| Fail::Msg(open_msg(&e), 0))?;
-        return Ok(Ready { archive, _scratch: None });
+        return Ok(Ready {
+            archive,
+            _scratch: None,
+        });
     };
     if found.kind() != lock::KIND_ARCHIVE {
         return Err(Fail::Msg("this file isn't a Kiln archive".to_string(), 0));
@@ -123,7 +126,10 @@ fn open_file(path: &str, password: &str, full: bool, meter: &mut Meter) -> Resul
         opened.reveal_index(&plain).map_err(Fail::Lock)?;
     }
     let archive = Archive::open(&plain).map_err(|e| Fail::Msg(open_msg(&e), 0))?;
-    Ok(Ready { archive, _scratch: Some(scratch) })
+    Ok(Ready {
+        archive,
+        _scratch: Some(scratch),
+    })
 }
 
 // ---------------------------------------------------------------------------------- open
@@ -210,7 +216,15 @@ fn do_extract(
 ) -> Result<Done, Fail> {
     let mut meter = Meter::new();
     if Path::new(path).is_dir() {
-        return sets::extract(Path::new(path), password, members, dest, overwrite, jobs, &mut meter);
+        return sets::extract(
+            Path::new(path),
+            password,
+            members,
+            dest,
+            overwrite,
+            jobs,
+            &mut meter,
+        );
     }
     let ready = open_file(path, password, true, &mut meter)?;
     let archive = &ready.archive;
@@ -240,7 +254,13 @@ fn do_extract(
         if selected.is_empty() {
             let names: Vec<String> = members
                 .iter()
-                .map(|m| if m.dir { format!("{}/*", m.p) } else { m.p.clone() })
+                .map(|m| {
+                    if m.dir {
+                        format!("{}/*", m.p)
+                    } else {
+                        m.p.clone()
+                    }
+                })
                 .collect();
             return Err(Fail::Msg(
                 format!("no files in the archive match: {}", names.join(", ")),
@@ -431,7 +451,9 @@ pub fn cached_extract(
     let part = Path::new(cache_dir).join(format!("{key}.part"));
     let target = match safe_join(&final_dir, member) {
         Ok(t) => t,
-        Err(_) => return json!({ "ok": false, "message": format!("refusing unsafe path: {member}") }),
+        Err(_) => {
+            return json!({ "ok": false, "message": format!("refusing unsafe path: {member}") });
+        }
     };
     if target.is_file() {
         if let Ok(f) = fs::File::open(&final_dir) {
@@ -444,7 +466,10 @@ pub fn cached_extract(
     cache::trim(cache_dir, None, &key); // make room first (also clears old unfinished copies)
 
     let part_s = part.to_string_lossy().into_owned();
-    let one = [Member { p: member.to_string(), dir: false }];
+    let one = [Member {
+        p: member.to_string(),
+        dir: false,
+    }];
     let result = match do_extract(path, password, &one, &part_s, true, jobs) {
         Ok(d) => match safe_join(&part, member) {
             Ok(p) if p.is_file() => match fs::rename(&part, &final_dir) {
@@ -465,9 +490,15 @@ pub fn cached_extract(
             _ => json!({ "ok": false, "message": "the file wasn't found in the archive" }),
         },
         Err(Fail::Engine(e)) if storage_full(&e) => {
-            let need = if size > 0 { format!(" {}", fmt_size(size)) } else { String::new() };
+            let need = if size > 0 {
+                format!(" {}", fmt_size(size))
+            } else {
+                String::new()
+            };
             text::failed(
-                &format!("not enough free storage: this file needs{need} and there isn't room for it"),
+                &format!(
+                    "not enough free storage: this file needs{need} and there isn't room for it"
+                ),
                 0,
             )
         }

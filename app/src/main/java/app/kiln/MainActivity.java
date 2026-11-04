@@ -106,6 +106,7 @@ public class MainActivity extends Activity {
     static final class Ent { String p, k = ""; long s, m; }
     static final class Row {
         String key, title, sub, right, ext = "", path;
+        String dirPath;                      // a folder row's own full path (fixed when the row is made)
         String where;                        // folder of a search hit, shown on its own line (null = none)
         int icon;
         boolean dir, folder, up;
@@ -524,6 +525,8 @@ public class MainActivity extends Activity {
             @Override
             public void onScrollStateChanged(AbsListView v, int state) {
                 if (state == SCROLL_STATE_TOUCH_SCROLL && searching) hideKeyboard();
+                scrollState = state;
+                if (state != SCROLL_STATE_IDLE) settleRows();   // scrolling ends the slide-in at once
             }
 
             @Override
@@ -722,8 +725,8 @@ public class MainActivity extends Activity {
                 int tint = r.folder || r.dir || r.up ? accent
                         : r.item != null && !r.item.kind.equals("file") ? Ui.text2(getContext())
                         : Icons.tintFor(getContext(), r.title);
-                if (r.item != null && "dir".equals(r.item.kind) && arc == null && cwd != null) {
-                    int picked = Defaults.folderColor(getContext(), new File(cwd, r.item.name).getPath());
+                if (r.item != null && "dir".equals(r.item.kind) && r.dirPath != null) {
+                    int picked = Defaults.folderColor(getContext(), r.dirPath);
                     if (picked != 0) tint = picked;               // a colour chosen for this folder
                 }
                 Thumbs.showIcon(icon, r.icon, tint);
@@ -777,6 +780,8 @@ public class MainActivity extends Activity {
      * (selection, thumbnails, a rescan) can replay it. Call after the data has changed.
      */
     /** Ends the rows' slide-in at once: every visible row fully shown and in place. */
+    private int scrollState = AbsListView.OnScrollListener.SCROLL_STATE_IDLE;
+
     private void settleRows() {
         for (int k = 0; k < list.getChildCount(); k++) {
             View c = list.getChildAt(k);
@@ -795,6 +800,7 @@ public class MainActivity extends Activity {
             public boolean onPreDraw() {
                 android.view.ViewTreeObserver o = list.getViewTreeObserver();
                 if (o.isAlive()) o.removeOnPreDrawListener(this);
+                if (scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) return true;  // being scrolled: no slide-in
                 int n = list.getChildCount();
                 for (int k = 0; k < n; k++) {
                     View c = list.getChildAt(k);
@@ -2642,6 +2648,7 @@ public class MainActivity extends Activity {
                 case "dir":
                     row.folder = true;
                     row.size = Math.max(it.count, 0);
+                    row.dirPath = new File(cwd, it.name).getPath();
                     row.icon = dirIcon(new File(cwd, it.name));
                     row.sub = when;
                     row.right = it.count < 0 ? "" : plural(it.count, "item", "items");

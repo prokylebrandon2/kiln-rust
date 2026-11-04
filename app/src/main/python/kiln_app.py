@@ -649,6 +649,8 @@ def pack(items_json, dest, encrypt, each, store, overwrite, password, delete_src
     res = _rust("pack", {"items": items, "dest": dest, "encrypt": bool(encrypt), "store": bool(store),
                          "overwrite": bool(overwrite), "password": password or "", "each": bool(each),
                          "jobs": bridge.JOBS if bridge.JOBS > 1 else 0}, progress)
+    if res is not None and store and not encrypt and "needs -e" in res:
+        res = None      # an older Rust engine build refuses plain store: Python does it instead
     if res is not None:
         out = json.loads(res)
         packed = out.pop("packed", None)

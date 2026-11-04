@@ -438,9 +438,6 @@ pub fn pack_archive(dest: &str, files: &[PackFile], opts: &PackOpts, progress: O
 }
 
 fn pack_to(tmp: &str, files: &[PackFile], opts: &PackOpts, progress: Option<Progress>) -> Result<Table> {
-    if opts.store && opts.password.is_none() {
-        return Err(KilnError("-s/--store is the encryption-only level and needs -e".to_string()));
-    }
     for f in files {
         if f.filt != 0 && f.filt != BCJ_X86 && f.filt != BCJ_ARM64 && f.filt != 120 && crate::wav::wav_spec(f.filt).is_none() {
             return Err(KilnError("a filter the Rust packer does not support".to_string()));

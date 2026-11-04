@@ -103,7 +103,10 @@ impl Ent {
     fn from_json(v: &Value) -> Option<Ent> {
         Some(Ent {
             rel: v.get("rel")?.as_str()?.to_string(),
-            orig: v.get("orig").and_then(|x| x.as_str()).map(|s| s.to_string()),
+            orig: v
+                .get("orig")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
             staged: v
                 .get("staged")
                 .and_then(|x| x.as_str())
@@ -881,7 +884,9 @@ pub fn file_for(sid: &str, member: &str, cache_dir: &str, readonly: bool, jobs: 
                 let dir = Path::new(cache_dir).join(&key);
                 let out = dir.join(&name);
                 if out.is_file() {
-                    return Ok(json!({ "ok": true, "file": out.to_string_lossy(), "cached": true }));
+                    return Ok(
+                        json!({ "ok": true, "file": out.to_string_lossy(), "cached": true }),
+                    );
                 }
                 fs::create_dir_all(&dir).map_err(ioe)?;
                 if let Err(v) = link_or_copy(&staged, &out, &mut meter, &name) {
@@ -919,7 +924,8 @@ pub fn file_for(sid: &str, member: &str, cache_dir: &str, readonly: bool, jobs: 
         fs::create_dir_all(&x).map_err(ioe)?;
         let finish = (|| -> R {
             extract_origs(&s, std::slice::from_ref(&orig), &x, jobs, &mut meter)?;
-            let got = safe_join(&x, &orig).map_err(|_| bad("the file wasn't found in the archive"))?;
+            let got =
+                safe_join(&x, &orig).map_err(|_| bad("the file wasn't found in the archive"))?;
             let out = dir.join(&name);
             fs::rename(&got, &out).map_err(ioe)?;
             Ok(json!({ "ok": true, "file": out.to_string_lossy() }))
@@ -1013,7 +1019,9 @@ pub fn save(sid: &str, jobs: usize) -> Value {
                     let src = safe_join(&orig_dir, o)
                         .map_err(|_| bad(&format!("refusing unsafe path: {o}")))?;
                     fs::rename(&src, &dst).map_err(|_| {
-                        bad(&format!("{o}: this file couldn't be read out of the archive"))
+                        bad(&format!(
+                            "{o}: this file couldn't be read out of the archive"
+                        ))
                     })?;
                 }
                 (None, None) => return Err(bad(&format!("{}: nothing to save", e.rel))),
@@ -1021,8 +1029,7 @@ pub fn save(sid: &str, jobs: usize) -> Value {
             meter.tick(n as u64 + 1, total, "", false);
         }
         for d in &s.dirs {
-            let p = safe_join(&tree, d)
-                .map_err(|_| bad(&format!("refusing unsafe path: {d}")))?;
+            let p = safe_join(&tree, d).map_err(|_| bad(&format!("refusing unsafe path: {d}")))?;
             fs::create_dir_all(p).map_err(ioe)?;
         }
 
@@ -1065,9 +1072,13 @@ pub fn save(sid: &str, jobs: usize) -> Value {
         if s.encrypted {
             meter.set_outer(0.85, 0.15);
             let setup = lock::Setup::new(&s.password).map_err(lockerr)?;
-            archive_bytes = lock::seal(&packed_to, &lock_tmp, &setup, lock::KIND_ARCHIVE, &mut |d, t| {
-                meter.tick(d, t, "", false)
-            })
+            archive_bytes = lock::seal(
+                &packed_to,
+                &lock_tmp,
+                &setup,
+                lock::KIND_ARCHIVE,
+                &mut |d, t| meter.tick(d, t, "", false),
+            )
             .map_err(lockerr)?;
         }
         fs::rename(&lock_tmp, &s.path).map_err(|e| bad(&format!("{}: {}", s.path, os_msg(&e))))?;

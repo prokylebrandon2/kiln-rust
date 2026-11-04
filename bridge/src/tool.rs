@@ -358,9 +358,15 @@ fn check_names(ctx: &Ctx) -> Result<(), String> {
     let root = d.join("in/src");
     let long = format!("{}.txt", "x".repeat(120));
     let files = vec![
-        (format!("src/\u{fc}n\u{ef}-\u{6587}\u{4ef6}-\u{1f642}.txt"), data(7, 5_000, false)),
+        (
+            format!("src/\u{fc}n\u{ef}-\u{6587}\u{4ef6}-\u{1f642}.txt"),
+            data(7, 5_000, false),
+        ),
         (format!("src/{long}"), data(8, 2_000, false)),
-        ("src/with space/and (parens).txt".to_string(), data(9, 1_000, false)),
+        (
+            "src/with space/and (parens).txt".to_string(),
+            data(9, 1_000, false),
+        ),
     ];
     for (rel, bytes) in &files {
         put(&d.join("in").join(rel), bytes)?;
@@ -537,10 +543,7 @@ fn run_edit(archive: &Path, password: &str, d: &Path, jobs: usize) -> Result<(),
         .to_string();
     let result = (|| -> Result<(), String> {
         let m = |json_text: String| arc::parse_members(&json_text);
-        must_ok(
-            &edit::remove(&sid, &m(member("src/top.dat"))),
-            "remove",
-        )?;
+        must_ok(&edit::remove(&sid, &m(member("src/top.dat"))), "remove")?;
         must_ok(&edit::new_text(&sid, "src/new.txt"), "new file")?;
         let src = d.join("hello.txt");
         put(&src, b"hello")?;
@@ -568,7 +571,13 @@ fn run_edit(archive: &Path, password: &str, d: &Path, jobs: usize) -> Result<(),
         if !flag(&st, "dirty") {
             return Err("the session does not know it has changes".to_string());
         }
-        let ff = edit::file_for(&sid, "src/new.txt", &d.join("cache").to_string_lossy(), true, jobs);
+        let ff = edit::file_for(
+            &sid,
+            "src/new.txt",
+            &d.join("cache").to_string_lossy(),
+            true,
+            jobs,
+        );
         must_ok(&ff, "file_for")?;
         must_ok(&edit::save(&sid, jobs), "save")
     })();
@@ -617,7 +626,10 @@ fn check_edit_locked(ctx: &Ctx) -> Result<(), String> {
     let locked = d.join("locked.kiln");
     lock_it(&plain, &locked)?;
     run_edit(&locked, PW, &d, ctx.jobs)?;
-    if !flag(&arc::open_archive(&locked.to_string_lossy(), ""), "need_password") {
+    if !flag(
+        &arc::open_archive(&locked.to_string_lossy(), ""),
+        "need_password",
+    ) {
         return Err("the archive is no longer locked after saving".to_string());
     }
     Ok(())

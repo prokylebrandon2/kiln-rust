@@ -225,6 +225,7 @@ pub fn pack_with_progress(
             stats.precheck_skipped += u64::from(skipped);
             done_bytes += u64::from(block.header.raw_len);
             progress(done_bytes, total_bytes);
+            crate::cancel::check()?; // UI-HOOK
             Ok(())
         },
     )

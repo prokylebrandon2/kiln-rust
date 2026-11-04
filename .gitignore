@@ -4,3 +4,12 @@
 *.kr
 /corpus/
 __pycache__/
+
+# Android app
+build/
+.gradle/
+local.properties
+app/build/
+app/src/main/jniLibs/
+*.iml
+.idea/

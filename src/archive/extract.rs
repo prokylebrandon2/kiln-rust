@@ -151,8 +151,18 @@ pub fn verify_with(
     threads: usize,
     memory_limit: Option<u64>,
 ) -> Result<ExtractStats> {
+    verify_with_progress(archive, threads, memory_limit, &mut |_, _| {})
+}
+
+/// [`verify_with`], reporting `(bytes_done, bytes_total)` of decoded chunk data as it goes.
+pub fn verify_with_progress(
+    archive: &Archive,
+    threads: usize,
+    memory_limit: Option<u64>,
+    progress: Progress<'_>,
+) -> Result<ExtractStats> {
     let all: Vec<usize> = (0..archive.entries().len()).collect();
-    run(archive, &all, None, threads, memory_limit, &mut |_, _| {})
+    run(archive, &all, None, threads, memory_limit, progress)
 }
 
 /// Resolve user-supplied member names to entry indices (ascending = stream order).
@@ -686,6 +696,7 @@ fn run(
                         demux.push(block.index, &block.data)?;
                         done_bytes += block.data.len() as u64;
                         progress(done_bytes, total_bytes);
+                        crate::cancel::check()?; // UI-HOOK: shared by extract, verify and test
                         Ok(())
                     },
                 )

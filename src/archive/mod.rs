@@ -9,6 +9,7 @@ use crate::parallel::{Config, MemoryModel};
 
 pub use extract::{
     ExtractOptions, ExtractStats, extract, extract_with_progress, verify, verify_with,
+    verify_with_progress,
 };
 pub use reader::{Archive, BlockStats, ClassTotals};
 pub use writer::{PackOptions, PackStats, pack, pack_with_progress};

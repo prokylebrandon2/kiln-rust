@@ -7,6 +7,9 @@ description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phas
 readme = "README.md"
 publish = false
 
+[workspace]
+members = ["bridge"]
+
 [lib]
 name = "kiln"
 path = "src/lib.rs"

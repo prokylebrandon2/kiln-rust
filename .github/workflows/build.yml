@@ -1,0 +1,64 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      # kiln-bridge is the Rust engine's process bridge. It goes into jniLibs as libkiln_bridge.so:
+      # the app launches it from nativeLibraryDir (useLegacyPackaging keeps it a real file).
+      - name: Build kiln-bridge with the NDK
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
+        run: |
+          cargo install cargo-ndk
+          cargo ndk -t arm64-v8a -t x86_64 --platform 30 build --release -p kiln-bridge
+          for pair in arm64-v8a:aarch64-linux-android x86_64:x86_64-linux-android; do
+            abi="${pair%%:*}"; triple="${pair##*:}"
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "target/$triple/release/kiln-bridge" "app/src/main/jniLibs/$abi/libkiln_bridge.so"
+          done
+          ls -l app/src/main/jniLibs/*/
+
+      - name: Build the APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Check that both engine binaries are in the APK
+        run: |
+          apk="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          echo "APK: $apk"
+          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/libkiln_bridge\.so'
+          test "$(unzip -l "$apk" | grep -c 'libkiln_bridge\.so')" -eq 2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      # Cargo.lock is not committed with the new bridge dependencies: hand back the one CI resolved.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock

@@ -28,6 +28,7 @@
 
 pub mod archive;
 pub mod bench;
+pub mod cancel;
 pub mod classify;
 pub mod codec;
 pub mod error;
@@ -43,6 +44,7 @@ pub mod walk;
 pub use archive::{
     Archive, BlockStats, ClassTotals, ExtractOptions, ExtractStats, PackOptions, PackStats,
     extract, extract_with_progress, pack, pack_with_progress, verify, verify_with,
+    verify_with_progress,
 };
 pub use error::{Error, Result};
 pub use profile::Profile;

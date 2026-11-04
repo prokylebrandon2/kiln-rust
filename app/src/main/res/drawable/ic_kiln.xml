@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp" android:height="28dp" android:viewportWidth="56" android:viewportHeight="56">
+    <!-- the kiln mark: arched furnace, glowing mouth, brick base -->
+    <group android:translateX="-26" android:translateY="-24">
+        <path android:fillColor="#FFD9B99B" android:pathData="M34,78 L34,52 C34,38 43,30 54,30 C65,30 74,38 74,52 L74,78 Z" />
+        <path android:fillColor="#FFE8590C" android:pathData="M44,78 L44,58 C44,52 48.5,48 54,48 C59.5,48 64,52 64,58 L64,78 Z" />
+        <path android:fillColor="#FFFFA94D" android:pathData="M49,78 L49,62 C49,59 51.2,57 54,57 C56.8,57 59,59 59,62 L59,78 Z" />
+        <path android:fillColor="#FF8A5A44" android:pathData="M28,78 L80,78 L80,83 L28,83 Z" />
+    </group>
+</vector>

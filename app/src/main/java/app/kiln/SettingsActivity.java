@@ -1,0 +1,814 @@
+package app.kiln;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
+import android.widget.Toast;
+
+
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.content.res.ColorStateList;
+import android.text.TextUtils;
+import android.widget.CompoundButton;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.Switch;
+import android.widget.TextView;
+
+import java.util.Map;
+
+/** Settings: a few switches and the list of "always open with" choices. */
+public class SettingsActivity extends Activity {
+    private LinearLayout content;
+    private long cacheBytes = -1;                  // size of the preview cache (-1 = not known yet)
+    private interface Picked { void got(File f, String name); }
+    private Picked picked;
+    private static final int PICK = 71;
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        Priv.init(this);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(Ui.bg(this));
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
+        bar.addView(Ui.iconButton(this, R.drawable.ic_up, v -> finish()),
+                new LinearLayout.LayoutParams(Ui.dp(this, 48), Ui.dp(this, 48)));
+        TextView t = Ui.label(this, "Settings", 19, true, false);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tp.leftMargin = Ui.dp(this, 8);
+        bar.addView(t, tp);
+        page.addView(bar);
+        View line = new View(this);
+        line.setBackgroundColor(Ui.line(this));
+        page.addView(line, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 1)));
+
+        ScrollView sv = new ScrollView(this);
+        content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 32));
+        sv.addView(content);
+        page.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(page);
+        render();
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), Ui.dp(this, 8));
+        c.setBackground(Ui.shape(this, Ui.surface(this), Ui.line(this), 16));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = Ui.dp(this, 16);
+        content.addView(c, lp);
+        return c;
+    }
+
+    private void heading(String s) {
+        TextView h = Ui.label(this, s, 13, true, true);
+        h.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), 0, Ui.dp(this, 8));
+        content.addView(h);
+    }
+
+    private void toggle(LinearLayout parent, String title, String detail, boolean on,
+                        CompoundButton.OnCheckedChangeListener l) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, title, 16, false, false));
+        if (detail != null) col.addView(Ui.label(this, detail, 12, false, true));
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Switch sw = new Switch(this);
+        sw.setChecked(on);
+        sw.setOnCheckedChangeListener(l);
+        row.addView(sw);
+        parent.addView(row);
+    }
+
+    /** A row that shows the current choice and opens a modal with radio buttons when tapped. */
+    private void choiceRow(LinearLayout parent, String title, String value, String detail, Runnable open) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        row.setBackground(Ui.pressable(this, 0, 0, 10));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, title, 16, false, false));
+        if (detail != null) col.addView(Ui.label(this, detail, 12, false, true));
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView v = Ui.label(this, value, 14, true, false);
+        v.setTextColor(Ui.accent(this));
+        v.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        row.addView(v);
+        row.setOnClickListener(x -> open.run());
+        parent.addView(row);
+    }
+
+    private void render() {
+        content.removeAllViews();
+        heading("FILE LIST");
+        LinearLayout a = card();
+        toggle(a, "Show \"..\" row", "Tap it at the top of a list to go up a folder",
+                Defaults.upRow(this), (b, on) -> Defaults.setUpRow(this, on));
+        toggle(a, "Show previews", "Pictures, album art and video frames as icons",
+                Defaults.previews(this), (b, on) -> Defaults.setPreviews(this, on));
+
+        heading("ANIMATIONS");
+        LinearLayout an = card();
+        choiceRow(an, "Animation speed", Defaults.ANIM_NAMES[Defaults.animLevel(this)],
+                "Off also turns off the slide between screens.", () -> {
+                    Sheet sh = new Sheet(this, "Animation speed");
+                    String[] det = {"No animations", null, "Default", null};
+                    for (int i = 0; i < Defaults.ANIM_NAMES.length; i++) {
+                        final int lv = i;
+                        sh.radio(Defaults.ANIM_NAMES[i], det[i], i == Defaults.animLevel(this), () -> {
+                            Defaults.setAnimLevel(this, lv);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
+        heading("SEARCH");
+        LinearLayout sc = card();
+        toggle(sc, "Search subfolders", "Search inside folders below the current one, not just the list",
+                Defaults.deepSearch(this), (b, on) -> Defaults.setDeepSearch(this, on));
+        choiceRow(sc, "Path shown in results", Defaults.PATH_NAMES[Defaults.searchPath(this)],
+                "Relative is from the folder you searched in. Absolute starts at /", () -> {
+                    Sheet sh = new Sheet(this, "Path shown in results");
+                    String[] det = {"e.g. Docs/Notes", "e.g. /storage/emulated/0/Docs/Notes"};
+                    for (int i = 0; i < Defaults.PATH_NAMES.length; i++) {
+                        final int v = i;
+                        sh.radio(Defaults.PATH_NAMES[i], det[i], i == Defaults.searchPath(this), () -> {
+                            Defaults.setSearchPath(this, v);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
+        heading("DELETING");
+        LinearLayout dl = card();
+        choiceRow(dl, "When deleting", Defaults.DELETE_NAMES[Defaults.deleteMode(this)],
+                "Deleted items kept in the recycle bin can be restored. Open it from the \u22ee menu on the file list.", () -> {
+                    Sheet sh = new Sheet(this, "When deleting");
+                    String[] det = {"Choose each time", "Keep deleted items so they can be restored", "Delete at once, can't be undone"};
+                    for (int i = 0; i < Defaults.DELETE_NAMES.length; i++) {
+                        final int v = i;
+                        sh.radio(Defaults.DELETE_NAMES[i], det[i], i == Defaults.deleteMode(this), () -> {
+                            Defaults.setDeleteMode(this, v);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
+        heading("PACKING");
+        LinearLayout pk = card();
+        toggle(pk, "Delete source files after packing",
+                "Removes the original files once they are safely in the archive. Pack still shows "
+                        + "a tick box each time.",
+                Defaults.deleteAfterPack(this), (b, on) -> Defaults.setDeleteAfterPack(this, on));
+
+        heading("TOOLS");
+        LinearLayout tl = card();
+        choiceRow(tl, "Self-test", "Run", "Checks packing, extracting and encryption on this phone.",
+                () -> runTool("selftest", null, "Self-test", ""));
+        choiceRow(tl, "Benchmark a file", "Choose...", "Compares Kiln with zlib, bz2 and lzma on the first 8 MB.",
+                () -> pickFile((f, n) -> runTool("bench", f.getPath(), "Benchmark", n)));
+
+        heading("ACCESS");
+        LinearLayout ac = card();
+        final String[] modeNames = {"Off", "Root", "Shizuku"};
+        choiceRow(ac, "Protected folders", modeNames[Defaults.privMode(this)],
+                "Open \"/\", other apps' data and Android/data using root or Shizuku.", this::accessSheet);
+        if (Defaults.privMode(this) != Priv.OFF) {
+            TextView st = Ui.label(this, "Status: " + Priv.status(), 13, false, true);
+            st.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
+            ac.addView(st);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            bp.bottomMargin = Ui.dp(this, 6);
+            if (Defaults.privMode(this) == Priv.ROOT) {
+                toggle(ac, "Allow changes (dangerous)",
+                        "Delete, move, rename, create and edit in protected folders. A mistake here can "
+                                + "break apps or stop the phone from starting.",
+                        Defaults.privUnsafe(this), (b, on) -> {
+                            if (!on) {
+                                Defaults.setPrivUnsafe(this, false);
+                                return;
+                            }
+                            b.setChecked(false);                       // only turned on if they confirm
+                            new Sheet(this, "Allow changes?")
+                                    .text("With this on, Kiln can delete, move and overwrite system and app files "
+                                            + "as root. Deleting the wrong file can brick your phone, and there is "
+                                            + "no undo or recycle bin. Only continue if you know what you are doing.")
+                                    .button("Cancel", Ui.TEXT, null)
+                                    .button("I understand, turn on", Ui.DANGER, () -> {
+                                        Defaults.setPrivUnsafe(this, true);
+                                        render();
+                                        return true;
+                                    }).show();
+                        });
+            } else {
+                TextView ro = Ui.label(this, "Protected folders are read-only with Shizuku: you can browse, "
+                        + "open and copy files out, but not change them.", 12, false, true);
+                ro.setPadding(0, 0, 0, Ui.dp(this, 8));
+                ac.addView(ro);
+            }
+            ac.addView(Ui.button(this, Defaults.privMode(this) == Priv.ROOT ? "Check root access"
+                    : "Check / grant Shizuku", Ui.OUTLINE, v -> checkAccess()), bp);
+        }
+
+        heading("ADVANCED");
+        LinearLayout ad = card();
+        choiceRow(ad, "Parallel jobs", Defaults.jobsLabel(Defaults.jobs(this)),
+                "Threads used when packing, extracting and checking archives. Automatic uses every core "
+                        + "of this device; a smaller number leaves room for other apps and saves battery.",
+                () -> {
+                    Sheet sh = new Sheet(this, "Parallel jobs");
+                    int[] opts = {0, 1, 2, 4, 8};
+                    for (final int o : opts) {
+                        sh.radio(Defaults.jobsLabel(o), o == 0 ? "Default" : o == 1 ? "One at a time" : "Fixed",
+                                o == Defaults.jobs(this), () -> {
+                            Defaults.setJobs(this, o);
+                            Engine.setJobs(o);
+                            render();
+                        });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
+
+        heading("STORAGE");
+        LinearLayout stc = card();
+        choiceRow(stc, "Cache", cacheBytes < 0 ? "..." : Fmt.size(cacheBytes),
+                "Everything Kiln keeps temporarily: files opened from archives (so they open at once next time), "
+                        + "scratch copies and edit copies. Previews are trimmed automatically above 1 GB.", () ->
+                        new Sheet(this, "Clear the cache?")
+                                .text("Files you opened from archives will be extracted again the next time.")
+                                .button("Cancel", Ui.TEXT, null)
+                                .button("Clear", Ui.FILLED, () -> {
+                                    new Thread(() -> {
+                                        for (java.io.File d : cacheDirs()) {
+                                            engine("clear_cache", d.getPath());
+                                        }
+                                        loadCacheSize();
+                                    }).start();
+                                    return true;
+                                }).show());
+
+        heading("OPEN FILES WITH");
+        LinearLayout d = card();
+        Map<String, String> defs = Defaults.all(this);
+        if (defs.isEmpty()) {
+            TextView none = Ui.label(this, "No defaults yet. Choose \"Open with...\" on a file and "
+                    + "tick \"Always open .ext files with this app\".", 14, false, true);
+            none.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+            d.addView(none);
+        } else {
+            for (final Map.Entry<String, String> en : defs.entrySet()) {
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
+                LinearLayout col = new LinearLayout(this);
+                col.setOrientation(LinearLayout.VERTICAL);
+                col.addView(Ui.label(this, "." + en.getKey(), 16, true, false));
+                col.addView(Ui.label(this, Defaults.labelOf(en.getValue()), 13, false, true));
+                row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                row.addView(Ui.button(this, "Reset", Ui.TEXT, v -> {
+                    Defaults.clear(this, en.getKey());
+                    render();
+                }));
+                d.addView(row);
+            }
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rp.topMargin = Ui.dp(this, 6);
+            rp.bottomMargin = Ui.dp(this, 6);
+            d.addView(Ui.button(this, "Reset all", Ui.OUTLINE, v -> {
+                Defaults.clearAll(this);
+                render();
+            }), rp);
+        }
+    }
+
+    // ---------------------------------------------------------------- scripts, tools, file picking
+
+    /** Runs one engine function and returns its result as JSON text (never throws). */
+    private String engine(String fn, Object... args) {
+        try {
+            return Engine.call(fn, args).toString();
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"message\":" + JSONObject.quote(String.valueOf(t.getMessage())) + "}";
+        }
+    }
+
+    /** Every folder Kiln uses for temporary files, so the size shown and "Clear" cover all of them. */
+    private java.util.List<java.io.File> cacheDirs() {
+        java.util.List<java.io.File> l = new java.util.ArrayList<>();
+        l.add(getCacheDir());                                  // preview, incoming, edit, pick, ...
+        java.io.File ext = getExternalCacheDir();
+        if (ext != null) {
+            l.add(ext);                                        // private-folder staging (priv/...)
+        }
+        return l;
+    }
+
+    // ---- protected folders (root / Shizuku)
+
+    private void accessSheet() {
+        Sheet sh = new Sheet(this, "Protected folders");
+        sh.text("Lets Kiln browse and change folders Android keeps from apps. Anything done here is real: "
+                + "deleting or moving system files can break apps or the phone.");
+        sh.radio("Off", "Normal access only", Defaults.privMode(this) == Priv.OFF, () -> {
+            Priv.setMode(Priv.OFF);
+            render();
+        });
+        sh.radio("Root", "Needs a rooted phone; a superuser prompt appears", Defaults.privMode(this) == Priv.ROOT, () -> {
+            Priv.setMode(Priv.ROOT);
+            render();
+            checkAccess();
+        });
+        sh.radio("Shizuku", "Needs the Shizuku app running; reaches Android/data and more",
+                Defaults.privMode(this) == Priv.SHIZUKU, () -> {
+                    Priv.setMode(Priv.SHIZUKU);
+                    render();
+                    checkAccess();
+                });
+        sh.button("Cancel", Ui.TEXT, null).show();
+    }
+
+    /** Tests the chosen way in, asking for permission if that is what is missing. */
+    private void checkAccess() {
+        final int m = Defaults.privMode(this);
+        if (m == Priv.ROOT) {
+            Toast.makeText(this, "Asking for root...", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                final boolean ok = Priv.probeRoot();
+                runOnUiThread(() -> {
+                    Toast.makeText(this, ok ? "Root access works" : Priv.status(), Toast.LENGTH_LONG).show();
+                    render();
+                });
+            }).start();
+        } else if (m == Priv.SHIZUKU) {
+            if (!Priv.shizukuRunning()) {
+                Sheet sh = new Sheet(this, "Shizuku isn't running");
+                sh.text(Priv.shizukuInstalled()
+                        ? "Open Shizuku and start it (with Wireless debugging, or with root), then come back."
+                        : "Install Shizuku from its project page or app store, start it, then come back.");
+                sh.button("Close", Ui.TEXT, null);
+                if (Priv.shizukuInstalled()) {
+                    sh.button("Open Shizuku", Ui.FILLED, () -> {
+                        try {
+                            startActivity(getPackageManager().getLaunchIntentForPackage("moe.shizuku.privileged.api"));
+                        } catch (Exception e) {
+                            Toast.makeText(this, "Couldn't open Shizuku", Toast.LENGTH_SHORT).show();
+                        }
+                        return true;
+                    });
+                }
+                sh.show();
+                render();
+                return;
+            }
+            Priv.requestShizuku(granted -> runOnUiThread(() -> {
+                Toast.makeText(this, granted ? "Shizuku is allowed" : "Shizuku permission was refused",
+                        Toast.LENGTH_SHORT).show();
+                ui().postDelayed(this::render, 600);              // the service takes a moment to come up
+            }));
+        }
+    }
+
+    private android.os.Handler uiHandler;
+
+    private android.os.Handler ui() {
+        if (uiHandler == null) uiHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        return uiHandler;
+    }
+
+    private void loadCacheSize() {
+        new Thread(() -> {
+            try {
+                long sum = 0;
+                for (java.io.File d : cacheDirs()) {
+                    sum += new JSONObject(engine("cache_size", d.getPath())).optLong("bytes", 0);
+                }
+                final long total = sum;
+                runOnUiThread(() -> {
+                    cacheBytes = total;
+                    render();
+                });
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    private void pickFile(Picked cb) {
+        picked = cb;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, PICK);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != PICK || res != RESULT_OK || data == null || data.getData() == null || picked == null) return;
+        final Uri uri = data.getData();
+        final Picked cb = picked;
+        picked = null;
+        final Sheet busy = new Sheet(this, "Reading file...").cancelable(false);
+        busy.show();
+        new Thread(() -> {
+            File out = null;
+            String err = null;
+            String name = "file";
+            try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME},
+                    null, null, null)) {
+                if (c != null && c.moveToFirst()) name = c.getString(0);
+            } catch (Exception ignored) {
+            }
+            name = name.replace('/', '_');
+            try {
+                File dir = new File(getCacheDir(), "pick");
+                dir.mkdirs();
+                out = new File(dir, name);
+                try (InputStream in = getContentResolver().openInputStream(uri);
+                     OutputStream os = new FileOutputStream(out)) {
+                    if (in == null) throw new java.io.IOException("can't read that file");
+                    byte[] buf = new byte[1 << 16];
+                    int k;
+                    while ((k = in.read(buf)) > 0) os.write(buf, 0, k);
+                }
+            } catch (Exception e) {
+                err = String.valueOf(e.getMessage());
+            }
+            final File f = out;
+            final String n = name, e = err;
+            runOnUiThread(() -> {
+                busy.dismiss();
+                if (e != null) new Sheet(this, "Couldn't read the file").text(e).button("OK", Ui.FILLED, null).show();
+                else cb.got(f, n);
+            });
+        }).start();
+    }
+
+    // ---- nicer results for Benchmark
+
+    private TextView smallTag(String t) {
+        TextView tag = Ui.label(this, t, 11, true, false);
+        tag.setTextColor(Ui.accent(this));
+        tag.setPadding(Ui.dp(this, 7), Ui.dp(this, 2), Ui.dp(this, 7), Ui.dp(this, 2));
+        tag.setBackground(Ui.shape(this, Ui.bg(this), 0, 8));
+        return tag;
+    }
+
+    private TextView subjectLine(String subject, String second) {
+        TextView t = Ui.label(this, (subject.isEmpty() ? "" : subject + "\n") + second, 13, false, true);
+        t.setLineSpacing(0, 1.15f);
+        return t;
+    }
+
+    private void showBench(String title, String subject, JSONObject v) {
+        org.json.JSONArray rows = v.optJSONArray("rows");
+        if (rows == null) return;
+        long min = Long.MAX_VALUE, max = 1;
+        double fast = Double.MAX_VALUE, slow = 0;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            min = Math.min(min, r.optLong("size"));
+            max = Math.max(max, r.optLong("size"));
+            fast = Math.min(fast, r.optDouble("secs"));
+            slow = Math.max(slow, r.optDouble("secs"));
+        }
+        boolean showSmall = rows.length() > 1 && min < max;
+        boolean showFast = rows.length() > 1 && slow - fast >= 0.05;
+        int files = v.optInt("files", 1);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+        list.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            boolean best = showSmall && r.optLong("size") == min;
+            boolean quick = showFast && r.optDouble("secs") == fast;
+            if (i > 0) list.addView(Ui.rule(this));
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(0, Ui.dp(this, 12), 0, Ui.dp(this, 12));
+            LinearLayout top = new LinearLayout(this);
+            top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(Ui.label(this, r.optString("name"), 15, true, false));
+            if (best) {
+                TextView tag = smallTag("Smallest");
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tp.leftMargin = Ui.dp(this, 8);
+                top.addView(tag, tp);
+            }
+            if (quick) {
+                TextView tag = smallTag("Fastest");
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tp.leftMargin = Ui.dp(this, 6);
+                top.addView(tag, tp);
+            }
+            View gap = new View(this);
+            top.addView(gap, new LinearLayout.LayoutParams(0, 1, 1f));
+            TextView pct = Ui.label(this, String.format(java.util.Locale.US, "%.1f%%", r.optDouble("ratio")),
+                    15, true, false);
+            if (best) pct.setTextColor(Ui.accent(this));
+            top.addView(pct);
+            item.addView(top);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 8));
+            bp.topMargin = Ui.dp(this, 8);
+            item.addView(Ui.meter(this, (double) r.optLong("size") / max, best), bp);
+            TextView sub = Ui.label(this, Fmt.size(r.optLong("size")) + "  \u00b7  "
+                    + String.format(java.util.Locale.US, "%.1f s", r.optDouble("secs")), 12, false, true);
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            sp.topMargin = Ui.dp(this, 6);
+            item.addView(sub, sp);
+            list.addView(item);
+        }
+        TextView note = Ui.label(this, "Percentages are the packed size as a share of the input. "
+                + "Bars compare the sizes against each other.", 12, false, true);
+        new Sheet(this, title)
+                .content(subjectLine(subject, "Input: " + v.optString("input")
+                        + (files > 1 ? "  \u00b7  " + files + " files" : "")))
+                .space(12).content(list).space(12).content(note).space(4)
+                .button("Close", Ui.FILLED, null).show();
+    }
+
+    /** The self-test result: a verdict, three number tiles, failures first, then every check. */
+    private void showSelfTest(String title, JSONObject v) {
+        org.json.JSONArray checks = v.optJSONArray("checks");
+        if (checks == null) return;
+        int total = v.optInt("total", checks.length()), failed = v.optInt("failed");
+        boolean ok = failed == 0 && v.optBoolean("finished", true);
+        int tone = ok ? Ui.accent(this) : getColor(R.color.k_danger);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(ok ? R.drawable.ic_check : R.drawable.ic_close);
+        Ui.tint(ic, tone);
+        ic.setPadding(Ui.dp(this, 13), Ui.dp(this, 13), Ui.dp(this, 13), Ui.dp(this, 13));
+        ic.setBackground(Ui.shape(this, Ui.alpha(tone, 0x26), 0, 16));
+        head.addView(ic, new LinearLayout.LayoutParams(Ui.dp(this, 54), Ui.dp(this, 54)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, ok ? "All checks passed"
+                : failed == 1 ? "1 check failed" : failed + " checks failed", 18, true, false));
+        JSONObject h = v.optJSONObject("head");
+        String sub = h == null ? "Self-test" : "Kiln " + h.optString("version")
+                + "  ·  " + h.optInt("cores") + (h.optInt("cores") == 1 ? " core" : " cores");
+        TextView st = Ui.label(this, sub, 13, false, true);
+        st.setSingleLine(true);
+        st.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(st);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cp.leftMargin = Ui.dp(this, 14);
+        head.addView(col, cp);
+        Sheet sh = new Sheet(this, title).content(head).space(16);
+
+        LinearLayout tiles = new LinearLayout(this);
+        tiles.addView(Ui.statTile(this, String.valueOf(total), total == 1 ? "check" : "checks"),
+                Ui.tileLp(this, false, true));
+        tiles.addView(Ui.statTile(this, String.valueOf(total - failed), "passed"), Ui.tileLp(this, true, true));
+        tiles.addView(Ui.statTile(this, String.format(java.util.Locale.US, "%.1f s", v.optDouble("secs")), "took"),
+                Ui.tileLp(this, true, false));
+        sh.content(tiles);
+
+        if (!v.optBoolean("finished", true)) {
+            TextView t = Ui.label(this, "The run ended before the summary line, so some checks may be missing.",
+                    13, false, true);
+            sh.space(12).content(t);
+        }
+
+        if (failed > 0) {                                           // the ones that matter, first
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+            box.setBackground(Ui.shape(this, Ui.alpha(tone, 0x1F), 0, 14));
+            int n = 0;
+            for (int i = 0; i < checks.length(); i++) {
+                JSONObject c = checks.optJSONObject(i);
+                if (c == null || c.optBoolean("ok")) continue;
+                if (n++ > 0) box.addView(Ui.rule(this));
+                box.addView(checkRow(c, tone, true));
+            }
+            sh.space(16).content(Ui.label(this, "FAILED", 11, true, true)).space(6).content(box);
+        }
+
+        LinearLayout all = new LinearLayout(this);
+        all.setOrientation(LinearLayout.VERTICAL);
+        all.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+        all.setBackground(Ui.shape(this, getColor(R.color.k_chip), 0, 14));
+        int shown = 0;
+        for (int i = 0; i < checks.length(); i++) {
+            JSONObject c = checks.optJSONObject(i);
+            if (c == null || !c.optBoolean("ok")) continue;
+            if (shown++ > 0) all.addView(Ui.rule(this));
+            all.addView(checkRow(c, Ui.accent(this), false));
+        }
+        if (shown > 0) {
+            sh.space(16).content(Ui.label(this, failed > 0 ? "PASSED" : "CHECKS", 11, true, true))
+                    .space(6).content(all);
+        }
+
+        org.json.JSONArray notes = v.optJSONArray("notes");
+        if (notes != null && notes.length() > 0) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < notes.length(); i++) {
+                if (i > 0) sb.append('\n');
+                sb.append(notes.optString(i));
+            }
+            sh.space(12).content(Ui.label(this, sb.toString(), 12, false, true));
+        }
+        sh.space(4).button("Close", Ui.FILLED, null).show();
+    }
+
+    /** One check: a status mark, its name and time, and the note under it when there is one. */
+    private View checkRow(JSONObject c, int tone, boolean failedRow) {
+        int d = Ui.dp(this, 1);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(c.optBoolean("ok") ? R.drawable.ic_check : R.drawable.ic_close);
+        Ui.tint(mark, tone);
+        top.addView(mark, new LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)));
+        TextView name = Ui.label(this, c.optString("name"), 14, failedRow, false);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        np.leftMargin = Ui.dp(this, 10);
+        np.rightMargin = Ui.dp(this, 10);
+        top.addView(name, np);
+        top.addView(Ui.label(this, String.format(java.util.Locale.US, "%.1f s", c.optDouble("secs")),
+                12, false, true));
+        row.addView(top);
+        String msg = c.optString("msg");
+        if (!msg.isEmpty()) {
+            TextView m = Ui.label(this, msg, 12, false, !failedRow);
+            if (failedRow) m.setTextColor(tone);
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            mp.leftMargin = Ui.dp(this, 28);
+            mp.topMargin = d * 3;
+            row.addView(m, mp);
+        }
+        return row;
+    }
+
+    private MainActivity.Progress toolP;
+    private ProgressBar toolBar;
+    private TextView toolLine, toolPct;
+
+    private void onToolProgress(String json) {
+        try {
+            JSONObject o = new JSONObject(json);
+            final double frac = o.optDouble("frac", -1);
+            final String file = o.optString("file", "");
+            runOnUiThread(() -> {
+                if (toolBar == null) return;
+                if (!file.isEmpty() && toolLine != null) toolLine.setText(file);
+                if (frac < 0) {
+                    toolBar.setIndeterminate(true);
+                    if (toolPct != null) toolPct.setText("");
+                } else {
+                    toolBar.setIndeterminate(false);
+                    toolBar.setProgress((int) Math.round(frac * 1000));
+                    if (toolPct != null) toolPct.setText(Math.min(100, (int) Math.round(frac * 100)) + "%");
+                }
+            });
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void runTool(final String tool, final String arg, final String title, final String subject) {
+        final MainActivity.Progress tp = new MainActivity.Progress(this::onToolProgress);
+        toolP = tp;
+        toolLine = Ui.label(this, tool.equals("selftest") ? "Starting..." : "Working...", 13, false, true);
+        toolLine.setSingleLine(true);
+        toolLine.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        toolBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        toolBar.setIndeterminate(true);
+        toolBar.setMax(1000);
+        ColorStateList acc = ColorStateList.valueOf(Ui.accent(this));
+        toolBar.setProgressTintList(acc);
+        toolBar.setIndeterminateTintList(acc);
+        TextView hint = Ui.label(this, tool.equals("selftest")
+                ? "This can take a minute or two. Cancel stops it after the current step."
+                : "Cancel stops it after the current step.", 12, false, true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        toolPct = Ui.label(this, "", 16, true, false);
+        LinearLayout top = new LinearLayout(this);                 // line ... percent
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(toolLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams tpp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tpp.leftMargin = Ui.dp(this, 12);
+        top.addView(toolPct, tpp);
+        box.addView(top);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.topMargin = Ui.dp(this, 12);
+        box.addView(toolBar, bp);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hp.topMargin = Ui.dp(this, 12);
+        box.addView(hint, hp);
+        final Sheet busy = new Sheet(this, title).content(box).cancelable(false);
+        busy.button("Cancel", Ui.OUTLINE, () -> {
+            tp.cancel();
+            toolLine.setText("Cancelling...");
+            busy.lastButton().setEnabled(false);
+            return false;
+        });
+        busy.show();
+        new Thread(() -> {
+            String r = engine("tool", tool, arg == null ? "" : arg, tp);
+            boolean cancelled = false;
+            String text;
+            JSONObject viewObj = null;
+            try {
+                JSONObject o = new JSONObject(r);
+                cancelled = o.optBoolean("cancelled");
+                text = o.optString("text", o.optString("message", r));
+                viewObj = o.optJSONObject("view");
+            } catch (Exception e) {
+                text = r;
+            }
+            final String shown = text;
+            final boolean was = cancelled;
+            final JSONObject view = viewObj;
+            runOnUiThread(() -> {
+                toolBar = null;
+                toolLine = null;
+                toolP = null;
+                if (isFinishing() || isDestroyed()) return;
+                busy.dismiss();
+                if (was) {
+                    Toast.makeText(this, title + " cancelled", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (view != null && "bench".equals(view.optString("type"))) {
+                    showBench(title, subject, view);
+                    return;
+                }
+                if (view != null && "selftest".equals(view.optString("type"))) {
+                    showSelfTest(title, view);
+                    return;
+                }
+                TextView tv = Ui.label(this, shown, 12, false, false);
+                tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tv.setTextIsSelectable(true);
+                new Sheet(this, title).content(tv).button("Close", Ui.FILLED, null).show();
+            });
+        }).start();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (toolP != null) toolP.cancel();      // leaving Settings stops a running tool
+        super.onDestroy();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        loadCacheSize();
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        Ui.noSlideIfOff(this);
+    }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "kiln-bridge"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Process bridge between the Kiln Android app (Java) and the Rust Kiln engine"
+publish = false
+
+[[bin]]
+name = "kiln-bridge"
+path = "src/main.rs"
+
+[dependencies]
+kiln = { path = ".." }
+serde_json = "1"
+chacha20poly1305 = "0.10"
+scrypt = { version = "0.11", default-features = false }
+unicode-normalization = "0.1"

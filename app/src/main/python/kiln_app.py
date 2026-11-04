@@ -138,13 +138,62 @@ def _name_matcher(query):
     return lambda low: all(t in low for t in terms)
 
 
-def search(path, query, show_all, show_hidden=False):
+def _flt_load(raw):
+    """The advanced-search conditions the app sends as JSON (see SearchFilter.java), or None."""
+    if not raw:
+        return None
+    try:
+        f = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(f, dict):
+        return None
+    ex = f.get("exts")
+    f["exts"] = set(ex) if ex is not None else None
+    return f
+
+
+def _flt_date(f, m):
+    a, b = f.get("after", -1), f.get("before", -1)
+    if a < 0 and b < 0:
+        return True
+    if m <= 0:
+        return False
+    return not ((a >= 0 and m < a) or (b >= 0 and m >= b))
+
+
+def _flt_dir_ok(f, m):
+    return f.get("dirs", "any") != "none" and _flt_date(f, m)
+
+
+def _flt_cheap(f, size, m):
+    """Size and date of a file: checked before the file's first bytes are read."""
+    if f.get("dirs") == "only" or not f.get("files", True):
+        return False
+    lo, hi = f.get("min", -1), f.get("max", -1)
+    if (lo >= 0 or hi >= 0) and (size < 0 or (lo >= 0 and size < lo) or (hi >= 0 and size > hi)):
+        return False
+    return _flt_date(f, m)
+
+
+def _flt_ext_ok(f, name, kind):
+    ex = f.get("exts")
+    if ex is None:
+        return True
+    if f.get("arc") and kind == "archive":
+        return True
+    dot = name.rfind(".")
+    return (name[dot + 1:].lower() if dot >= 0 else "") in ex
+
+
+def search(path, query, show_all, show_hidden=False, flt_json=""):
     """Every file and folder below `path` whose name matches `query` (see _name_matcher; plain
     words are case-insensitive). Names come back relative to `path`, so the app can treat them like
     entries of the folder itself. A newer search (or search_cancel) stops this one."""
     _search_gen[0] += 1
     mine = _search_gen[0]
     match = _name_matcher(query)
+    flt = _flt_load(flt_json)
     if match is None:
         return _j(ok=True, path=path, items=[], truncated=False)
     items = []
@@ -171,8 +220,8 @@ def search(path, query, show_all, show_hidden=False):
                     hit = match(low)
                     relname = rel + "/" + name if rel else name
                     if is_dir:
-                        if hit:
-                            st = e.stat()
+                        st = e.stat() if hit else None
+                        if hit and (flt is None or _flt_dir_ok(flt, int(st.st_mtime))):
                             is_set = os.path.isfile(os.path.join(e.path, kiln.INDEX_NAME))
                             try:
                                 count = len(os.listdir(e.path))
@@ -183,10 +232,14 @@ def search(path, query, show_all, show_hidden=False):
                         stack.append(relname)
                     elif hit and e.is_file():
                         st = e.stat()
+                        if flt is not None and not _flt_cheap(flt, st.st_size, int(st.st_mtime)):
+                            continue
                         kind, enc = "file", False
                         sn = _sniff(e.path, st.st_size)
                         if sn:
                             kind, enc = sn
+                        if flt is not None and not _flt_ext_ok(flt, name, kind):
+                            continue
                         if kind == "file" and not show_all:
                             continue
                         items.append({"n": relname, "k": kind, "s": st.st_size,

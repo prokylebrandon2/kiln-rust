@@ -43,6 +43,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -132,7 +133,8 @@ public class MainActivity extends Activity {
     private static final int M_ALL_FILES = 1, M_HIDDEN = 2, M_REFRESH = 3, M_ABOUT = 4,
             M_SELECT_ALL = 5, M_EXTRACT = 6, M_RENAME = 7, M_CLEAR = 9, M_TEST = 10,
             M_INFO = 11, M_DECRYPT = 12, M_EXTRACT_ALL = 13, M_PLAIN = 14, M_SETTINGS = 15,
-            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19, M_ICON = 20, M_BIN = 21;
+            M_OPTIONS = 16, M_SAVE = 17, M_DISCARD = 18, M_PROPS = 19, M_ICON = 20, M_BIN = 21,
+            M_SHA_GEN = 22, M_SHA_VERIFY = 23, M_COMPARE = 24;
     private static final long IMAGE_PREVIEW_MAX = 15_000_000L;
     private static final String TEXT_EXT = " txt md json xml csv log py c h cpp java kt sh html css js "
             + "yml yaml ini conf cfg toml tsv rst srt gradle properties lua rb go rs ts sql "
@@ -197,6 +199,9 @@ public class MainActivity extends Activity {
     private String query = "";
     private int searchGen, lastFirst, lastTop, imePad;
     private Runnable pendingSearch;
+    private final SearchFilter filter = new SearchFilter();
+    private Button filterChip;
+    private TextView filterNote;
     private boolean deepRunning;
     private final List<Row> srcRows = new ArrayList<>();      // the folder (or archive level) itself
     private final List<Item> srcItems = new ArrayList<>();
@@ -472,8 +477,7 @@ public class MainActivity extends Activity {
         page.addView(bar);
 
         searchRow = new LinearLayout(this);
-        searchRow.setOrientation(LinearLayout.HORIZONTAL);
-        searchRow.setGravity(Gravity.CENTER_VERTICAL);
+        searchRow.setOrientation(LinearLayout.VERTICAL);
         searchRow.setPadding(dp(12), 0, dp(12), dp(8));
         searchRow.setVisibility(View.GONE);
         searchField = Ui.field(this, "Search", false);
@@ -490,7 +494,10 @@ public class MainActivity extends Activity {
             hideKeyboard();
             return true;
         });
-        searchRow.addView(searchField, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        final LinearLayout searchTop = new LinearLayout(this);
+        searchTop.setOrientation(LinearLayout.HORIZONTAL);
+        searchTop.setGravity(Gravity.CENTER_VERTICAL);
+        searchTop.addView(searchField, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         deepChip = Ui.button(this, "Subfolders", Ui.TONAL, v -> {
             deepOn = !deepOn;
             Defaults.setDeepSearch(this, deepOn);
@@ -501,7 +508,26 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams dc = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         dc.leftMargin = dp(8);
-        searchRow.addView(deepChip, dc);
+        searchTop.addView(deepChip, dc);
+        searchRow.addView(searchTop, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout filterRow = new LinearLayout(this);
+        filterRow.setOrientation(LinearLayout.HORIZONTAL);
+        filterRow.setGravity(Gravity.CENTER_VERTICAL);
+        filterChip = Ui.button(this, "Filters", Ui.TONAL, v -> filterSheet());
+        filterChip.setMinimumHeight(dp(40));
+        filterRow.addView(filterChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        filterNote = Ui.label(this, "", 13, false, true);
+        filterNote.setSingleLine(true);
+        filterNote.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        np.leftMargin = dp(10);
+        filterRow.addView(filterNote, np);
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        fp.topMargin = dp(6);
+        searchRow.addView(filterRow, fp);
         page.addView(searchRow);
 
         View line = new View(this);
@@ -654,7 +680,7 @@ public class MainActivity extends Activity {
     private boolean upShown() {
         if (upFrozen != null) return upFrozen;
         return upRowOn && (arc != null || !isStorageRoot(cwd)) && hasStorage()
-                && !(searching && !query.isEmpty());
+                && !(searchOn());
     }
 
     private int off() { return upShown() ? 1 : 0; }
@@ -742,7 +768,7 @@ public class MainActivity extends Activity {
             detail.setText(r.sub);
             detail.setVisibility(r.sub.isEmpty() ? View.GONE : View.VISIBLE);
             String w = r.where;                               // where a search hit lives
-            if (w == null && r.item != null && arc == null && searching && !query.isEmpty()) {
+            if (w == null && r.item != null && arc == null && searchOn()) {
                 w = whereLabel("");                           // hit in the searched folder itself
             }
             loc.setText(w == null ? "" : w);
@@ -1317,7 +1343,9 @@ public class MainActivity extends Activity {
             case M_EXTRACT:
             case M_EXTRACT_ALL: return R.drawable.ic_extract;
             case M_RENAME: return R.drawable.ic_edit;
-            case M_TEST: return R.drawable.ic_check;
+            case M_TEST:
+            case M_SHA_VERIFY: return R.drawable.ic_check;
+            case M_COMPARE: return R.drawable.ic_copy;
             case M_PLAIN:
             case M_ICON: return R.drawable.ic_folder;
             case M_DECRYPT: return R.drawable.ic_lock;
@@ -1352,6 +1380,11 @@ public class MainActivity extends Activity {
         } else if (selecting) {
             l.add("Select all"); id.add(M_SELECT_ALL);
             l.add("Properties"); id.add(M_PROPS);
+            l.add("Generate SHA-256"); id.add(M_SHA_GEN);
+            if (sel.size() == 1 && manifestFor(selectedFiles().get(0)) != null) {
+                l.add("Verify SHA-256"); id.add(M_SHA_VERIFY);
+            }
+            if (sel.size() >= 2) { l.add("Compare"); id.add(M_COMPARE); }
             if (sel.size() == 1 && !sel.iterator().next().contains("/") && !Priv.readOnly(cwd.getPath())) { l.add("Rename"); id.add(M_RENAME); }
             if (sel.size() == 1 && selectedDir() != null) { l.add("Icon and color..."); id.add(M_ICON); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
@@ -1436,6 +1469,14 @@ public class MainActivity extends Activity {
                 if (arc != null) arcRename(); else renameSheet();
                 break;
             case M_PROPS: propertiesSelected(); break;
+            case M_SHA_GEN: shaGenerate(selectedFiles()); break;
+            case M_SHA_VERIFY: {
+                List<File> one = selectedFiles();
+                File mf = one.size() == 1 ? manifestFor(one.get(0)) : null;
+                if (mf != null) shaVerify(mf);
+                break;
+            }
+            case M_COMPARE: compareSelected(); break;
             case M_ICON: {
                 Item it = selectedDir();
                 if (it != null) {
@@ -1578,6 +1619,7 @@ public class MainActivity extends Activity {
         searchField.setText("");
         searching = true;
         query = "";
+        filter.clear();
         searchGen++;
         searchRow.setVisibility(View.VISIBLE);
         searchRow.animate().cancel();
@@ -1607,6 +1649,7 @@ public class MainActivity extends Activity {
         if (!searching) return;
         searching = false;
         query = "";
+        filter.clear();
         searchGen++;
         if (pendingSearch != null) {
             ui.removeCallbacks(pendingSearch);
@@ -1620,7 +1663,113 @@ public class MainActivity extends Activity {
         searchField.setText("");
     }
 
+    /** A search is running when there are words in the box or any filter is on. */
+    private boolean searchOn() {
+        return searching && (!query.isEmpty() || filter.active());
+    }
+
+    private void renderFilterRow() {
+        int n = filter.count();
+        filterChip.setText(n > 0 ? "Filters \u00b7 " + n : "Filters");
+        filterChip.setTextColor(n > 0 ? Ui.accent(this) : Ui.text2(this));
+        filterChip.setBackground(n > 0
+                ? Ui.pressable(this, getColor(R.color.k_chip), 0, 10)
+                : Ui.pressable(this, 0, Ui.line(this), 10));
+        filterNote.setText(filter.summary());
+    }
+
+    private void onFilterChanged() {
+        renderFilterRow();
+        onQueryChanged(searchField.getText().toString());
+    }
+
+    private void styleChip(Button b, boolean on) {
+        b.setTextColor(on ? Ui.accent(this) : Ui.text2(this));
+        b.setBackground(on ? Ui.pressable(this, getColor(R.color.k_chip), 0, 10)
+                : Ui.pressable(this, 0, Ui.line(this), 10));
+    }
+
+    private interface OnPick { void got(int i); }
+
+    /** A sideways-scrolling row of one-of-many chips. */
+    private View chipRow(String[] names, int selected, final OnPick pick) {
+        HorizontalScrollView sv = new HorizontalScrollView(this);
+        sv.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        final List<Button> chips = new ArrayList<>();
+        for (int i = 0; i < names.length; i++) {
+            final int k = i;
+            Button b = Ui.button(this, names[i], Ui.TONAL, v -> {
+                for (int j = 0; j < chips.size(); j++) styleChip(chips.get(j), j == k);
+                pick.got(k);
+            });
+            b.setMinimumHeight(dp(40));
+            styleChip(b, i == selected);
+            chips.add(b);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(8);
+            row.addView(b, lp);
+        }
+        sv.addView(row);
+        return sv;
+    }
+
+    private void filterSheet() {
+        final EditText ext = Ui.field(this, "Extension, e.g. jpg, png", false);
+        ext.setText(filter.exts);
+        final EditText min = Ui.field(this, "Min size, e.g. 500 KB", false);
+        min.setText(filter.minText);
+        final EditText max = Ui.field(this, "Max size, e.g. 10 MB", false);
+        max.setText(filter.maxText);
+        final int[] type = {filter.type};
+        final int[] mod = {filter.mod};
+        LinearLayout sizes = new LinearLayout(this);
+        sizes.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        l1.rightMargin = dp(8);
+        sizes.addView(min, l1);
+        sizes.addView(max, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Sheet s = new Sheet(this, "Filters");
+        s.keyboard();
+        s.text("These narrow the name search. Leave the box empty to search by filters alone.");
+        s.content(Ui.label(this, "Type", 13, true, true)).space(4);
+        s.content(chipRow(SearchFilter.TYPE_NAMES, type[0], i -> type[0] = i)).space(12);
+        s.content(Ui.label(this, "Extension", 13, true, true)).space(4);
+        s.content(ext).space(12);
+        s.content(Ui.label(this, "Size (no unit means MB)", 13, true, true)).space(4);
+        s.content(sizes).space(12);
+        s.content(Ui.label(this, "Date modified", 13, true, true)).space(4);
+        s.content(chipRow(SearchFilter.MOD_NAMES, mod[0], i -> mod[0] = i)).space(8);
+        s.button("Clear", Ui.TEXT, () -> {
+            filter.clear();
+            onFilterChanged();
+            return true;
+        });
+        s.button("Apply", Ui.FILLED, () -> {
+            String a = min.getText().toString(), b = max.getText().toString();
+            if (!a.trim().isEmpty() && SearchFilter.parseSize(a) < 0) {
+                min.setError("Not a size");
+                return false;
+            }
+            if (!b.trim().isEmpty() && SearchFilter.parseSize(b) < 0) {
+                max.setError("Not a size");
+                return false;
+            }
+            filter.exts = ext.getText().toString().trim();
+            filter.minText = a.trim();
+            filter.maxText = b.trim();
+            filter.type = type[0];
+            filter.mod = mod[0];
+            onFilterChanged();
+            return true;
+        });
+        s.show();
+    }
+
     private void renderSearchRow() {
+        renderFilterRow();
         deepChip.setVisibility(arc == null ? View.VISIBLE : View.GONE);
         deepChip.setText(deepOn ? "Subfolders \u2713" : "Subfolders");
         deepChip.setTextColor(deepOn ? Ui.accent(this) : Ui.text2(this));
@@ -1639,7 +1788,7 @@ public class MainActivity extends Activity {
         }
         cancelDeep();
         deepRunning = false;
-        if (query.isEmpty()) {
+        if (!searchOn()) {
             showSource();
             return;
         }
@@ -1652,17 +1801,21 @@ public class MainActivity extends Activity {
     /** Filters the folder (or the whole open archive) by the words in the box. */
     private void filterLocal() {
         List<String> t = terms(query);
+        final SearchFilter.Spec fs = filter.active() ? filter.compile() : null;
         rows.clear();
         items.clear();
         if (arc != null) {
             for (Ent e : arc.ents) {
                 if (rows.size() >= 1000) break;
                 int sl = e.p.lastIndexOf('/');
-                if (matches(e.p.substring(sl + 1), t)) rows.add(arcSearchRow(e, sl));
+                String base = e.p.substring(sl + 1);
+                if (matches(base, t) && (fs == null || fs.accept(base, false, e.s, e.m, false))) {
+                    rows.add(arcSearchRow(e, sl));
+                }
             }
         } else {
             for (Row r : srcRows) {
-                if (matches(r.title, t)) {
+                if (matches(r.title, t) && rowPasses(fs, r)) {
                     rows.add(r);
                     if (r.item != null) items.add(r.item);
                 }
@@ -1671,6 +1824,16 @@ public class MainActivity extends Activity {
         sortRows();
         sel.retainAll(keysOf(rows));
         empty.setText(rows.isEmpty() ? (deepRunning ? "Searching..." : "No matches.") : "");
+    }
+
+    private static boolean rowPasses(SearchFilter.Spec fs, Row r) {
+        if (fs == null) return true;
+        if (r.item != null) {
+            Item it = r.item;
+            boolean dir = "dir".equals(it.kind) || "set".equals(it.kind);
+            return fs.accept(r.title, dir, dir ? 0 : it.size, it.mtime, "archive".equals(it.kind));
+        }
+        return fs.accept(r.title, r.folder || r.dir, r.size, r.time, false);
     }
 
     private Row arcSearchRow(Ent e, int sl) {
@@ -1715,7 +1878,7 @@ public class MainActivity extends Activity {
     }
 
     private void startDeepSoon(long delay) {
-        if (!searching || query.isEmpty() || arc != null || !deepOn) return;
+        if (!searchOn() || arc != null || !deepOn) return;
         final int g = searchGen;
         if (pendingSearch != null) ui.removeCallbacks(pendingSearch);
         pendingSearch = () -> {
@@ -1728,8 +1891,10 @@ public class MainActivity extends Activity {
     private void startDeep(final int g) {
         if (g != searchGen || !searching || app == null || arc != null) return;
         deepRunning = true;
-        final String path = cwd.getPath(), q = query;
+        final String path = cwd.getPath();
+        final String q = query.isEmpty() ? "*" : query;      // filters alone: every name
         final boolean all = showAll, hid = showHidden;
+        final SearchFilter.Spec fs = filter.active() ? filter.compile() : null;
         if (rows.isEmpty()) {
             empty.setText("Searching...");
             updateEmpty();
@@ -1737,7 +1902,8 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             JSONObject r;
             try {
-                r = Priv.wants(path) ? Priv.search(path, q, hid) : call("search", path, q, all, hid);
+                r = Priv.wants(path) ? filterHits(Priv.search(path, q, hid), fs)
+                        : call("search", path, q, all, hid, fs == null ? "" : fs.toJson());
             } catch (Exception e) {
                 r = errObj(String.valueOf(e.getMessage()));
             }
@@ -1749,6 +1915,26 @@ public class MainActivity extends Activity {
                 applyDeep(res);
             });
         }).start();
+    }
+
+    /** The root search can't filter by itself: drop what doesn't pass. */
+    private static JSONObject filterHits(JSONObject r, SearchFilter.Spec fs) {
+        if (fs == null || !r.optBoolean("ok")) return r;
+        JSONArray in = r.optJSONArray("items"), out = new JSONArray();
+        for (int i = 0; in != null && i < in.length(); i++) {
+            JSONObject o = in.optJSONObject(i);
+            if (o == null) continue;
+            String n = o.optString("n");
+            String k = o.optString("k");
+            boolean dir = "dir".equals(k) || "set".equals(k);
+            if (fs.accept(n.substring(n.lastIndexOf('/') + 1), dir, o.optLong("s"), o.optLong("m"),
+                    "archive".equals(k))) out.put(o);
+        }
+        try {
+            r.put("items", out);
+        } catch (org.json.JSONException ignored) {
+        }
+        return r;
     }
 
     private void applyDeep(JSONObject res) {
@@ -2598,7 +2784,7 @@ public class MainActivity extends Activity {
         boolean refresh = forceRefresh;                        // Refresh: recount, but no slide-in
         forceRefresh = false;
         boolean same = !newDir && sig.equals(shownSig) && arc == null
-                && !(searching && !query.isEmpty());
+                && !(searchOn());
         shownSig = sig;
         Snap sn = snaps.get(snapKey(cwd));
         if (sn == null) {
@@ -2622,7 +2808,7 @@ public class MainActivity extends Activity {
         sortRows();
         captureSource();
         empty.setText(emptyText());
-        if (searching && !query.isEmpty()) {
+        if (searchOn()) {
             filterLocal();
             startDeepSoon(0);
         }
@@ -3259,7 +3445,7 @@ public class MainActivity extends Activity {
         sortRows();
         captureSource();
         empty.setText(emptyText());
-        if (searching && !query.isEmpty()) filterLocal();
+        if (searchOn()) filterLocal();
         redraw();
     }
 
@@ -4627,6 +4813,163 @@ public class MainActivity extends Activity {
                         }));
     }
 
+    // ------------------------------------------------------------------ integrity
+
+    private Integrity.Tick tickOf(final Progress p) {
+        return (frac, name) -> {
+            try {
+                p.event(new JSONObject().put("frac", frac).put("file", name).toString());
+            } catch (JSONException ignored) {
+            }
+            return !p.cancelled();
+        };
+    }
+
+    /** The checksum file that goes with f: f itself when it is one, else the f.sha256 beside it. */
+    private static File manifestFor(File f) {
+        if (f.isFile() && f.getName().endsWith(Integrity.EXT)) return f;
+        File m = Integrity.manifestOf(f);
+        return m.isFile() ? m : null;
+    }
+
+    private static void listNames(StringBuilder b, String title, JSONArray a, int total) {
+        if (total <= 0) return;
+        b.append('\n').append(title).append(" (").append(total).append("):\n");
+        for (int i = 0; i < a.length() && i < 8; i++) b.append("\u2022 ").append(a.optString(i)).append('\n');
+        if (total > 8) b.append("and ").append(total - 8).append(" more\n");
+    }
+
+    private void shaGenerate(final List<File> items) {
+        if (items.isEmpty()) return;
+        List<String> exist = new ArrayList<>();
+        for (File f : items) {
+            File m = Integrity.manifestOf(f);
+            if (m.exists()) exist.add(m.getName());
+        }
+        if (exist.isEmpty()) {
+            runSha(items);
+            return;
+        }
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < exist.size() && i < 5; i++) b.append("\u2022 ").append(exist.get(i)).append('\n');
+        if (exist.size() > 5) b.append("and ").append(exist.size() - 5).append(" more\n");
+        confirm(exist.size() == 1 ? "Replace \"" + exist.get(0) + "\"?" : "Replace " + exist.size() + " checksum files?",
+                (exist.size() == 1 ? "It already exists and will be replaced with a new one."
+                        : "These already exist and will be replaced with new ones:\n" + b.toString().trim()),
+                "Replace", Ui.DANGER, () -> runSha(items));
+    }
+
+    private void runSha(final List<File> items) {
+        runOp("Calculating SHA-256...", true, p -> Integrity.generate(items, tickOf(p)), r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+                return;
+            }
+            if (!r.optBoolean("ok")) {
+                message("Couldn't create the checksum", r.optString("error", "Something went wrong."));
+                return;
+            }
+            JSONArray made = r.optJSONArray("made");
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; made != null && i < made.length(); i++) {
+                JSONObject o = made.optJSONObject(i);
+                if (o == null) continue;
+                b.append(o.optString("name")).append('\n');
+                if (o.has("hash")) b.append("SHA-256: ").append(o.optString("hash")).append("\n\n");
+                else if (o.optBoolean("folder")) b.append(plural(o.optInt("files"), "file", "files")).append(" hashed\n\n");
+                else b.append('\n');
+            }
+            listNames(b, "Left out", r.optJSONArray("skipped"), r.optInt("skippedN"));
+            listNames(b, "Couldn't read", r.optJSONArray("failed"), r.optJSONArray("failed") == null ? 0
+                    : r.optJSONArray("failed").length());
+            sel.clear();
+            forceRefresh = true;
+            loadDir(cwd, true);
+            redraw();
+            message(made != null && made.length() > 1 ? "Checksums created" : "Checksum created", b.toString().trim());
+        });
+    }
+
+    private void shaVerify(final File manifest) {
+        runOp("Checking SHA-256...", true, p -> Integrity.verify(manifest, tickOf(p)), r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+                return;
+            }
+            if (!r.optBoolean("ok")) {
+                message("Couldn't check", r.optString("error", "Something went wrong."));
+                return;
+            }
+            StringBuilder b = new StringBuilder();
+            int checked = r.optInt("checked"), good = r.optInt("good");
+            b.append(r.optString("manifest")).append('\n');
+            b.append(good).append(" of ").append(plural(checked, "file", "files")).append(" match.\n");
+            listNames(b, "Changed", r.optJSONArray("changed"), r.optInt("changedN"));
+            listNames(b, "Missing", r.optJSONArray("missing"), r.optInt("missingN"));
+            listNames(b, "Not in the checksum file", r.optJSONArray("added"), r.optInt("addedN"));
+            if (r.optInt("malformed") > 0) {
+                b.append('\n').append(plural(r.optInt("malformed"), "line", "lines")).append(" couldn't be read.\n");
+            }
+            if (r.optBoolean("match")) b.append("\nNothing has changed.");
+            message(r.optBoolean("match") ? "Checksums match" : "Checksums don't match", b.toString().trim());
+        });
+    }
+
+    private void compareSelected() {
+        final List<File> two = selectedFiles();
+        if (two.size() != 2) {
+            message("Can't compare", "Pick exactly two files or two folders. You picked " + two.size() + ".");
+            return;
+        }
+        final File a = two.get(0), b = two.get(1);
+        if (a.isDirectory() != b.isDirectory()) {
+            message("Can't compare", "A file can't be compared with a folder. Pick two files or two folders.");
+            return;
+        }
+        final boolean dirs = a.isDirectory();
+        runOp("Comparing...", true, p -> dirs ? Integrity.compareDirs(a, b, tickOf(p))
+                : Integrity.compareFiles(a, b, tickOf(p)), r -> {
+            if (r.optBoolean("cancelled")) {
+                toast("Cancelled");
+                return;
+            }
+            if (!r.optBoolean("ok")) {
+                message("Couldn't compare", r.optString("error", "Something went wrong."));
+                return;
+            }
+            StringBuilder s = new StringBuilder();
+            s.append("A: ").append(a.getName()).append("\nB: ").append(b.getName()).append("\n\n");
+            boolean same = r.optBoolean("same");
+            if (!dirs) {
+                if (same) {
+                    s.append("Same size (").append(Fmt.size(r.optLong("sizeA"))).append(") and same content.\n")
+                            .append("SHA-256: ").append(r.optString("hash"));
+                } else if ("size".equals(r.optString("reason"))) {
+                    s.append("A is ").append(Fmt.size(r.optLong("sizeA"))).append(", B is ")
+                            .append(Fmt.size(r.optLong("sizeB"))).append(".");
+                } else {
+                    s.append("Same size, but the content differs (first difference at byte ")
+                            .append(r.optLong("at")).append(").");
+                }
+                message(same ? "Files are identical" : "Files are different", s.toString());
+                return;
+            }
+            s.append(plural(r.optInt("compared"), "file", "files")).append(" compared, ")
+                    .append(r.optInt("identical")).append(" identical.\n");
+            listNames(s, "Different content", r.optJSONArray("changed"), r.optInt("changedN"));
+            listNames(s, "Only in A", r.optJSONArray("onlyA"), r.optInt("onlyAN"));
+            listNames(s, "Only in B", r.optJSONArray("onlyB"), r.optInt("onlyBN"));
+            listNames(s, "Folders only in A", r.optJSONArray("dirsOnlyA"), r.optInt("dirsOnlyAN"));
+            listNames(s, "Folders only in B", r.optJSONArray("dirsOnlyB"), r.optInt("dirsOnlyBN"));
+            listNames(s, "Couldn't read", r.optJSONArray("unreadable"), r.optInt("unreadableN"));
+            if (r.optInt("skipped") > 0) {
+                s.append('\n').append(plural(r.optInt("skipped"), "link or unreadable item was", "links or unreadable items were"))
+                        .append(" left out.");
+            }
+            message(same ? "Folders are identical" : "Folders are different", s.toString().trim());
+        });
+    }
+
     private void infoDialog() {
         final Arc a = arc;
         long raw = 0;
@@ -5125,9 +5468,19 @@ public class MainActivity extends Activity {
             }
         };
         lv.setAdapter(ad);
+        final TextView count = Ui.label(this, "", 13, true, false);
+        final Button[] next = {null};
+        final Runnable showCount = () -> {
+            int n = chosen.size();
+            count.setText(n == 0 ? "Nothing picked yet" : plural(n, "item", "items") + " picked");
+            count.setTextColor(n == 0 ? Ui.text2(this) : Ui.accent(this));
+            if (next[0] != null) next[0].setText(n == 0 ? "Next" : "Next (" + n + ")");
+        };
+        showCount.run();
         final java.util.function.Consumer<File> toggle = f -> {
             if (!chosen.remove(f.getPath())) { chosen.add(f.getPath()); byPath.put(f.getPath(), f); }
             else byPath.remove(f.getPath());
+            showCount.run();
             ad.notifyDataSetChanged();
         };
         final Runnable fill = () -> {
@@ -5180,7 +5533,8 @@ public class MainActivity extends Activity {
         });
         fill.run();
         final TextView hint = Ui.label(this, "Tap a file to pick it. Hold a folder to pick it whole.", 12, false, true);
-        new Sheet(this, "Choose what to pack").content(path).content(hint).space(6).fixed(lv, 320)
+        Sheet pk = new Sheet(this, "Choose what to pack").content(path).content(hint).space(2)
+                .content(count).space(6).fixed(lv, 320)
                 .button("Cancel", Ui.TEXT, null)
                 .button("Next", Ui.FILLED, () -> {
                     if (byPath.isEmpty()) {
@@ -5189,7 +5543,10 @@ public class MainActivity extends Activity {
                     }
                     cb.accept(new ArrayList<>(byPath.values()));
                     return true;
-                }).show();
+                });
+        next[0] = pk.lastButton();
+        showCount.run();
+        pk.show();
     }
 
     private void aboutDialog() {

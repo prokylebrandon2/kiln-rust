@@ -106,23 +106,19 @@ impl Rcp {
     }
     #[inline(always)]
     pub(crate) fn up(&mut self, bit: u32, t: &Tables) {
-        // Branch-free (the bit is unpredictable): same arithmetic as
-        //   bit=1: x -= (x * r) >> 16      bit=0: x += ((65535 - x) * r) >> 16
         let n = self.n as usize;
-        self.n += (self.n < RC_NMAX) as u8;
-        // SAFETY: n is a u8 and both rate tables have 256 entries
-        let (ra, rb) = unsafe { (*t.ra.get_unchecked(n) as u32, *t.rb.get_unchecked(n) as u32) };
-        let m = 0u32.wrapping_sub(bit); // all ones when bit = 1
-        let a = self.a as u32;
-        let b = self.b as u32;
-        let ia = 65535 - a;
-        let ib = 65535 - b;
-        let xa = ia ^ ((ia ^ a) & m);
-        let xb = ib ^ ((ib ^ b) & m);
-        let da = (xa * ra) >> 16;
-        let db = (xb * rb) >> 16;
-        self.a = a.wrapping_add((da ^ m).wrapping_sub(m)) as u16;
-        self.b = b.wrapping_add((db ^ m).wrapping_sub(m)) as u16;
+        if self.n < RC_NMAX {
+            self.n += 1;
+        }
+        let ra = t.ra[n] as u32;
+        let rb = t.rb[n] as u32;
+        if bit != 0 {
+            self.a = self.a.wrapping_sub(((self.a as u32 * ra) >> 16) as u16);
+            self.b = self.b.wrapping_sub(((self.b as u32 * rb) >> 16) as u16);
+        } else {
+            self.a = self.a.wrapping_add(((((65535 - self.a as u32) * ra) >> 16)) as u16);
+            self.b = self.b.wrapping_add(((((65535 - self.b as u32) * rb) >> 16)) as u16);
+        }
     }
 }
 

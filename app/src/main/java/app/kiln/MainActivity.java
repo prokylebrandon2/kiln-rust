@@ -124,6 +124,7 @@ public class MainActivity extends Activity {
         String sid;                          // staged-edit session (null until the first edit)
         boolean dirty;                       // there are unsaved changes
         final List<Ent> ents = new ArrayList<>();
+        int[] back;                                        // where the folder list was scrolled when this archive opened
         final Map<String, int[]> pos = new HashMap<>();   // folder inside the archive -> {first row, offset}
     }
 
@@ -192,7 +193,7 @@ public class MainActivity extends Activity {
     private LinearLayout searchRow, titleBox;
     private EditText searchField;
     private Button deepChip;
-    private boolean searching, deepOn, forceAnim, fabWanted, fabScrollHidden;
+    private boolean searching, deepOn, forceRefresh, fabWanted, fabScrollHidden;
     private String query = "";
     private int searchGen, lastFirst, lastTop, imePad;
     private Runnable pendingSearch;
@@ -774,14 +775,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * The rows slide in, once, staggered from the top. It starts on the first draw after the
-     * list's new data is laid out and runs on the rows themselves, so no later layout pass
-     * (selection, thumbnails, a rescan) can replay it. Call after the data has changed.
-     */
-    /** Ends the rows' slide-in at once: every visible row fully shown and in place. */
     private int scrollState = AbsListView.OnScrollListener.SCROLL_STATE_IDLE;
 
+    /** Ends the rows' slide-in at once: every visible row fully shown and in place. */
     private void settleRows() {
         for (int k = 0; k < list.getChildCount(); k++) {
             View c = list.getChildAt(k);
@@ -793,6 +789,11 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * The rows slide in, once, staggered from the top. It starts on the first draw after the
+     * list's new data is laid out and runs on the rows themselves, so no later layout pass
+     * (selection, thumbnails, a rescan) can replay it. Call after the data has changed.
+     */
     private void playRows() {
         if (!Defaults.animOn(this)) return;
         list.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
@@ -1025,7 +1026,7 @@ public class MainActivity extends Activity {
             buildArcRows();                                 // an open archive doesn't change
             swipe.setRefreshing(false);
         } else {
-            forceAnim = true;                               // the rows slide in again
+            forceRefresh = true;                            // recount folders; the rows don't animate
             loadDir(cwd, true);
         }
     }
@@ -1384,7 +1385,7 @@ public class MainActivity extends Activity {
                 loadDir(cwd);
                 break;
             case M_REFRESH:
-                forceAnim = true;
+                forceRefresh = true;
                 loadDir(cwd, true);
                 break;
             case M_BIN:
@@ -2243,7 +2244,11 @@ public class MainActivity extends Activity {
 
     private void loadDir(File dir) { loadDir(dir, false); }
 
+    private int[] restoreAt;                               // list spot to land on after leaving an archive
+
     private void loadDir(File dir, boolean keepSelection) {
+        final int[] back = arc != null && dir.equals(cwd) ? arc.back : null;
+        restoreAt = back;
         if (arc != null) {
             closeSession(arc);
             arcClip.clear();
@@ -2278,7 +2283,13 @@ public class MainActivity extends Activity {
             // Scroll once, after the new rows are in, and let the slide-in start from the final
             // layout. (Scrolling twice re-laid the rows out after they'd started animating, so
             // the ones lower down skipped it.)
-            if (goingUp) list.setSelectionFromTop(snap.first, snap.top);
+            if (back != null) {
+                list.setSelectionFromTop(back[0], back[1]);
+                restoreAt = null;
+                list.post(() -> {
+                    if (arc == null && cwd.equals(dir)) list.setSelectionFromTop(back[0], back[1]);
+                });
+            } else if (goingUp) list.setSelectionFromTop(snap.first, snap.top);
             else list.setSelectionFromTop(0, 0);
             playRows();
         } else {
@@ -2584,9 +2595,9 @@ public class MainActivity extends Activity {
         String sig = sigOf(ni, isSet);
         boolean newDir = !cwd.getPath().equals(lastDir);
         lastDir = cwd.getPath();
-        boolean replay = newDir || forceAnim;                  // a new folder, or Refresh: slide the rows in
-        forceAnim = false;
-        boolean same = !replay && sig.equals(shownSig) && arc == null
+        boolean refresh = forceRefresh;                        // Refresh: recount, but no slide-in
+        forceRefresh = false;
+        boolean same = !newDir && sig.equals(shownSig) && arc == null
                 && !(searching && !query.isEmpty());
         shownSig = sig;
         Snap sn = snaps.get(snapKey(cwd));
@@ -2599,7 +2610,7 @@ public class MainActivity extends Activity {
         sn.plainSet = isSet;
         sn.sig = sig;
         if (same) {
-            loadCounts(cwd.getPath(), loadGen, false);
+            loadCounts(cwd.getPath(), loadGen, refresh);
             return;                                            // nothing changed: the list isn't touched
         }
         plainSet = isSet;
@@ -2617,8 +2628,12 @@ public class MainActivity extends Activity {
         }
         if (newDir) list.setSelectionFromTop(0, 0);            // a new folder always starts at the top
         redraw();
-        if (replay) playRows();
-        loadCounts(cwd.getPath(), loadGen, replay);
+        if (restoreAt != null && !newDir) {                    // back from an archive with no saved view
+            list.setSelectionFromTop(restoreAt[0], restoreAt[1]);
+            restoreAt = null;
+        }
+        if (newDir) playRows();                                // only a new folder slides in
+        loadCounts(cwd.getPath(), loadGen, newDir || refresh);
     }
 
     /** Turns scan or search output into rows. Names from a search are paths below the folder. */
@@ -3038,8 +3053,10 @@ public class MainActivity extends Activity {
             e.m = o.optLong("m");
             a.ents.add(e);
         }
+        boolean folderShown = arc == null && !searching && !dirPending;
         closeSearchQuiet();
         rememberScroll();                                     // so closing the archive returns to this spot
+        if (folderShown) a.back = scrollNow();                // kept on the archive too: saving clears the folder memory
         closeSession(arc);
         arcClip.clear();
         arc = a;

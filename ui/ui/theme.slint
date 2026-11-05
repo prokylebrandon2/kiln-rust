@@ -46,9 +46,9 @@ export global Theme {
         v * font-scale
     }
     /// dp(1) as the Java computes it: Math.round(density) physical pixels.
-    out property <length> hair: Math.max(1, Math.round(density)) * 1phx;
+    out property <length> hair: Math.max(1, Math.round(density)) / density * 1px;
     /// Ui.rule(): a separator that is exactly one physical pixel.
-    out property <length> hair-px: 1phx;
+    out property <length> hair-px: 1px / density;
 
     /// A base duration scaled by the animation speed (Defaults.anim).
     pure public function dur(v: duration) -> duration {

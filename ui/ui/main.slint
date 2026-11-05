@@ -1,13 +1,15 @@
-// The main window. Phase A draws what MainActivity.buildUi() shows before a folder is loaded: the
-// top bar, the one-pixel rule under it, the body with its "Starting..." line, the (hidden) "+ New"
-// button, the opaque permission view, a message sheet and a toast layer. The file list, the pull-down panel and the
-// bottom bar come in Phase B. See docs/UI-SPEC.md, section "Main screen".
+// The main window (MainActivity.buildUi()): the top bar, the search row, the rule under them, the
+// warning banner, the body (the file list, the empty-folder line, the "+ New" button, the
+// selection bar and the opaque permission view), the sort sheet, a message sheet and a toast
+// layer. The pull-down panel and the menus come in the next part of Phase B. See
+// docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { KButton, KFab, KSheet, KSheetText, KToast, KTopBar } from "components.slint";
+import { KButton, KFab, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar } from "components.slint";
+import { KFileList, RowData } from "browser.slint";
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
-export { Theme }
+export { Theme, RowData }
 
 export component MainWindow inherits Window {
     // ---- what the Rust side sets ---------------------------------------------------------------
@@ -19,8 +21,23 @@ export component MainWindow inherits Window {
     /// The little arrow after the title, and whether tapping the title opens the bookmarks. Both
     /// are on only when storage access is granted, not selecting and not inside an archive.
     in property <bool> marks-ok: false;
-    /// The magnifier turns into a cross while searching.
+    /// The magnifier turns into a cross while searching, and the search row is open.
     in property <bool> searching: false;
+    /// While rows are selected the left button is a cross and sort and search are hidden.
+    in property <bool> selecting: false;
+    /// The left button's icon: "up", or "close" while selecting (the Kiln mark at home).
+    in property <string> left-icon: "up";
+    /// The warning line under the rule ("Plain view of an encrypted set...").
+    in property <string> banner-text;
+    /// The file list.
+    in property <[RowData]> rows;
+    in property <bool> up-row: false;
+    in property <bool> has-where: false;
+    /// The selection bar (Copy, Move, Delete, Pack) is up.
+    in property <bool> bar-shown: false;
+    in property <bool> sort-sheet-shown: false;
+    in property <int> sort-key: 0;
+    in property <bool> sort-asc: true;
     /// The line in the middle of the body ("Starting...", or "Kiln couldn't start: ...").
     in property <string> empty-text: "Starting...";
     /// How far down it sits: 56 dp, or 96 dp when the ".." row is showing.
@@ -46,105 +63,285 @@ export component MainWindow inherits Window {
     callback more-clicked();
     callback new-clicked();
     callback sheet-dismissed();
+    callback row-clicked(int);
+    callback row-long-pressed(int);
+    callback list-scrolled(length);
+    callback query-edited(string);
+    callback bar-clicked(int);
+    callback sort-key-chosen(int);
+    callback sort-asc-chosen(bool);
+    callback sort-dismissed();
+    /// The Back key or gesture (MainActivity.onBackPressed).
+    callback back-pressed();
+
+    /// Scroll the file list to the top, or to `y` dp from it.
+    public function scroll-list-top() {
+        list.scroll-top();
+    }
+    public function scroll-list-to(y: length) {
+        list.scroll-to(y);
+    }
+    /// How far the file list is scrolled, in dp.
+    out property <length> list-pos: list.scroll-pos;
+    /// Give the Back key a place to arrive (the search box has the focus while it is open).
+    public function focus-keys() {
+        keys.focus();
+    }
 
     background: Theme.bg;
     default-font-family: Theme.font;
 
-    VerticalLayout {
-        // Not edge-to-edge: the system bars are k_bg in the Java theme, so the page starts below
-        // them. Slint reports the bars as the safe area.
-        padding-top: root.safe-area-insets.top;
-        padding-bottom: root.safe-area-insets.bottom;
-        padding-left: root.safe-area-insets.left;
-        padding-right: root.safe-area-insets.right;
-        spacing: 0px;
+    init => {
+        keys.focus();
+    }
 
-        KTopBar {
-            title: root.bar-title;
-            sub: root.bar-sub;
-            left-icon: "up";
-            left-mark: root.home;
-            left-glow-run: root.glow-run;
-            search-icon: root.searching ? "close" : "search";
-            show-chevron: root.marks-ok;
-            titles-enabled: root.marks-ok;
-            left-clicked => {
-                root.left-clicked();
+    // The Back key. The Android backend reports Back as a key press; a press nobody accepts
+    // closes the app, so Back is always accepted and Rust decides what it does. The scope wraps
+    // the page, so a Back press that the search field ignores bubbles up to it.
+    keys := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if (event.text == Key.Back) {
+                root.back-pressed();
+                return accept;
             }
-            titles-clicked => {
-                root.titles-clicked();
-            }
-            search-clicked => {
-                root.search-clicked();
-            }
-            sort-clicked => {
-                root.sort-clicked();
-            }
-            more-clicked => {
-                root.more-clicked();
-            }
+            return reject;
         }
 
-        // page.addView(line): 1 dp, k_line
-        Rectangle {
-            height: Theme.hair;
-            background: Theme.line;
-        }
+        VerticalLayout {
+            // Not edge-to-edge: the system bars are k_bg in the Java theme, so the page starts below
+            // them. Slint reports the bars as the safe area.
+            padding-top: root.safe-area-insets.top;
+            padding-bottom: root.safe-area-insets.bottom;
+            padding-left: root.safe-area-insets.left;
+            padding-right: root.safe-area-insets.right;
+            spacing: 0px;
 
-        // body: a FrameLayout in the Java; children are stacked, the last one is on top
-        Rectangle {
-            vertical-stretch: 1;
-            clip: true;
-
-            if root.empty-text != "": Text {
-                x: 32px;
-                y: root.empty-top;
-                width: parent.width - 64px;
-                text: root.empty-text;
-                color: Theme.text2;
-                font-size: Theme.sp(15px);
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            // fab: WRAP_CONTENT x 48 dp, bottom right, 16 dp from both edges
-            KFab {
-                x: parent.width - self.width - 16px;
-                y: parent.height - self.height - 16px;
-                shown: root.fab-shown;
-                clicked => {
-                    root.new-clicked();
+            KTopBar {
+                title: root.bar-title;
+                sub: root.bar-sub;
+                left-icon: root.left-icon;
+                left-mark: root.home;
+                show-search: !root.selecting;
+                show-sort: !root.selecting;
+                left-glow-run: root.glow-run;
+                search-icon: root.searching ? "close" : "search";
+                show-chevron: root.marks-ok;
+                titles-enabled: root.marks-ok;
+                left-clicked => {
+                    root.left-clicked();
+                }
+                titles-clicked => {
+                    root.titles-clicked();
+                }
+                search-clicked => {
+                    root.search-clicked();
+                }
+                sort-clicked => {
+                    root.sort-clicked();
+                }
+                more-clicked => {
+                    root.more-clicked();
                 }
             }
 
-            // permView: opaque, so it covers everything above; 32 dp padding, content centred
-            if root.permission-missing: Rectangle {
-                background: Theme.bg;
-                TouchArea { }
-                VerticalLayout {
-                    padding: 32px;
-                    alignment: center;
-                    Text {
-                        text: "Kiln needs access to your files to open, create and unpack archives and to manage files. Nothing leaves your phone.";
-                        color: Theme.text;
-                        font-size: Theme.sp(15px);
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
+            // searchRow: padding 12 / 0 / 12 / 8, the field takes the width
+            if root.searching: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 8px;
+                KTextField {
+                    horizontal-stretch: 1;
+                    placeholder: "Search";
+                    autofocus: true;
+                    edited(text) => {
+                        root.query-edited(text);
                     }
-                    Rectangle {
-                        height: 16px;
+                }
+            }
+
+            // page.addView(line): 1 dp, k_line
+            Rectangle {
+                height: Theme.hair;
+                background: Theme.line;
+            }
+
+            // banner: 13 sp on k_warn_bg, padding 16 / 10
+            if root.banner-text != "": Rectangle {
+                height: banner-label.preferred-height + 20px;
+                background: Theme.warn-bg;
+                banner-label := Text {
+                    x: 16px;
+                    y: 10px;
+                    width: parent.width - 32px;
+                    text: root.banner-text;
+                    color: Theme.text;
+                    font-size: Theme.sp(13px);
+                    wrap: word-wrap;
+                }
+            }
+
+            // body: a FrameLayout in the Java; children are stacked, the last one is on top
+            Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+
+                list := KFileList {
+                    width: parent.width;
+                    height: parent.height;
+                    rows: root.rows;
+                    up-row: root.up-row;
+                    has-where: root.has-where;
+                    bottom-pad: root.bar-shown ? bar.height + 24px : 10px;
+                    row-clicked(i) => {
+                        root.row-clicked(i);
                     }
-                    HorizontalLayout {
+                    row-long-pressed(i) => {
+                        root.row-long-pressed(i);
+                    }
+                    scrolled(y) => {
+                        root.list-scrolled(y);
+                    }
+                }
+
+                if root.empty-text != "": Text {
+                    x: 32px;
+                    y: root.empty-top;
+                    width: parent.width - 64px;
+                    text: root.empty-text;
+                    color: Theme.text2;
+                    font-size: Theme.sp(15px);
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                // fab: WRAP_CONTENT x 48 dp, bottom right, 16 dp from both edges
+                KFab {
+                    x: parent.width - self.width - 16px;
+                    y: parent.height - self.height - 16px;
+                    shown: root.fab-shown;
+                    clicked => {
+                        root.new-clicked();
+                    }
+                }
+
+                // bottomBar: surface, 1 dp line, radius 20, 6 dp padding, 12 dp from the sides and bottom;
+                // it slides up 70 dp while it fades in (240 ms) and back out (160 ms)
+                bar := Rectangle {
+                    property <[string]> icons: ["copy", "move", "delete", "archive"];
+                    property <[string]> captions: ["Copy", "Move", "Delete", "Pack"];
+                    property <length> cell: (self.width - 12px) / 4;
+                    x: 12px;
+                    y: parent.height - self.height - 12px + (root.bar-shown ? 0px : 70px);
+                    width: parent.width - 24px;
+                    height: tile-probe.preferred-height + 12px;
+                    background: Theme.surface;
+                    border-radius: 20px;
+                    border-width: Theme.hair;
+                    border-color: Theme.line;
+                    drop-shadow-color: #00000040;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-offset-y: 4px;
+                    opacity: root.bar-shown ? 1 : 0;
+                    visible: self.opacity > 0.01;
+                    animate opacity {
+                        duration: root.bar-shown ? Theme.dur(240ms) : Theme.dur(160ms);
+                        easing: ease-out;
+                    }
+                    animate y {
+                        duration: root.bar-shown ? Theme.dur(240ms) : Theme.dur(160ms);
+                        easing: ease-out;
+                    }
+
+                    // measures a tile, so that the bar is as high as its tiles plus the 6 dp padding
+                    tile-probe := KTile {
+                        visible: false;
+                        icon: "copy";
+                        label: "Copy";
+                    }
+
+                    for caption[i] in self.captions: KTile {
+                        x: 6px + i * bar.cell;
+                        y: 6px;
+                        width: bar.cell;
+                        icon: bar.icons[i];
+                        label: caption;
+                        tint: i == 2 ? Theme.danger : i == 3 ? Theme.accent : Theme.text;
+                        clicked => {
+                            root.bar-clicked(i);
+                        }
+                    }
+                }
+
+                // permView: opaque, so it covers everything above; 32 dp padding, content centred
+                if root.permission-missing: Rectangle {
+                    background: Theme.bg;
+                    TouchArea { }
+                    VerticalLayout {
+                        padding: 32px;
                         alignment: center;
-                        KButton {
-                            text: "Allow access to files";
-                            kind: 0;
-                            clicked => {
-                                root.allow-access();
+                        Text {
+                            text: "Kiln needs access to your files to open, create and unpack archives and to manage files. Nothing leaves your phone.";
+                            color: Theme.text;
+                            font-size: Theme.sp(15px);
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Rectangle {
+                            height: 16px;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            KButton {
+                                text: "Allow access to files";
+                                kind: 0;
+                                clicked => {
+                                    root.allow-access();
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Sort by: Name, Size, Date modified, Type, then Ascending and Descending (sortSheet).
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.sort-sheet-shown;
+        title: "Sort by";
+        buttons: [];
+        kinds: [];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        cancelled => {
+            root.sort-dismissed();
+        }
+        for option[i] in ["Name", "Size", "Date modified", "Type"]: KSheetOption {
+            label: option;
+            selected: root.sort-key == i;
+            clicked => {
+                root.sort-key-chosen(i);
+            }
+        }
+        Rectangle {
+            height: 6px;
+        }
+        KSheetOption {
+            label: "Ascending";
+            selected: root.sort-asc;
+            clicked => {
+                root.sort-asc-chosen(true);
+            }
+        }
+        KSheetOption {
+            label: "Descending";
+            selected: !root.sort-asc;
+            clicked => {
+                root.sort-asc-chosen(false);
             }
         }
     }

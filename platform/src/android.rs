@@ -71,6 +71,7 @@ pub struct AndroidHost {
     activity: GlobalRef,
     cache: PathBuf,
     files: PathBuf,
+    storage: PathBuf,
     version: String,
     handler: Handler,
 }
@@ -94,11 +95,13 @@ impl AndroidHost {
             activity,
             cache: PathBuf::new(),
             files: PathBuf::new(),
+            storage: PathBuf::new(),
             version: String::new(),
             handler: Rc::default(),
         };
         host.cache = host.with_env(|env, activity| file_path(env, activity, "getCacheDir"))?;
         host.files = host.with_env(|env, activity| file_path(env, activity, "getFilesDir"))?;
+        host.storage = host.with_env(|env, _| storage_root(env))?;
         host.version = host.with_env(version_name)?;
         Ok(host)
     }
@@ -110,7 +113,9 @@ impl AndroidHost {
         f: impl FnOnce(&mut JNIEnv<'_>, &GlobalRef) -> JniResult<T>,
     ) -> JniResult<T> {
         let mut env = self.vm.attach_current_thread()?;
-        let out = f(&mut env, &self.activity);
+        // This thread never returns to Java, so the local references a call makes would pile up
+        // for ever; a local frame frees them when the call is done.
+        let out = env.with_local_frame(32, |env| f(env, &self.activity));
         if out.is_err() && env.exception_check().unwrap_or(false) {
             let _ = env.exception_clear();
         }
@@ -127,6 +132,43 @@ fn file_path(env: &mut JNIEnv<'_>, activity: &GlobalRef, method: &str) -> JniRes
         .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
         .l()?;
     Ok(PathBuf::from(java_string(env, path)?))
+}
+
+/// `Environment.getExternalStorageDirectory().getAbsolutePath()`
+fn storage_root(env: &mut JNIEnv<'_>) -> JniResult<PathBuf> {
+    let dir = env
+        .call_static_method(
+            "android/os/Environment",
+            "getExternalStorageDirectory",
+            "()Ljava/io/File;",
+            &[],
+        )?
+        .l()?;
+    let path = env
+        .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+        .l()?;
+    Ok(PathBuf::from(java_string(env, path)?))
+}
+
+/// `TimeZone.getDefault().getOffset(epochSeconds * 1000) / 1000`
+fn utc_offset(env: &mut JNIEnv<'_>, epoch_seconds: i64) -> JniResult<i32> {
+    let zone = env
+        .call_static_method(
+            "java/util/TimeZone",
+            "getDefault",
+            "()Ljava/util/TimeZone;",
+            &[],
+        )?
+        .l()?;
+    let millis = env
+        .call_method(
+            &zone,
+            "getOffset",
+            "(J)I",
+            &[JValue::Long(epoch_seconds * 1000)],
+        )?
+        .i()?;
+    Ok(millis / 1000)
 }
 
 fn java_string(env: &mut JNIEnv<'_>, object: JObject<'_>) -> JniResult<String> {
@@ -255,6 +297,15 @@ impl Host for AndroidHost {
 
     fn files_dir(&self) -> PathBuf {
         self.files.clone()
+    }
+
+    fn storage_root(&self) -> PathBuf {
+        self.storage.clone()
+    }
+
+    fn utc_offset(&self, epoch_seconds: i64) -> i32 {
+        self.with_env(|env, _| utc_offset(env, epoch_seconds))
+            .unwrap_or(0)
     }
 
     fn version_name(&self) -> String {

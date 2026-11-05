@@ -1,0 +1,101 @@
+// The file list of the main screen (MainActivity's ListView, RowView and RowAdapter).
+//
+// Only the rows that are on screen are built: the list is a Flickable whose content is as tall as
+// all the rows together, and a `for` over the few rows in view places each one at its slot. Every
+// row has the same height (a row's height is its text's, and all rows of a list have the same
+// lines), measured once on a hidden probe row.
+
+import { Theme } from "theme.slint";
+import { KListRow } from "components.slint";
+
+/// One row, as the Rust side describes it.
+export struct RowData {
+    icon: string,
+    /// 0: the accent colour, 1: the secondary text colour, 2: `tint`.
+    tint-kind: int,
+    tint: color,
+    name: string,
+    detail: string,
+    where-line: string,
+    size-text: string,
+    selected: bool,
+}
+
+export component KFileList inherits Rectangle {
+    in property <[RowData]> rows;
+    /// The ".." row above the first row (`upShown`).
+    in property <bool> up-row: false;
+    /// Search hits show the folder they live in on a third line.
+    in property <bool> has-where: false;
+    /// Room under the last row: 10 dp, more while the bottom bar covers it (`padList`).
+    in property <length> bottom-pad: 10px;
+    /// A tap; the index is into `rows`, or -1 for the ".." row.
+    callback row-clicked(int);
+    callback row-long-pressed(int);
+    /// The list was scrolled (for the "+ New" button, which hides while scrolling down).
+    callback scrolled(length);
+    out property <length> scroll-pos: -flick.content-y;
+
+    property <length> row-h: probe.preferred-height;
+    property <int> total: root.rows.length + (root.up-row ? 1 : 0);
+    property <int> first: Math.max(0, Math.floor(-flick.content-y / root.row-h) - 1);
+    property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
+
+    background: Theme.bg;
+    clip: true;
+
+    /// Scroll to the very top (a new folder always starts there).
+    public function scroll-top() {
+        flick.content-y = 0px;
+    }
+
+    /// Scroll to `y` dp from the top (Back returns to where the folder was left).
+    public function scroll-to(y: length) {
+        flick.content-y = -y;
+    }
+
+    // The row that gives every row its height; never seen.
+    probe := KListRow {
+        visible: false;
+        y: -1000px;
+        width: root.width;
+        name: "Wg";
+        detail: "Wg";
+        where-line: root.has-where ? "Wg" : "";
+        size-text: "1 B";
+    }
+
+    flick := Flickable {
+        content-width: root.width;
+        content-height: root.total * root.row-h + root.bottom-pad;
+        changed content-y => {
+            root.scrolled(-self.content-y);
+        }
+
+        for slot in root.shown: KListRow {
+            property <int> at: root.first + slot;
+            property <int> idx: self.at - (root.up-row ? 1 : 0);
+            property <bool> is-up: root.up-row && self.at == 0;
+            property <RowData> d: root.rows[self.idx];
+            x: 0px;
+            y: self.at * root.row-h;
+            width: root.width;
+            height: root.row-h;
+            icon: self.is-up ? "up_dir" : self.d.icon;
+            icon-tint: self.is-up || self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;
+            name: self.is-up ? ".." : self.d.name;
+            detail: self.is-up ? "" : self.d.detail;
+            where-line: self.is-up ? "" : self.d.where-line;
+            size-text: self.is-up ? "" : self.d.size-text;
+            selected: !self.is-up && self.d.selected;
+            clicked => {
+                root.row-clicked(self.is-up ? -1 : self.idx);
+            }
+            long-pressed => {
+                if (!self.is-up) {
+                    root.row-long-pressed(self.idx);
+                }
+            }
+        }
+    }
+}

@@ -3,23 +3,30 @@
 //!
 //! This crate knows nothing about Android. [`run`] is the whole app: it builds the window, applies
 //! the system's look, starts the engine on a worker thread, and runs Slint's event loop until the
-//! app closes. Everything it touches belongs to the UI thread, except the engine start-up, whose
-//! result is posted back with `slint::invoke_from_event_loop`.
+//! app closes. Everything it touches belongs to the UI thread, except the engine start-up and the
+//! folder listings, whose results are posted back with `slint::invoke_from_event_loop`.
 
 #![forbid(unsafe_code)]
 
+mod browse_ui;
+pub mod browser;
 pub mod crash;
 pub mod engine;
+pub mod fmt;
 pub mod host;
+pub mod icons;
 pub mod prefs;
+pub mod sniff;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use kiln_ui::{MainWindow, Theme};
-use slint::ComponentHandle;
+use kiln_ui::{MainWindow, RowData, Theme};
+use slint::{ComponentHandle, ModelRc, VecModel};
 
+use crate::browser::{Browser, SortKey};
 pub use crate::host::{Event, Host, Look};
 use crate::prefs::Prefs;
 
@@ -30,6 +37,7 @@ const ANIM_SCALE: [f32; 4] = [0.0, 0.6, 0.85, 1.2];
 #[derive(Default)]
 struct Status {
     engine_up: bool,
+    engine_error: Option<String>,
     loaded_once: bool,
 }
 
@@ -38,12 +46,33 @@ struct App {
     host: Rc<dyn Host>,
     prefs: Prefs,
     status: RefCell<Status>,
+    browser: RefCell<Browser>,
+    model: Rc<VecModel<RowData>>,
+    /// Offsets of the phone's time zone from UTC, by day since 1970, so that a folder of
+    /// thousands of files asks the phone once per day and not once per file.
+    offsets: RefCell<HashMap<i64, i32>>,
+    toast_gen: Cell<u64>,
+    /// "Loading..." is only shown when a folder is slow (700 ms).
+    loading_hint: Cell<bool>,
+    /// Where the list was last scrolled to, and whether "+ New" is hidden because of it.
+    scroll_last: Cell<f32>,
+    fab_hidden: Cell<bool>,
+    was_home: Cell<bool>,
+    last_dir: RefCell<PathBuf>,
 }
 
 thread_local! {
-    /// The running app, for code that arrives on the UI thread without a handle to it (the engine
-    /// start-up's result).
+    /// The running app, for code that arrives on the UI thread without a handle to it (a result
+    /// from a worker thread, a timer).
     static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with the running app, if there still is one.
+fn app_do(f: impl FnOnce(&Rc<App>)) {
+    let app = APP.with(|a| a.borrow().clone());
+    if let Some(app) = app {
+        f(&app);
+    }
 }
 
 /// Run the app until it is closed. Call it on the UI thread, after Slint's backend is set up.
@@ -62,9 +91,20 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         prefs: Prefs::load(&prefs_file(&files)),
         host: host.clone(),
         status: RefCell::default(),
+        browser: RefCell::new(Browser::new(host.storage_root())),
+        model: Rc::new(VecModel::default()),
+        offsets: RefCell::default(),
+        toast_gen: Cell::new(0),
+        loading_hint: Cell::new(false),
+        scroll_last: Cell::new(0.0),
+        fab_hidden: Cell::new(false),
+        was_home: Cell::new(false),
+        last_dir: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
+    app.read_settings();
+    app.ui.set_rows(ModelRc::from(app.model.clone()));
     app.apply_look();
     app.refresh_permission();
     app.wire();
@@ -85,7 +125,8 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
     app.ui.run()
 }
 
-/// Where the Java app kept its settings, which this app reads too (`SharedPreferences` "kiln").
+/// Where the Java app kept its settings, which this app reads and writes too
+/// (`SharedPreferences` "kiln").
 fn prefs_file(files_dir: &Path) -> PathBuf {
     let data = files_dir.parent().unwrap_or(files_dir);
     data.join("shared_prefs").join("kiln.xml")
@@ -97,15 +138,22 @@ fn start_engine(cache: PathBuf) {
         let result = engine::init(&cache);
         // The window may be gone by now; then there is nobody to tell.
         let _ = slint::invoke_from_event_loop(move || {
-            let app = APP.with(|a| a.borrow().clone());
-            if let Some(app) = app {
-                app.engine_ready(result);
-            }
+            app_do(|app| app.engine_ready(result));
         });
     });
 }
 
 impl App {
+    /// `onCreate`: the settings the browser starts with.
+    fn read_settings(&self) {
+        let mut b = self.browser.borrow_mut();
+        b.sort_key = SortKey::from_code(self.prefs.int("sort_key", 0));
+        b.sort_asc = self.prefs.bool("sort_asc", true);
+        b.show_all = self.prefs.bool("show_all", true);
+        b.show_hidden = self.prefs.bool("show_hidden", false);
+        b.up_row_on = self.prefs.bool("up_row", true);
+    }
+
     /// Hand the system's colour scheme, density and font scale, and the user's animation speed,
     /// to the `Theme` global that every component reads.
     fn apply_look(&self) {
@@ -129,13 +177,17 @@ impl App {
                 ui.set_sheet_shown(false);
             }
         });
+        self.wire_browser();
     }
 
     fn on_event(&self, event: Event) {
         match event {
             // The user may just have granted access in Settings.
             Event::Resumed => self.refresh_permission(),
-            Event::ConfigChanged => self.apply_look(),
+            Event::ConfigChanged => {
+                self.apply_look();
+                self.render_rows();
+            }
             Event::Paused | Event::LowMemory => {}
         }
     }
@@ -145,12 +197,20 @@ impl App {
     fn refresh_permission(&self) {
         let ok = self.host.has_all_files_access();
         self.ui.set_permission_missing(!ok);
-        self.ui.set_marks_ok(ok);
-        let mut status = self.status.borrow_mut();
-        if ok && status.engine_up && !status.loaded_once {
-            status.loaded_once = true;
-            // Phase B loads the start folder here. Until the file list exists the body is empty.
-            self.ui.set_empty_text("".into());
+        self.browser.borrow_mut().storage_ok = ok;
+        let first = {
+            let mut status = self.status.borrow_mut();
+            let first = ok && status.engine_up && !status.loaded_once;
+            if first {
+                status.loaded_once = true;
+            }
+            first
+        };
+        if first {
+            let dir = self.browser.borrow().cwd.clone();
+            self.load_dir(dir, false);
+        } else {
+            self.render_chrome();
         }
     }
 
@@ -160,9 +220,10 @@ impl App {
                 self.status.borrow_mut().engine_up = true;
                 self.refresh_permission();
             }
-            Err(e) => self
-                .ui
-                .set_empty_text(format!("Kiln couldn't start: {e}").into()),
+            Err(e) => {
+                self.status.borrow_mut().engine_error = Some(e);
+                self.render_chrome();
+            }
         }
     }
 }

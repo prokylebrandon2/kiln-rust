@@ -193,6 +193,48 @@ the body scrolls when it does not fit; 14 dp above the buttons. One or two butto
 (10 dp apart) if both labels fit, otherwise they stack 8 dp apart with the main action on top.
 Scrim 50 % black; a tap on the scrim cancels when the sheet is cancelable.
 
+## Main screen, Phase B part 1: the file list (`MainActivity`, `RowView`, `RowAdapter`)
+
+Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust: `app/src/browser.rs`
+(state and rules), `app/src/browse_ui.rs` (what is shown, what taps do).
+
+- **Row.** Padding 16 / 9, minimum height 58 dp, 12 dp between tile, text and size. The tile is
+  40 dp, radius 10, k_chip, with a 22 dp icon (9 dp in). Name 16 sp (ellipsised in the middle),
+  date line 12 sp k_text2, in a search a third line 12 sp k_accent (ellipsised at the start),
+  size 13 sp k_text2 on the right. A selected row is tinted k_sel and shows a check in the tile.
+  Every row of a list is as high as the first one (all rows have the same lines), so the list is a
+  `Flickable` that builds only the rows in view (plus 3) at `index * row height`.
+- **Row text.** Folder: `<date>` and `<n> item(s)`; encrypted set: `Encrypted set · <date>`;
+  archive: `Archive · <date>` or `Encrypted archive · <date>` and the size; file: date
+  and size. Icon colours: folders and sets k_accent, archives k_text2, files by type (`Icons`).
+- **".." row.** Shown when `up_row` is on, the folder is not the storage root, access is granted
+  and no search is in progress. Tapping it is Back. The empty-folder line then sits 96 dp down
+  instead of 56 dp.
+- **Empty line (`empty`).** "This folder is empty.", or with "show all files" off "No Kiln archives
+  here.\nOpen the menu to show all files."; "No matches." in a search; "Loading..." only after
+  700 ms; "Starting..." until the engine is up; "Kiln couldn't start: <why>".
+- **Selection.** Long press selects, taps toggle while anything is selected. The title becomes
+  "<n> selected", the left button a cross, sort and search are hidden. The bar (Copy, Move, Delete,
+  Pack) is a k_surface card, 1 dp k_line outline, radius 20, 6 dp padding, 12 dp from the sides and
+  bottom; it slides up 70 dp while fading in (240 ms) and out (160 ms), both scaled by the
+  animation speed. Delete is k_danger, Pack k_accent.
+- **"+ New".** 48 dp high, 16 dp from the bottom right, hidden while the list scrolls down by more
+  than 6 dp and shown again on the way up; always shown at the top.
+- **Search.** The magnifier turns into a cross; a row under the top bar (padding 12 / 0 / 12 / 8)
+  holds the field ("Search", focused on opening). The words filter the folder's names (every word
+  must occur, case-insensitive). Opening another folder leaves the search.
+- **Sort sheet.** "Sort by": Name, Size, Date modified, Type; then Ascending, Descending. Folders
+  always come first, ties are by name. The choice is saved to `sort_key` / `sort_asc`.
+- **Back (`onBackPressed`).** Leave selection, leave search, go up a folder, then at the storage
+  root "Tap Back again to exit" and a second Back within 2 s leaves. Slint's Android backend
+  reports Back as a key press (`Key.Back`); the page is wrapped in a `FocusScope` so that a press
+  the search field ignores reaches it. Leaving an archive comes with the archive part.
+- **No grid view, breadcrumbs or view toggle.** The Phase B brief lists them, but `MainActivity`
+  has none (its `grid` is a settings layout), so none is built.
+- **Not yet in this part** (the Java has them; see the Phase B list): the pull-down panel,
+  bookmarks, the menus and every dialog, file operations, thumbnails, opening files, archives, the
+  service notification. Tapping a file says "Not in this build yet".
+
 ## Known differences from the Java
 
 - **Toast.** Android draws its own toast; `KToast` approximates its look and uses its timing.

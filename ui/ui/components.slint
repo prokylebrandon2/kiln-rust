@@ -416,6 +416,8 @@ export component KTextField inherits Rectangle {
     in property <string> placeholder;
     in property <bool> secret: false;
     in-out property <string> text;
+    /// Take the keyboard focus as soon as the field exists (Sheet.keyboard(), the search box).
+    in property <bool> autofocus: false;
     callback edited(string);
     callback accepted(string);
     min-height: 44px;
@@ -424,6 +426,11 @@ export component KTextField inherits Rectangle {
     border-radius: 10px;
     border-width: Theme.hair;
     border-color: Theme.line;
+    init => {
+        if (root.autofocus) {
+            input.focus();
+        }
+    }
 
     if input.text == "": Text {
         x: 14px;

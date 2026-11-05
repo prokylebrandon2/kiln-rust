@@ -38,6 +38,12 @@ pub trait Host {
     fn cache_dir(&self) -> PathBuf;
     /// The app's private files folder (`Context.getFilesDir()`).
     fn files_dir(&self) -> PathBuf;
+    /// The top of the phone's own storage (`Environment.getExternalStorageDirectory()`), where
+    /// the file browser starts.
+    fn storage_root(&self) -> PathBuf;
+    /// How many seconds the phone's time zone is ahead of UTC at a time given in epoch seconds
+    /// (`TimeZone.getDefault().getOffset(ms)`), for the dates in the file list.
+    fn utc_offset(&self, epoch_seconds: i64) -> i32;
     /// The version shown in crash reports and About.
     fn version_name(&self) -> String;
     /// The current colour scheme, density and font scale.

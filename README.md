@@ -230,7 +230,8 @@ and custom/fallback scripts.
 - The Rust engine is built into the APK.
 - Removed all references to unsupported archive formats (KLN9, KLN2): such files are now ordinary files.
 
-## 5.0 (build 0)
+## 5.0 (build 1)
 
 - Properties: the file and folder counts no longer get stuck at "1..." when several folders (or files and folders) are selected.
 - Properties of a single file now shows SHA-256 below the MD5 (both computed in one read).
+- Folder pictograms in the file list now sit on the right side of the folder, like ZArchiver (dialogs and the icon picker keep them centred).

@@ -23,15 +23,20 @@ jobs:
           gradle-version: '8.7'
 
       # The same build step needs an Android SDK *platform* (android.jar) and the build-tools (D8).
-      # Without a platform it stops with "No Android platforms found", so install them explicitly
-      # and say where the SDK is for build scripts that look at ANDROID_SDK_ROOT.
+      # Without a platform it stops with "No Android platforms found".
       - name: Install the Android SDK platform and build-tools
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platforms;android-34
+            build-tools;34.0.0
+
+      # Slint's Android backend finds android.jar through these variables, so name it explicitly.
+      - name: Point Slint's build script at android.jar
         run: |
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" "platforms;android-34" "build-tools;34.0.0"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          ls "$ANDROID_HOME/platforms"
+          jar="$(ls "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -n 1)"
+          echo "android.jar: $jar"
+          echo "ANDROID_JAR=$jar" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -71,7 +76,7 @@ jobs:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
 
-      # Cargo.lock is not committed with the new dependencies: hand back the one CI resolved.
+      # Hand back the Cargo.lock CI resolved, in case the committed one is out of date.
       - uses: actions/upload-artifact@v4
         with:
           name: cargo-lock

@@ -125,6 +125,17 @@ final class Thumbs {
                     : Ui.dp(iv.getContext(), 9);
         }
         iv.setPadding(p, p, p, p);
+        if (bare && Icons.tight(icon)) {
+            // a folder: the folder in its colour with a small white sheet showing at the top
+            Context c = iv.getContext();
+            android.graphics.drawable.Drawable base = c.getDrawable(icon).mutate();
+            base.setTintList(android.content.res.ColorStateList.valueOf(color));
+            android.graphics.drawable.Drawable paper = c.getDrawable(R.drawable.ic_paper);
+            iv.setImageTintList(null);
+            iv.setImageDrawable(new android.graphics.drawable.LayerDrawable(
+                    new android.graphics.drawable.Drawable[]{base, paper}));
+            return;
+        }
         iv.setImageResource(icon);
         Ui.tint(iv, color);
     }

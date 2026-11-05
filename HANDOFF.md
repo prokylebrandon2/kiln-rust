@@ -364,3 +364,4 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
 - edit31 rows: list icons are bare (no tile) and the artwork fills its box. Folder drawables (ic_folder, ic_d_*) and tight copies of the file icons
   (res/drawable/*_t.xml, mapped by Icons.row()) are cut to their artwork, so there is no blank margin; the box is a square of 88% of the row
   height (never taller than the row), ImageView FIT_CENTER so it scales up. Previews keep a rounded tile; the selection tick keeps a tile. NOT COMPILED.
+- edit32 rows: folders in the list get a small white sheet (res/drawable/ic_paper.xml) layered on the tinted folder (Thumbs.showIcon, bare + Icons.tight); the ".." icon (ic_up_dir_t) is a folder with an up arrow cut out. NOT COMPILED.

@@ -125,21 +125,11 @@ final class Thumbs {
                     : Ui.dp(iv.getContext(), 9);
         }
         iv.setPadding(p, p, p, p);
-        if (bare && Icons.tight(icon)) {
-            // a folder: the folder in its colour with a small white sheet showing at the top
-            Context c = iv.getContext();
-            android.graphics.drawable.Drawable base = c.getDrawable(icon);
-            android.graphics.drawable.Drawable paper = c.getDrawable(R.drawable.ic_paper);
-            android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
-                    new android.graphics.drawable.Drawable[]{base, paper});
-            // ImageView mutates a LayerDrawable, which rebuilds its layers and drops anything set on them
-            // beforehand, so mutate first and colour the layer that is actually shown
-            ld.mutate();
-            android.graphics.drawable.Drawable shown = ld.getDrawable(0);
-            shown.setTintList(null);                  // the vector's own tint attribute would win over the filter
-            shown.setColorFilter(new android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN));
+        if (bare && (Icons.tight(icon) || icon == R.drawable.ic_up_dir_t)) {
+            // a folder, drawn as one icon with its own shades and paper (see FolderDrawable)
+            boolean up = icon == R.drawable.ic_up_dir_t;
             iv.setImageTintList(null);
-            iv.setImageDrawable(ld);
+            iv.setImageDrawable(new FolderDrawable(iv.getContext(), up ? R.drawable.ic_folder : icon, color, up));
             return;
         }
         iv.setImageResource(icon);

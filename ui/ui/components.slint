@@ -182,7 +182,7 @@ export component PressArea inherits Rectangle {
 export component KEllipsisText inherits Rectangle {
     in property <string> text;
     in property <length> font-size: Theme.sp(16px);
-    in property <color> color: Theme.text;
+    in property <color> tint: Theme.text;
     in property <int> font-weight: 400;
     in property <int> mode: 1;
     in property <color> cap: Theme.bg;
@@ -199,7 +199,7 @@ export component KEllipsisText inherits Rectangle {
         y: 0px;
         width: root.mode == 0 ? root.width : self.preferred-width;
         text: root.text;
-        color: root.color;
+        color: root.tint;
         font-size: root.font-size;
         font-weight: root.font-weight;
         wrap: no-wrap;
@@ -219,7 +219,7 @@ export component KEllipsisText inherits Rectangle {
             y: 0px;
             width: self.preferred-width;
             text: root.text;
-            color: root.color;
+            color: root.tint;
             font-size: root.font-size;
             font-weight: root.font-weight;
             wrap: no-wrap;
@@ -230,7 +230,7 @@ export component KEllipsisText inherits Rectangle {
             background: root.cap;
             Text {
                 text: "…";
-                color: root.color;
+                color: root.tint;
                 font-size: root.font-size;
                 font-weight: root.font-weight;
                 horizontal-alignment: left;
@@ -248,7 +248,7 @@ export component KEllipsisText inherits Rectangle {
                 y: 0px;
                 width: self.preferred-width;
                 text: root.text;
-                color: root.color;
+                color: root.tint;
                 font-size: root.font-size;
                 font-weight: root.font-weight;
                 wrap: no-wrap;
@@ -260,7 +260,7 @@ export component KEllipsisText inherits Rectangle {
             background: root.cap;
             Text {
                 text: "…";
-                color: root.color;
+                color: root.tint;
                 font-size: root.font-size;
                 font-weight: root.font-weight;
                 horizontal-alignment: center;
@@ -276,7 +276,7 @@ export component KEllipsisText inherits Rectangle {
                 y: 0px;
                 width: self.preferred-width;
                 text: root.text;
-                color: root.color;
+                color: root.tint;
                 font-size: root.font-size;
                 font-weight: root.font-weight;
                 wrap: no-wrap;
@@ -541,7 +541,7 @@ export component KTopBar inherits Rectangle {
                     KEllipsisText {
                         text: root.sub;
                         font-size: Theme.sp(12px);
-                        color: Theme.text2;
+                        tint: Theme.text2;
                         mode: 2;
                         cap: Theme.bg;
                         visible: root.sub != "";
@@ -646,13 +646,13 @@ export component KListRow inherits Rectangle {
             if root.detail != "": KEllipsisText {
                 text: root.detail;
                 font-size: Theme.sp(12px);
-                color: Theme.text2;
+                tint: Theme.text2;
                 mode: 0;
             }
             if root.where-line != "": KEllipsisText {
                 text: root.where-line;
                 font-size: Theme.sp(12px);
-                color: Theme.accent;
+                tint: Theme.accent;
                 mode: 2;
                 cap: root.selected ? Theme.sel-solid : Theme.bg;
             }
@@ -1033,7 +1033,7 @@ export component KSheet inherits Rectangle {
                 height: 12px;
             }
             Flickable {
-                viewport-height: body.preferred-height;
+                content-height: body.preferred-height;
                 min-height: Math.min(72px, body.preferred-height);
                 preferred-height: body.preferred-height;
                 body := VerticalLayout {

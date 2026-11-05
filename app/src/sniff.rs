@@ -70,12 +70,20 @@ fn at(b: &[u8], off: usize, v: &[u8]) -> bool {
 /// The type a file's first bytes announce, if they announce one.
 pub fn magic_mime(b: &[u8]) -> Option<&'static str> {
     let table: [(usize, &[u8], &str); 12] = [
-        (0, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "image/png"),
+        (
+            0,
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            "image/png",
+        ),
         (0, &[0xFF, 0xD8, 0xFF], "image/jpeg"),
         (0, b"GIF87a", "image/gif"),
         (0, b"GIF89a", "image/gif"),
         (0, b"%PDF-", "application/pdf"),
-        (0, &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C], "application/x-7z-compressed"),
+        (
+            0,
+            &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C],
+            "application/x-7z-compressed",
+        ),
         (0, &[0x1F, 0x8B], "application/gzip"),
         (0, b"Rar!", "application/vnd.rar"),
         (0, b"OggS", "audio/ogg"),

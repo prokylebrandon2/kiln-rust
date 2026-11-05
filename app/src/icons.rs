@@ -29,8 +29,9 @@ pub fn for_file(name: &str) -> (&'static str, Option<u32>) {
         | "tiff" | "ico" | "raw" | "dng" => ("image", Some(IMAGE)),
         "mp3" | "m4a" | "flac" | "ogg" | "oga" | "opus" | "wav" | "aac" | "wma" | "mka" | "amr"
         | "mid" | "midi" => ("music", Some(AUDIO)),
-        "mp4" | "mkv" | "webm" | "3gp" | "mov" | "avi" | "m4v" | "wmv" | "flv" | "mpg"
-        | "mpeg" => ("video", Some(VIDEO)),
+        "mp4" | "mkv" | "webm" | "3gp" | "mov" | "avi" | "m4v" | "wmv" | "flv" | "mpg" | "mpeg" => {
+            ("video", Some(VIDEO))
+        }
         "pdf" => ("f_pdf", Some(PDF)),
         "doc" | "docx" | "odt" | "rtf" | "pages" | "dot" | "dotx" => ("f_doc", Some(DOC)),
         "xls" | "xlsx" | "ods" | "csv" | "tsv" | "numbers" | "xlsm" => ("f_sheet", Some(SHEET)),
@@ -44,9 +45,7 @@ pub fn for_file(name: &str) -> (&'static str, Option<u32>) {
         "sh" | "bash" | "zsh" | "fish" | "bat" | "cmd" | "ps1" => ("f_term", Some(TERM)),
         "pem" | "crt" | "cer" | "der" | "p12" | "pfx" | "keystore" | "jks" | "gpg" | "asc"
         | "pub" => ("f_key", Some(KEY)),
-        "epub" | "mobi" | "azw" | "azw3" | "fb2" | "cbz" | "cbr" | "djvu" => {
-            ("f_book", Some(BOOK))
-        }
+        "epub" | "mobi" | "azw" | "azw3" | "fb2" | "cbz" | "cbr" | "djvu" => ("f_book", Some(BOOK)),
         "iso" | "img" | "dmg" | "vhd" | "vmdk" | "bin" => ("f_disk", Some(DISK)),
         "exe" | "dll" | "so" | "dex" | "o" | "class" | "elf" => ("f_bin", Some(DISK)),
         "txt" | "log" | "md" | "rst" | "srt" | "vtt" | "nfo" => ("f_text", None),

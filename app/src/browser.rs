@@ -386,7 +386,11 @@ pub fn sort_rows(rows: &mut [Row], key: SortKey, asc: bool) {
     rows.sort_by(|a, b| {
         let (fa, fb) = (a.folder(), b.folder());
         if fa != fb {
-            return if fa { Ordering::Less } else { Ordering::Greater };
+            return if fa {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
         }
         let by_key = match key {
             SortKey::Size => a.size.cmp(&b.size),

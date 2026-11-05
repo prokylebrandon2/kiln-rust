@@ -349,7 +349,11 @@ mod tests {
         let mut i = 0;
         while out.len() < len {
             out.extend_from_slice(&vocab[(picks[i] as usize * 7 + i) % 300]);
-            out.push(if picks[i].is_multiple_of(11) { b'\n' } else { b' ' });
+            out.push(if picks[i].is_multiple_of(11) {
+                b'\n'
+            } else {
+                b' '
+            });
             i = (i + 1) % picks.len();
         }
         out.truncate(len);

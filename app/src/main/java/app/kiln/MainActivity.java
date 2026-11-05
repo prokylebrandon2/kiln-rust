@@ -556,9 +556,9 @@ public class MainActivity extends Activity {
             }
             if (h > listRoom) {
                 listRoom = h;
-                int np = calcRowPx();
-                if (np != rowPx) {
-                    rowPx = np;
+                int newRow = calcRowPx();
+                if (newRow != rowPx) {
+                    rowPx = newRow;
                     list.post(() -> adapter.notifyDataSetChanged());
                 }
             }

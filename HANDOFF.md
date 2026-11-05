@@ -361,3 +361,4 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
 - edit26 rows: row height = the list's real height (max seen) / rows chosen, not a screen-size guess (16 gave ~17 rows). Icon tile, glyph (60%
   of tile), text sizes and paddings all scale from the row height (MainActivity.RowView.fit), so every count 10-24 has its own proportions.
   Settings > Rows on screen is a number wheel (NumberPicker) 10..24 with Set / Cancel. NOT COMPILED; check on phone: 16 rows should match ZArchiver.
+- edit28 rows: list icons are drawn bare (no tile behind, glyph fills the box, 3% padding); the tile comes back for previews and the selection tick. Icon box = row height - 4 dp (28..64 dp). NOT COMPILED.

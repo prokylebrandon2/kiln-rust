@@ -71,11 +71,16 @@ final class Thumbs {
 
     /** Shows the plain icon at once, then swaps in a preview if there is one to show. */
     static void bind(final ImageView iv, final File f, int icon, int iconColor, boolean wantPreview) {
+        bind(iv, f, icon, iconColor, wantPreview, false);
+    }
+
+    /** `bare`: the plain icon is drawn on its own, filling the box, with no tile behind it. */
+    static void bind(final ImageView iv, final File f, int icon, int iconColor, boolean wantPreview, boolean bare) {
         final Context c = iv.getContext();
         final int kind = kindOf(f.getName());
         final String key = f.getPath() + "|" + f.lastModified();
         iv.setTag(key);
-        showIcon(iv, icon, iconColor);
+        showIcon(iv, icon, iconColor, bare);
         if (!wantPreview || !previewable(kind) || (kind == IMAGE && f.length() > IMAGE_MAX)) return;
         Bitmap hit = CACHE.get(key);
         if (hit != null) {
@@ -101,18 +106,31 @@ final class Thumbs {
     }
 
     static void showIcon(ImageView iv, int icon, int color) {
+        showIcon(iv, icon, color, false);
+    }
+
+    static void showIcon(ImageView iv, int icon, int color, boolean bare) {
         iv.animate().cancel();
         iv.setAlpha(1f);
         iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         ViewGroup.LayoutParams lp = iv.getLayoutParams();
-        int p = lp != null && lp.width > 0 ? Math.round(lp.width * 0.2f)    // the glyph is 60% of the tile at any size
-                : Ui.dp(iv.getContext(), 9);
+        int w = lp != null && lp.width > 0 ? lp.width : 0;
+        int p;
+        if (bare) {
+            iv.setBackground(null);                                          // no tile: the glyph fills the box
+            p = w > 0 ? Math.round(w * 0.03f) : 0;
+        } else {
+            if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
+            p = w > 0 ? Math.round(w * 0.2f)                                 // the glyph is 60% of the tile at any size
+                    : Ui.dp(iv.getContext(), 9);
+        }
         iv.setPadding(p, p, p, p);
         iv.setImageResource(icon);
         Ui.tint(iv, color);
     }
 
     private static void showBitmap(ImageView iv, Bitmap b) {
+        if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
         iv.setImageTintList(null);
         iv.setPadding(0, 0, 0, 0);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);

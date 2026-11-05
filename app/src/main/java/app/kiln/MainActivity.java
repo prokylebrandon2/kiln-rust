@@ -726,7 +726,7 @@ public class MainActivity extends Activity {
             fitH = h;
             setMinimumHeight(h);
             float hd = h / getResources().getDisplayMetrics().density;
-            int ic = dp(Math.round(Math.max(26f, Math.min(56f, hd - 9f))));
+            int ic = dp(Math.round(Math.max(28f, Math.min(64f, hd - 4f))));   // bare glyphs: nearly the full row height
             LayoutParams lp = (LayoutParams) icon.getLayoutParams();
             lp.width = ic;
             lp.height = ic;
@@ -794,7 +794,7 @@ public class MainActivity extends Activity {
                     int pc = Defaults.folderColor(getContext(), r.path);
                     if (pc != 0) base = pc;                   // keep the chosen folder colour
                 }
-                Thumbs.bind(icon, f, r.icon, base, previewsOn);
+                Thumbs.bind(icon, f, r.icon, base, previewsOn, true);
             } else {
                 icon.setTag(null);
                 int tint = r.folder || r.dir || r.up ? accent
@@ -804,7 +804,7 @@ public class MainActivity extends Activity {
                     int picked = Defaults.folderColor(getContext(), r.dirPath);
                     if (picked != 0) tint = picked;               // a colour chosen for this folder
                 }
-                Thumbs.showIcon(icon, r.icon, tint);
+                Thumbs.showIcon(icon, r.icon, tint, true);
             }
             if (selected != wasSelected) {                    // a little pop when selection flips
                 icon.setScaleX(0.7f);

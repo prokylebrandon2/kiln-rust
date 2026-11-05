@@ -271,6 +271,11 @@ impl App {
             kind: BtnKind::Filled,
             click: Some(click),
         });
+        let end = initial
+            .rfind('.')
+            .filter(|&dot| dot > 0)
+            .unwrap_or(initial.len());
+        self.ui.set_dlg_select_end(end as i32);
         self.show_dialog(spec);
     }
 }

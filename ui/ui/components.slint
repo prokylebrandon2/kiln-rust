@@ -418,6 +418,8 @@ export component KTextField inherits Rectangle {
     in-out property <string> text;
     /// Take the keyboard focus as soon as the field exists (Sheet.keyboard(), the search box).
     in property <bool> autofocus: false;
+    /// Select from the start to this byte offset when the field appears (0 = select nothing).
+    in property <int> select-end: 0;
     callback edited(string);
     callback accepted(string);
     min-height: 44px;
@@ -429,6 +431,9 @@ export component KTextField inherits Rectangle {
     init => {
         if (root.autofocus) {
             input.focus();
+        }
+        if (root.select-end > 0) {
+            input.set-selection-offsets(0, root.select-end);
         }
     }
 

@@ -306,8 +306,8 @@ impl App {
             let one = b.only_selected().map(|r| r.kind);
             out.push(select_all);
             out.push(soon("file", "Properties"));
-            if one.is_some() {
-                out.push(soon("edit", "Rename"));
+            if b.only_selected().is_some_and(|r| !r.key.contains('/')) {
+                out.push(opt("edit", "Rename", App::rename_selected));
             }
             if one == Some(Kind::Dir) {
                 out.push(soon("folder", "Icon and color..."));
@@ -543,6 +543,35 @@ impl App {
             if let Err(e) = std::fs::File::create_new(&target) {
                 return Some(io_text(&e));
             }
+            app.reload_here();
+            None
+        });
+    }
+
+    /// `renameSheet` (the Priv branch for protected folders comes with Phase C).
+    fn rename_selected(&self) {
+        let old = {
+            let b = self.browser.borrow();
+            match b.only_selected() {
+                Some(row) => row.key.clone(),
+                None => return,
+            }
+        };
+        let initial = old.clone();
+        self.name_sheet("Rename", &initial, "Rename", move |app, name| {
+            let (from, target) = {
+                let b = app.browser.borrow();
+                (b.cwd.join(&old), b.cwd.join(name))
+            };
+            if target.exists() {
+                return Some("That name is taken".to_string());
+            }
+            if std::fs::rename(&from, &target).is_err() {
+                return Some("Couldn't rename".to_string());
+            }
+            let old_path = from.to_string_lossy();
+            let new_path = target.to_string_lossy();
+            app.prefs.move_folder_icons(&old_path, &new_path);
             app.reload_here();
             None
         });

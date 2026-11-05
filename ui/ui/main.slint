@@ -71,6 +71,7 @@ export component MainWindow inherits Window {
     in-out property <string> dlg-text;
     /// A line under the field in the danger colour (EditText.setError). Typing clears it.
     in-out property <string> dlg-error;
+    in property <int> dlg-select-end: 0;
     in property <[string]> dlg-buttons;
     in property <[int]> dlg-kinds;
     in property <bool> dlg-cancelable: true;
@@ -516,6 +517,7 @@ export component MainWindow inherits Window {
         if root.dlg-has-field && root.dlg-shown: KTextField {
             placeholder: root.dlg-placeholder;
             autofocus: true;
+            select-end: root.dlg-select-end;
             text <=> root.dlg-text;
             edited => {
                 root.dlg-error = "";

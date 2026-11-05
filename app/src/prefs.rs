@@ -159,6 +159,39 @@ impl Prefs {
             .collect()
     }
 
+    /// `Defaults.moveFolderIcons`: a folder was renamed or moved, so its icon and colour (and
+    /// those of its subfolders) follow it.
+    pub fn move_folder_icons(&self, from: &str, to: &str) {
+        self.move_paths("folder_icons", from, to);
+        self.move_paths("folder_colors", from, to);
+    }
+
+    /// Re-key the entries of the JSON object stored under `key` that are `from` or below it.
+    fn move_paths(&self, key: &str, from: &str, to: &str) {
+        let text = self.string(key, "{}");
+        let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(&text) else {
+            return;
+        };
+        let under = format!("{from}/");
+        let moving: Vec<String> = map
+            .keys()
+            .filter(|k| k.as_str() == from || k.starts_with(&under))
+            .cloned()
+            .collect();
+        if moving.is_empty() {
+            return;
+        }
+        let mut moved = Vec::new();
+        for k in moving {
+            if let Some(v) = map.remove(&k) {
+                moved.push((format!("{to}{}", &k[from.len()..]), v));
+            }
+        }
+        map.extend(moved);
+        let text = Value::Object(map).to_string();
+        self.set_string(key, &text.replace('/', "\\/"));
+    }
+
     fn put(&self, kind: &str, key: &str, value: &str) {
         self.values
             .borrow_mut()

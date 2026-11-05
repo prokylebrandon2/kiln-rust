@@ -360,5 +360,7 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
   Needs a phone check: Icon and color open + Cancel, Properties, Open options, Rename, Recycle bin (with items and empty).
 - edit26 rows: row height = the list's real height (max seen) / rows chosen, not a screen-size guess (16 gave ~17 rows). Icon tile, glyph (60%
   of tile), text sizes and paddings all scale from the row height (MainActivity.RowView.fit), so every count 10-24 has its own proportions.
-  Settings > Rows on screen is a number wheel (NumberPicker) 10..24 with Set / Cancel. NOT COMPILED; check on phone: 16 rows should match ZArchiver.
-- edit29 rows: list icon tile is back (rounded square). Folder drawables (ic_folder, ic_d_*) have a tight 20x16 viewport (no margin) and Icons.tight() gives them 10% tile padding (others 20%), so the folder fills the tile left to right. NOT COMPILED.
+  Settings > Rows on screen is a number wheel (NumberPicker) 10..24 with Set / Cancel. NOT COMPILED; check on phone: 16 rows should fill the list.
+- edit31 rows: list icons are bare (no tile) and the artwork fills its box. Folder drawables (ic_folder, ic_d_*) and tight copies of the file icons
+  (res/drawable/*_t.xml, mapped by Icons.row()) are cut to their artwork, so there is no blank margin; the box is a square of 88% of the row
+  height (never taller than the row), ImageView FIT_CENTER so it scales up. Previews keep a rounded tile; the selection tick keeps a tile. NOT COMPILED.

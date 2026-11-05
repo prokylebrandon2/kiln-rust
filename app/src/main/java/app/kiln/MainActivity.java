@@ -726,7 +726,7 @@ public class MainActivity extends Activity {
             fitH = h;
             setMinimumHeight(h);
             float hd = h / getResources().getDisplayMetrics().density;
-            int ic = dp(Math.round(Math.max(28f, Math.min(60f, hd - 8f))));
+            int ic = Math.min(Math.round(h * 0.88f), dp(64));          // a square box; the artwork fills it
             LayoutParams lp = (LayoutParams) icon.getLayoutParams();
             lp.width = ic;
             lp.height = ic;
@@ -794,7 +794,7 @@ public class MainActivity extends Activity {
                     int pc = Defaults.folderColor(getContext(), r.path);
                     if (pc != 0) base = pc;                   // keep the chosen folder colour
                 }
-                Thumbs.bind(icon, f, r.icon, base, previewsOn);
+                Thumbs.bind(icon, f, Icons.row(r.icon), base, previewsOn, true);
             } else {
                 icon.setTag(null);
                 int tint = r.folder || r.dir || r.up ? accent
@@ -804,7 +804,7 @@ public class MainActivity extends Activity {
                     int picked = Defaults.folderColor(getContext(), r.dirPath);
                     if (picked != 0) tint = picked;               // a colour chosen for this folder
                 }
-                Thumbs.showIcon(icon, r.icon, tint);
+                Thumbs.showIcon(icon, Icons.row(r.icon), tint, true);
             }
             if (selected != wasSelected) {                    // a little pop when selection flips
                 icon.setScaleX(0.7f);
@@ -946,7 +946,7 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ pull-down info
     // Dragging the list down at the top reveals a strip behind it (type, free space, name, size and
-    // a usage bar, like ZArchiver) while the usual pull-to-refresh still runs on release.
+    // a usage bar) while the usual pull-to-refresh still runs on release.
 
     private static final int PULL_H = 84;
     private LinearLayout pullPanel;
@@ -3369,7 +3369,7 @@ public class MainActivity extends Activity {
 
     private File incomingFile, incomingHome;
 
-    /** A .kln handed to us by another app (ZArchiver, a browser, a share...). */
+    /** A .kln handed to us by another app (a file manager, a browser, a share...). */
     private void openIncoming(final Intent intent) {
         final Uri uri = intent.getData();
         if (uri == null) return;

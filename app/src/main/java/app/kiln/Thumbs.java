@@ -112,13 +112,13 @@ final class Thumbs {
     static void showIcon(ImageView iv, int icon, int color, boolean bare) {
         iv.animate().cancel();
         iv.setAlpha(1f);
-        iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);                    // scales up as well as down
         ViewGroup.LayoutParams lp = iv.getLayoutParams();
         int w = lp != null && lp.width > 0 ? lp.width : 0;
         int p;
         if (bare) {
-            iv.setBackground(null);                                          // no tile: the glyph fills the box
-            p = w > 0 ? Math.round(w * 0.03f) : 0;
+            iv.setBackground(null);                                          // no tile: the artwork fills the box
+            p = 0;
         } else {
             if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
             p = w > 0 ? Math.round(w * (Icons.tight(icon) ? 0.1f : 0.2f))   // folders fill the tile's width

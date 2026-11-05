@@ -64,7 +64,7 @@ final class Defaults {
     static int jobs(Context c) { return Math.max(1, Math.min(8, p(c).getInt("jobs", 1))); }
     static void setJobs(Context c, int v) { p(c).edit().putInt("jobs", v).apply(); }
 
-    // ---- rows on screen: how many list rows fit one screen (16 matches ZArchiver)
+    // ---- rows on screen: how many list rows fit one screen (16 is the default)
 
     static final int ROWS_MIN = 10, ROWS_MAX = 24;
     static final int ROWS_DEFAULT = 16;

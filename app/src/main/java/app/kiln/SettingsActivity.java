@@ -136,7 +136,7 @@ public class SettingsActivity extends Activity {
         toggle(a, "Show previews", "Pictures, album art and video frames as icons",
                 Defaults.previews(this), (b, on) -> Defaults.setPreviews(this, on));
         choiceRow(a, "Rows on screen", String.valueOf(Defaults.rowsOnScreen(this)),
-                "How many file rows fit on one screen, 10 to 24. 16 is the default, the same as ZArchiver.", () -> {
+                "How many file rows fit on one screen, 10 to 24. 16 is the default.", () -> {
                     final android.widget.NumberPicker wheel = new android.widget.NumberPicker(this);
                     wheel.setMinValue(Defaults.ROWS_MIN);
                     wheel.setMaxValue(Defaults.ROWS_MAX);

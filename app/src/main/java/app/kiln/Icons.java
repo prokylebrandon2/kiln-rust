@@ -122,6 +122,27 @@ final class Icons {
     }
 
     /** Folder drawables whose artwork fills its whole box (no empty margin), so they get a thinner tile padding. */
+    /**
+     * The folder drawable used inside the list's FolderDrawable: same folder, but the pictogram sits a little lower,
+     * centred on the part that is not shaded. Folders without a pictogram are returned as they are.
+     */
+    static int listGlyph(int res) {
+        if (res == R.drawable.ic_d_android) return R.drawable.ic_d_android_l;
+        if (res == R.drawable.ic_d_bell) return R.drawable.ic_d_bell_l;
+        if (res == R.drawable.ic_d_camera) return R.drawable.ic_d_camera_l;
+        if (res == R.drawable.ic_d_code) return R.drawable.ic_d_code_l;
+        if (res == R.drawable.ic_d_documents) return R.drawable.ic_d_documents_l;
+        if (res == R.drawable.ic_d_download) return R.drawable.ic_d_download_l;
+        if (res == R.drawable.ic_d_heart) return R.drawable.ic_d_heart_l;
+        if (res == R.drawable.ic_d_lock) return R.drawable.ic_d_lock_l;
+        if (res == R.drawable.ic_d_movies) return R.drawable.ic_d_movies_l;
+        if (res == R.drawable.ic_d_music) return R.drawable.ic_d_music_l;
+        if (res == R.drawable.ic_d_pictures) return R.drawable.ic_d_pictures_l;
+        if (res == R.drawable.ic_d_star) return R.drawable.ic_d_star_l;
+        if (res == R.drawable.ic_d_zip) return R.drawable.ic_d_zip_l;
+        return res;
+    }
+
     static boolean tight(int res) {
         return res == R.drawable.ic_d_android
                 || res == R.drawable.ic_d_bell

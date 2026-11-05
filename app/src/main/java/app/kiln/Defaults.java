@@ -204,6 +204,35 @@ final class Defaults {
         saveColors(c);
     }
 
+    /** The colour of a folder's icon in the list: its own pick, else the Settings default, else 0 (the normal accent). */
+    static synchronized int folderColorOrDefault(Context c, String path) {
+        int own = folderColor(c, path);
+        return own != 0 ? own : defaultFolderColor(c);
+    }
+
+    /** The colour (ARGB) every folder gets unless it has its own, or 0 for the normal accent. Set in Settings. */
+    static int defaultFolderColor(Context c) { return p(c).getInt("folder_color_default", 0); }
+
+    static void setDefaultFolderColor(Context c, int color) {
+        p(c).edit().putInt("folder_color_default", color).apply();
+    }
+
+    /** How many folders have a colour of their own. */
+    static synchronized int customFolderColors(Context c) { return colors(c).size(); }
+
+    /** Forgets every folder's own colour, so all folders follow the default. */
+    static synchronized void clearFolderColors(Context c) {
+        colors(c).clear();
+        saveColors(c);
+    }
+
+    /** Changes whenever a folder colour or the default changes (the list redraws when it differs). */
+    static synchronized int folderColorStamp(Context c) {
+        int h = defaultFolderColor(c) * 31 + colors(c).size();
+        for (Map.Entry<String, Integer> e : colors(c).entrySet()) h += e.getKey().hashCode() ^ e.getValue();
+        return h;
+    }
+
     /** A folder was renamed or moved: its icon (and its subfolders' icons) follow it. */
     static synchronized void moveFolderIcons(Context c, String from, String to) {
         Map<String, String> m = icons(c);

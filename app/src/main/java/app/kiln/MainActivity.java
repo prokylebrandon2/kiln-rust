@@ -279,7 +279,9 @@ public class MainActivity extends Activity {
         super.onResume();
         boolean up = Defaults.upRow(this), pv = Defaults.previews(this);
         int np = calcRowPx();
-        boolean changed = up != upRowOn || pv != previewsOn || np != rowPx();
+        int cs = Defaults.folderColorStamp(this);
+        boolean changed = up != upRowOn || pv != previewsOn || np != rowPx() || cs != colorStamp;
+        colorStamp = cs;
         rowPx = np;
         upRowOn = up;
         previewsOn = pv;
@@ -791,8 +793,8 @@ public class MainActivity extends Activity {
                 File f = new File(r.path);
                 int base = r.folder || r.dir ? accent : Icons.tintFor(getContext(), r.title);
                 if (r.folder || r.dir) {
-                    int pc = Defaults.folderColor(getContext(), r.path);
-                    if (pc != 0) base = pc;                   // keep the chosen folder colour
+                    int pc = Defaults.folderColorOrDefault(getContext(), r.path);
+                    if (pc != 0) base = pc;                   // its own colour, else the Settings default
                 }
                 Thumbs.bind(icon, f, Icons.row(r.icon), base, previewsOn, true);
             } else {
@@ -800,6 +802,8 @@ public class MainActivity extends Activity {
                 int tint = r.folder || r.dir || r.up ? accent
                         : r.item != null && !r.item.kind.equals("file") ? Ui.text2(getContext())
                         : Icons.tintFor(getContext(), r.title);
+                int def = Defaults.defaultFolderColor(getContext());
+                if (def != 0 && (r.folder || r.dir || r.up)) tint = def;      // the Settings default colour
                 if (r.item != null && "dir".equals(r.item.kind) && r.dirPath != null) {
                     int picked = Defaults.folderColor(getContext(), r.dirPath);
                     if (picked != 0) tint = picked;               // a colour chosen for this folder
@@ -828,6 +832,7 @@ public class MainActivity extends Activity {
     }
 
     private int rowPx;
+    private int colorStamp;                              // see Defaults.folderColorStamp
 
     /** Row height in px: the room under the app bar split into the chosen number of rows. */
     private int rowPx() {
@@ -2204,7 +2209,7 @@ public class MainActivity extends Activity {
     }
 
     /** Colours a folder can be given (the first, "default", is the app's accent). */
-    private static final int[] FOLDER_COLORS = {0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0,
+    static final int[] FOLDER_COLORS = {0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0,
             0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3, 0xFFC45BA3, 0xFF8D99AE};
 
     /** With `colors`, a row of colour swatches comes first (for folders in the list, not bookmarks). */
@@ -2237,7 +2242,8 @@ public class MainActivity extends Activity {
                                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
                     }
                     final int col = i == 0 ? 0 : FOLDER_COLORS[i - 1];       // 0 = the normal accent
-                    final int shown = col == 0 ? Ui.accent(this) : col;
+                    final int dflt = Defaults.defaultFolderColor(this);
+                    final int shown = col != 0 ? col : (dflt != 0 ? dflt : Ui.accent(this));    // 0 = the default
                     boolean on = col == now;
                     FrameLayout cell = new FrameLayout(this);
                     View dot = new View(this);
@@ -2271,7 +2277,7 @@ public class MainActivity extends Activity {
             fill[0].run();
             s.content(swatches).space(10);
         }
-        int cur0 = colors ? Defaults.folderColor(this, path) : 0;
+        int cur0 = colors ? Defaults.folderColorOrDefault(this, path) : 0;
         final int iconTint = cur0 != 0 ? cur0 : accent;
         LinearLayout grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
@@ -5701,7 +5707,7 @@ public class MainActivity extends Activity {
                             Ui.alpha(Ui.text(MainActivity.this), 0x22)));
                     Thumbs.showIcon(icon, R.drawable.ic_check, accent);
                 } else if (f.isDirectory()) {
-                    int pc = Defaults.folderColor(MainActivity.this, f.getPath());
+                    int pc = Defaults.folderColorOrDefault(MainActivity.this, f.getPath());
                     Thumbs.showIcon(icon, dirIcon(f), pc != 0 ? pc : accent);
                 } else {
                     Thumbs.bind(icon, f, Thumbs.iconFor(f.getName()),

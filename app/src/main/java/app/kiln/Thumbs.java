@@ -129,7 +129,7 @@ final class Thumbs {
             // a folder, drawn as one icon with its own shades and paper (see FolderDrawable)
             boolean up = icon == R.drawable.ic_up_dir_t;
             iv.setImageTintList(null);
-            iv.setImageDrawable(new FolderDrawable(iv.getContext(), up ? R.drawable.ic_folder : icon, color, up));
+            iv.setImageDrawable(new FolderDrawable(iv.getContext(), up ? R.drawable.ic_folder : Icons.listGlyph(icon), color, up));
             return;
         }
         iv.setImageResource(icon);

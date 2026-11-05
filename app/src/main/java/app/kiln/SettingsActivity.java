@@ -22,7 +22,10 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.content.res.ColorStateList;
 import android.text.TextUtils;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.widget.CompoundButton;
+import android.widget.FrameLayout;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
@@ -127,6 +130,100 @@ public class SettingsActivity extends Activity {
         parent.addView(row);
     }
 
+    /** Like choiceRow, but the current choice is a coloured dot (the accent when `color` is 0). */
+    private void colorRow(LinearLayout parent, String title, int color, String detail, Runnable open) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        row.setBackground(Ui.pressable(this, 0, 0, 10));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(Ui.label(this, title, 16, false, false));
+        if (detail != null) col.addView(Ui.label(this, detail, 12, false, true));
+        row.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        View dot = new View(this);
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(color == 0 ? Ui.accent(this) : color);
+        g.setStroke(Ui.dp(this, 1), Ui.line(this));
+        dot.setBackground(g);
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(Ui.dp(this, 26), Ui.dp(this, 26));
+        dl.leftMargin = Ui.dp(this, 10);
+        row.addView(dot, dl);
+        row.setOnClickListener(x -> open.run());
+        parent.addView(row);
+    }
+
+    /** A sheet of colour swatches for the default folder colour. */
+    private void pickDefaultFolderColor() {
+        final Sheet sh = new Sheet(this, "Default folder color");
+        final int now = Defaults.defaultFolderColor(this);
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        final int per = 6, n = MainActivity.FOLDER_COLORS.length + 1;     // the first swatch is the app's own color
+        LinearLayout rowL = null;
+        for (int i = 0; i < n; i++) {
+            if (i % per == 0) {
+                rowL = new LinearLayout(this);
+                rowL.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(rowL, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final int col = i == 0 ? 0 : MainActivity.FOLDER_COLORS[i - 1];
+            boolean on = col == now;
+            FrameLayout cell = new FrameLayout(this);
+            View dot = new View(this);
+            GradientDrawable g = new GradientDrawable();
+            g.setShape(GradientDrawable.OVAL);
+            g.setColor(col == 0 ? Ui.accent(this) : col);
+            g.setStroke(Ui.dp(this, on ? 3 : 1), on ? Ui.text(this) : Ui.line(this));
+            dot.setBackground(g);
+            cell.addView(dot, new FrameLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34), Gravity.CENTER));
+            if (on) {
+                TextView ck = Ui.label(this, "\u2713", 16, true, false);
+                ck.setTextColor(Color.WHITE);
+                ck.setGravity(Gravity.CENTER);
+                cell.addView(ck, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            cell.setOnClickListener(v -> {
+                sh.dismiss();
+                applyDefaultFolderColor(col);
+            });
+            rowL.addView(cell, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1f));
+        }
+        for (int i = n % per; i != 0 && i < per; i++) {
+            rowL.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        }
+        sh.content(grid).button("Cancel", Ui.TEXT, null).show();
+    }
+
+    /** Sets the default. If some folders have their own color, asks whether to change those as well. */
+    private void applyDefaultFolderColor(final int color) {
+        final int custom = Defaults.customFolderColors(this);
+        if (custom == 0) {
+            Defaults.setDefaultFolderColor(this, color);
+            render();
+            return;
+        }
+        new Sheet(this, "Change folders with their own color?")
+                .text(custom + (custom == 1 ? " folder has" : " folders have") + " a color you picked yourself. "
+                        + "Keep them as they are, or change them to the new default too?")
+                .button("Change all", Ui.FILLED, () -> {
+                    Defaults.setDefaultFolderColor(this, color);
+                    Defaults.clearFolderColors(this);
+                    render();
+                    return true;
+                })
+                .button("Keep my colors", Ui.OUTLINE, () -> {
+                    Defaults.setDefaultFolderColor(this, color);
+                    render();
+                    return true;
+                })
+                .button("Cancel", Ui.TEXT, null)
+                .show();
+    }
+
     private void render() {
         content.removeAllViews();
         heading("FILE LIST");
@@ -165,6 +262,12 @@ public class SettingsActivity extends Activity {
                     });
                     sh.show();
                 });
+
+        heading("FOLDER ICONS");
+        LinearLayout fc = card();
+        colorRow(fc, "Default folder color", Defaults.defaultFolderColor(this),
+                "Applies to every folder. Folders you gave their own color keep it, unless you choose to change those too.",
+                this::pickDefaultFolderColor);
 
         heading("ANIMATIONS");
         LinearLayout an = card();

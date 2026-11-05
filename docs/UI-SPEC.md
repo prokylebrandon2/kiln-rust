@@ -300,6 +300,52 @@ Slint: `ui/ui/browser.slint` (`KFileList`), `ui/ui/pull.slint` (`KPullPanel`, `K
   shrinking (150 ms).
 - **Rows do not slide in yet** (`Ui.rowAnim`, on a new folder and on a refresh); that comes with the menus.
 
+## Main screen, Phase B part 3: the dialog sheet and the "more" menu (`Sheet`, `MainActivity.showMenu`, `menuSheet`, `onMenu`)
+
+Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block of `ui/ui/main.slint`
+(`DlgOption`); Rust: `app/src/dialog.rs` (`Spec`, `Btn`, `Opt`), `app/src/browse_ui.rs` (`show_menu`),
+`app/src/browser.rs` (`select_all`, `only_selected`).
+
+- **Long press has no menu.** `setOnItemLongClickListener` only toggles the row's selection. The
+  menu is the "more" button's.
+- **Dialog sheet (`Sheet`).** Content goes in this order: body text, option rows, an optional field,
+  then the buttons. A title that is empty shows no title line. One sheet is up at a time; showing
+  another replaces it.
+- **Option row (`Sheet.option`).** Tapping it closes the sheet and runs its action. Here the action
+  runs first and the sheet closes afterwards unless the action showed another dialog, which looks
+  the same. Choosing a row is not a back-out, so the "go back" action does not run.
+- **Back-out.** Back, a tap outside the card, or a button with no action (Cancel, OK) closes the
+  sheet and runs the sheet's "go back" action (`Sheet.nextBack`; `Spec.back` in Rust). A menu sets
+  it before opening a sheet from one of its rows, so that backing out of that sheet shows the menu
+  again. Menu rows that open dialogs will set `back` to `show_menu` when those dialogs exist.
+- **Enter in a field.** Nothing. `Ui.field` is a single-line `EditText` and `Sheet` adds no
+  editor-action listener, so the key only does what the keyboard's own action does (hides it).
+  The Slint field's `accepted` is left unconnected on purpose.
+- **Menu rows** (icon in a 38 dp accent tile, label 16 sp). Nothing selected: Select all (check),
+  Show archives only / Show all files (file), Hide hidden files / Show hidden files (file),
+  Refresh (refresh), Recycle bin (delete), Settings (settings), About (archive). Selecting: Select
+  all, Properties (file), Rename (edit; one selected), Icon and color... (folder; one folder),
+  Open options... (open; one plain file), Extract... (extract; one archive or set), Browse as plain
+  folder (folder; one set), Clear selection (close). The menus of an open archive come with the
+  archive part.
+- **Built.** Select all adds every row shown. Clear selection. The two Show toggles flip
+  `show_all` / `show_hidden`, save them to `kiln.xml` and read the folder again (selection cleared).
+  Refresh reads the folder again and keeps the selection. Browse as plain folder opens the set as an
+  ordinary folder (with the banner). Every other row toasts "Not in this build yet" until its
+  dialog is built.
+- **Rename** is also hidden in a protected (read-only) folder in the Java; that rule comes with
+  Root and Shizuku (Phase C).
+
+### Differences from the Java in this part
+
+- **Keyboard.** The Java window resizes with the keyboard, keeps the card centred above it and
+  glides the picture there in 260 ms (decelerate 1.8, half of the layout shift). The Slint card
+  only follows `safe-area-insets`; there is no separate glide.
+- **Field.** It exists only while the sheet is shown, so it vanishes when the close fade starts and
+  the card shrinks during the 140 ms fade-out. The Java keeps the view until the fade ends.
+- **Refresh** from the menu does not slide the rows in again (`forceAnim`); that comes with the
+  row animations.
+
 ## Known differences from the Java
 
 - **Toast.** Android draws its own toast; `KToast` approximates its look and uses its timing.

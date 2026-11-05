@@ -4,6 +4,7 @@
 
 use std::rc::Rc;
 
+use kiln_ui::DlgOption;
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::{App, app_do};
@@ -15,6 +16,10 @@ pub(crate) type Click = Rc<dyn Fn(&App, &str) -> bool>;
 /// Runs when the person backs out: Back, a tap outside, or a button with no action
 /// (`Sheet.nextBack`).
 pub(crate) type Back = Box<dyn FnOnce(&App)>;
+
+/// What a menu row does (`Sheet.option`'s action). The sheet closes after it, unless the action
+/// showed another dialog.
+pub(crate) type Action = Rc<dyn Fn(&App)>;
 
 /// `Ui.button` kinds: filled, outline, text, danger, tonal.
 #[derive(Clone, Copy)]
@@ -46,6 +51,16 @@ pub(crate) struct Btn {
     pub click: Option<Click>,
 }
 
+/// One option row, in the order `Sheet.option()` would have been called: an icon in a tile, a
+/// label, and a check mark when selected. Tapping it runs `action`, then closes the sheet.
+pub(crate) struct Opt {
+    /// An icon name; empty for no tile.
+    pub icon: &'static str,
+    pub label: String,
+    pub selected: bool,
+    pub action: Action,
+}
+
 /// The text field of a dialog.
 pub(crate) struct Field {
     pub placeholder: String,
@@ -56,6 +71,8 @@ pub(crate) struct Field {
 pub(crate) struct Spec {
     pub title: String,
     pub body: String,
+    /// Option rows between the text and the buttons.
+    pub options: Vec<Opt>,
     pub field: Option<Field>,
     pub buttons: Vec<Btn>,
     /// Back and a tap outside close it (`Sheet.cancelable`).
@@ -70,6 +87,7 @@ impl Spec {
         Self {
             title: title.to_string(),
             body: String::new(),
+            options: Vec::new(),
             field: None,
             buttons: Vec::new(),
             cancelable: true,
@@ -82,6 +100,8 @@ impl Spec {
 #[derive(Default)]
 pub(crate) struct Dialog {
     clicks: Vec<Option<Click>>,
+    /// What each option row does, in order.
+    options: Vec<Action>,
     back: Option<Back>,
     /// Counts the dialogs shown, so that a click that opens another one does not close it.
     serial: u64,
@@ -93,6 +113,7 @@ impl App {
         let ui = &self.ui;
         ui.on_dlg_button_clicked(|i| app_do(|app| app.dialog_button(i)));
         ui.on_dlg_cancelled(|| app_do(|app| app.cancel_dialog()));
+        ui.on_dlg_option_clicked(|i| app_do(|app| app.dialog_option(i)));
     }
 
     /// Show a dialog (`new Sheet(..)...show()`). One that is already up is replaced.
@@ -104,6 +125,18 @@ impl App {
             .map(|b| b.label.as_str().into())
             .collect();
         let kinds: Vec<i32> = spec.buttons.iter().map(|b| b.kind.code()).collect();
+        let (rows, actions): (Vec<DlgOption>, Vec<Action>) = spec
+            .options
+            .into_iter()
+            .map(|o| {
+                let row = DlgOption {
+                    icon: o.icon.into(),
+                    label: o.label.as_str().into(),
+                    selected: o.selected,
+                };
+                (row, o.action)
+            })
+            .unzip();
         let has_field = spec.field.is_some();
         let (placeholder, text) = match spec.field {
             Some(f) => (f.placeholder, f.text),
@@ -116,11 +149,13 @@ impl App {
         ui.set_dlg_text(text.into());
         ui.set_dlg_buttons(ModelRc::new(VecModel::from(labels)));
         ui.set_dlg_kinds(ModelRc::new(VecModel::from(kinds)));
+        ui.set_dlg_options(ModelRc::new(VecModel::from(rows)));
         ui.set_dlg_cancelable(spec.cancelable);
         {
             let mut d = self.dialog.borrow_mut();
             d.serial += 1;
             d.clicks = spec.buttons.into_iter().map(|b| b.click).collect();
+            d.options = actions;
             d.back = spec.back;
         }
         ui.set_dlg_shown(true);
@@ -145,6 +180,25 @@ impl App {
         };
         let text = self.ui.get_dlg_text();
         if click(self, text.as_str()) && self.dialog.borrow().serial == serial {
+            self.close_dialog();
+        }
+    }
+
+    /// An option row was tapped (`Sheet.option`): run its action, then close the sheet unless the
+    /// action showed another dialog. Choosing a row is not a back-out, so `back` does not run.
+    fn dialog_option(&self, index: i32) {
+        let (action, serial) = {
+            let d = self.dialog.borrow();
+            let action = usize::try_from(index)
+                .ok()
+                .and_then(|i| d.options.get(i).cloned());
+            (action, d.serial)
+        };
+        let Some(action) = action else {
+            return;
+        };
+        action(self);
+        if self.dialog.borrow().serial == serial {
             self.close_dialog();
         }
     }

@@ -326,6 +326,23 @@ impl Browser {
         self.selected.clear();
     }
 
+    /// `M_SELECT_ALL`: select every row that is shown.
+    pub fn select_all(&mut self) {
+        for row in &self.rows {
+            if !self.selected.contains(&row.key) {
+                self.selected.push(row.key.clone());
+            }
+        }
+    }
+
+    /// The row of the selected entry when exactly one is selected (`sel.size() == 1`).
+    pub fn only_selected(&self) -> Option<&Row> {
+        match self.selected.as_slice() {
+            [key] => self.rows.iter().find(|r| &r.key == key),
+            _ => None,
+        }
+    }
+
     /// `saveSort` without the saving: re-sort what is shown and what it was narrowed from.
     pub fn set_sort(&mut self, key: SortKey, asc: bool) {
         self.sort_key = key;

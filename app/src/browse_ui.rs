@@ -2,6 +2,7 @@
 //! what its taps do (`MainActivity.redraw`, `renderHeader`, `onRowClick`, `loadDir`, ...).
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use kiln_ui::RowData;
@@ -9,6 +10,7 @@ use serde_json::{Value, json};
 use slint::{Color, Timer};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
+use crate::dialog::{Opt, Spec};
 use crate::{App, app_do};
 
 /// `MainActivity.toast`: `Toast.LENGTH_SHORT` is two seconds.
@@ -40,6 +42,21 @@ fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
     }
 }
 
+/// A menu row that does something (`Sheet.option`).
+fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'static) -> Opt {
+    Opt {
+        icon,
+        label: label.to_string(),
+        selected: false,
+        action: Rc::new(action),
+    }
+}
+
+/// A menu row whose dialog is not built yet.
+fn soon(icon: &'static str, label: &str) -> Opt {
+    opt(icon, label, |app| app.toast("Not in this build yet"))
+}
+
 impl App {
     /// Connect the file browser's callbacks.
     pub(crate) fn wire_browser(&self) {
@@ -51,6 +68,7 @@ impl App {
         ui.on_search_clicked(|| app_do(|app| app.search_clicked()));
         ui.on_query_edited(|text| app_do(|app| app.query_edited(&text)));
         ui.on_sort_clicked(|| app_do(|app| app.sort_clicked()));
+        ui.on_more_clicked(|| app_do(|app| app.show_menu()));
         ui.on_sort_key_chosen(|k| app_do(|app| app.sort_key_chosen(k)));
         ui.on_sort_asc_chosen(|asc| app_do(|app| app.sort_asc_chosen(asc)));
         ui.on_sort_dismissed(|| app_do(|app| app.ui.set_sort_sheet_shown(false)));
@@ -263,6 +281,104 @@ impl App {
         self.browser.borrow_mut().toggle(key);
         self.render_rows();
         self.render_chrome();
+    }
+
+    // ---- the "more" menu ---------------------------------------------------------------------
+
+    /// `showMenu`: a dialog with no title and one option row per entry.
+    pub(crate) fn show_menu(&self) {
+        let mut spec = Spec::new("");
+        spec.options = self.menu_options();
+        self.show_dialog(spec);
+    }
+
+    /// The rows `showMenu` builds for a folder: with something selected, or without.
+    fn menu_options(&self) -> Vec<Opt> {
+        let b = self.browser.borrow();
+        let select_all = opt("check", "Select all", |app| {
+            app.browser.borrow_mut().select_all();
+            app.render_rows();
+            app.render_chrome();
+        });
+        let mut out = Vec::new();
+        if b.selecting() {
+            let one = b.only_selected().map(|r| r.kind);
+            out.push(select_all);
+            out.push(soon("file", "Properties"));
+            if one.is_some() {
+                out.push(soon("edit", "Rename"));
+            }
+            if one == Some(Kind::Dir) {
+                out.push(soon("folder", "Icon and color..."));
+            }
+            if one == Some(Kind::File) {
+                out.push(soon("open", "Open options..."));
+            }
+            if matches!(one, Some(Kind::Archive | Kind::Set)) {
+                out.push(soon("extract", "Extract..."));
+            }
+            if one == Some(Kind::Set) {
+                out.push(opt("folder", "Browse as plain folder", App::menu_plain_set));
+            }
+            out.push(opt("close", "Clear selection", |app| {
+                app.browser.borrow_mut().clear_selection();
+                app.render_rows();
+                app.render_chrome();
+            }));
+        } else {
+            let all = if b.show_all {
+                "Show archives only"
+            } else {
+                "Show all files"
+            };
+            let hidden = if b.show_hidden {
+                "Hide hidden files"
+            } else {
+                "Show hidden files"
+            };
+            out.push(select_all);
+            out.push(opt("file", all, |app| app.menu_toggle(false)));
+            out.push(opt("file", hidden, |app| app.menu_toggle(true)));
+            out.push(opt("refresh", "Refresh", App::menu_refresh));
+            out.push(soon("delete", "Recycle bin"));
+            out.push(soon("settings", "Settings"));
+            out.push(soon("archive", "About"));
+        }
+        out
+    }
+
+    /// `M_ALL_FILES` and `M_HIDDEN`: flip the setting, keep it, read the folder again.
+    fn menu_toggle(&self, hidden: bool) {
+        let (key, on, cwd) = {
+            let mut b = self.browser.borrow_mut();
+            let (key, on) = if hidden {
+                b.show_hidden = !b.show_hidden;
+                ("show_hidden", b.show_hidden)
+            } else {
+                b.show_all = !b.show_all;
+                ("show_all", b.show_all)
+            };
+            (key, on, b.cwd.clone())
+        };
+        self.prefs.set_bool(key, on);
+        self.load_dir(cwd, false);
+    }
+
+    /// `M_REFRESH`: read the folder again, keeping the selection.
+    fn menu_refresh(&self) {
+        let cwd = self.browser.borrow().cwd.clone();
+        self.load_dir(cwd, true);
+    }
+
+    /// `M_PLAIN`: open the selected encrypted set as an ordinary folder.
+    fn menu_plain_set(&self) {
+        let dir = {
+            let b = self.browser.borrow();
+            b.only_selected().map(|r| b.cwd.join(&r.key))
+        };
+        if let Some(dir) = dir {
+            self.load_dir(dir, false);
+        }
     }
 
     /// `onLeft`: leave selection, or go back; at home the mark only pulses (About comes later).

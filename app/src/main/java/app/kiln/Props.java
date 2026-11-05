@@ -31,7 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** The "Properties" box: general facts about a file or folder, plus archive facts and an MD5.
+/** The "Properties" box: general facts about a file or folder, plus archive facts, an MD5 and a SHA-256.
  *  Slow parts (folder totals, MD5, reading an archive's table) run in the background, show
  *  "Calculating..." and stop when the box is closed. */
 final class Props {
@@ -47,6 +47,7 @@ final class Props {
         final List<TextView> values = new ArrayList<>();
         final long born = System.currentTimeMillis();
         final AtomicBoolean stop = new AtomicBoolean(false);
+        final Map<TextView, String[]> pending = new java.util.HashMap<>();   // newest {label, value} per row
 
         Box(Activity a) {
             this.a = a;
@@ -76,15 +77,21 @@ final class Props {
             return v;
         }
 
-        /** Changes a row's value (from any thread) and what Copy will use. */
+        /** Changes a row's value (from any thread) and what Copy will use. Only the newest value
+         *  for a row is ever shown: delayed updates used to fire out of order, so an early
+         *  "1..." could land after the final count and stay there. */
         void set(final TextView v, final String label, final String value) {
+            synchronized (pending) { pending.put(v, new String[]{label, value}); }
             // an answer that is ready early waits for the box to finish opening, so the text
             // changing doesn't re-lay the card out in the middle of its animation
             long wait = Math.max(0, 300 - (System.currentTimeMillis() - born));
             col.postDelayed(() -> {
                 if (stop.get()) return;
-                v.setText(value);
-                for (String[] ln : lines) if (label.equals(ln[0])) ln[1] = value;
+                String[] p;
+                synchronized (pending) { p = pending.remove(v); }
+                if (p == null) return;                    // a newer update already applied it
+                v.setText(p[1]);
+                for (String[] ln : lines) if (p[0].equals(ln[0])) ln[1] = p[1];
             }, wait);
         }
 
@@ -173,14 +180,18 @@ final class Props {
             return;
         }
         final TextView md5 = b.row("MD5", "Calculating...");
+        final TextView sha = b.row("SHA-256", "Calculating...");
         new Thread(() -> {
-            String r;
+            String[] r;
             try {
-                r = md5Of(f, b.stop);
+                r = hashesOf(f, b.stop);
             } catch (Exception e) {
-                r = "unavailable";
+                r = new String[]{"unavailable", "unavailable"};
             }
-            if (r != null) b.set(md5, "MD5", r);
+            if (r != null) {
+                b.set(md5, "MD5", r[0]);
+                b.set(sha, "SHA-256", r[1]);
+            }
         }).start();
 
         if ("archive".equals(kind) || "set".equals(kind)) {
@@ -342,23 +353,29 @@ final class Props {
         }
     }
 
-    /** MD5 of a file; null if the box was closed meanwhile. */
-    private static String md5Of(File f, AtomicBoolean stop) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("MD5");
+    /** {MD5, SHA-256} of a file, both from one read; null if the box was closed meanwhile. */
+    private static String[] hashesOf(File f, AtomicBoolean stop) throws Exception {
+        MessageDigest md5 = MessageDigest.getInstance("MD5");
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
         try (InputStream in = new FileInputStream(f)) {
             byte[] buf = new byte[1 << 18];
             int k;
             while ((k = in.read(buf)) > 0) {
                 if (stop.get()) return null;
-                md.update(buf, 0, k);
+                md5.update(buf, 0, k);
+                sha.update(buf, 0, k);
             }
         }
+        return new String[]{hex(md5.digest()), hex(sha.digest())};
+    }
+
+    private static String hex(byte[] d) {
         StringBuilder sb = new StringBuilder();
-        for (byte x : md.digest()) sb.append(String.format(Locale.US, "%02x", x));
+        for (byte x : d) sb.append(String.format(Locale.US, "%02x", x));
         return sb.toString();
     }
 
-    /** Properties of the selected entries inside an archive (what the table says; no MD5). */
+    /** Properties of the selected entries inside an archive (what the table says; no checksums). */
     static void showInArchive(final Activity a, String archiveName, List<String[]> picked) {
         // picked rows: {path, size, modified (seconds), "dir" or "file", number of files}
         final Box b = new Box(a);

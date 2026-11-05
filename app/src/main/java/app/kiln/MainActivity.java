@@ -5806,7 +5806,7 @@ public class MainActivity extends Activity {
             code = getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
         } catch (Exception ignored) {
         }
-        final long build = code;
+        final long build = Math.max(0, code - 33);   // build 0 = versionCode 33 (5.0); bump versionCode by 1 per build
         // the engine and script details come from Python: ask off the UI thread, then show
         bg(p -> {
             JSONObject o = new JSONObject();

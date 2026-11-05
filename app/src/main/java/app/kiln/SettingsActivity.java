@@ -135,6 +135,19 @@ public class SettingsActivity extends Activity {
                 Defaults.upRow(this), (b, on) -> Defaults.setUpRow(this, on));
         toggle(a, "Show previews", "Pictures, album art and video frames as icons",
                 Defaults.previews(this), (b, on) -> Defaults.setPreviews(this, on));
+        choiceRow(a, "Rows on screen", String.valueOf(Defaults.rowsOnScreen(this)),
+                "How many file rows fit on one screen. 16 is the default, the same as ZArchiver.", () -> {
+                    Sheet sh = new Sheet(this, "Rows on screen");
+                    sh.text("More rows means smaller rows.");
+                    for (final int n : Defaults.ROW_CHOICES) {
+                        sh.radio(String.valueOf(n), n == Defaults.ROWS_DEFAULT ? "Default" : null,
+                                n == Defaults.rowsOnScreen(this), () -> {
+                                    Defaults.setRowsOnScreen(this, n);
+                                    render();
+                                });
+                    }
+                    sh.button("Cancel", Ui.TEXT, null).show();
+                });
 
         heading("ANIMATIONS");
         LinearLayout an = card();

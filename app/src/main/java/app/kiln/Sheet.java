@@ -52,6 +52,10 @@ final class Sheet {
     /** Set (by a menu) just before it opens a sheet: that sheet takes it and runs it when the person
      *  backs out of it (Back, a tap outside, or a button with no action such as Cancel / OK). */
     static Runnable nextBack;
+    /** A sheet that is being replaced by the next one. That sheet stays on screen until the next one is
+     *  showing, then the two cross-fade, so there is never a moment with neither (the "let go" stutter). */
+    static Sheet handoff;
+    private boolean hold;                           // option taps hand this sheet off instead of closing it
     private Runnable back;
     private boolean userCancel;
 
@@ -207,6 +211,10 @@ final class Sheet {
             row.addView(mark);
         }
         row.setOnClickListener(v -> {
+            if (hold) {
+                pickAndHold(action);
+                return;
+            }
             dismiss();
             if (action != null) action.run();
         });
@@ -215,6 +223,27 @@ final class Sheet {
         rp.bottomMargin = Ui.dp(act, 2);
         body.addView(row, rp);
         return this;
+    }
+
+    /** Makes option taps keep this sheet on screen until the sheet they open is showing. */
+    Sheet hold() {
+        hold = true;
+        return this;
+    }
+
+    /** Runs the action with this sheet offered as the one to replace. If the action opens a sheet
+     *  (at once, or after Sheet.handoff was passed on) that sheet takes over; otherwise this one closes. */
+    void pickAndHold(Runnable action) {
+        if (closing) return;
+        handoff = this;
+        try {
+            if (action != null) action.run();
+        } finally {
+            if (handoff == this) {
+                handoff = null;
+                dismiss();
+            }
+        }
     }
 
     /** A radio-button row. Picking it closes the sheet, then runs the action. */
@@ -391,12 +420,22 @@ final class Sheet {
         if (act.isFinishing()) return this;
         dialog.show();
 
+        final Sheet from = handoff;
+        handoff = null;
         card.setAlpha(0f);
         card.setScaleX(0.92f);
         card.setScaleY(0.92f);
-        card.animate().alpha(1f).scaleX(1f).scaleY(1f)
+        card.animate().alpha(1f).scaleX(1f).scaleY(1f).withLayer()
                 .setDuration(Defaults.anim(act, 200)).setInterpolator(new DecelerateInterpolator(1.6f)).start();
-        scrim.animate().alpha(0.5f).setDuration(Defaults.anim(act, 200)).start();
+        if (from != null && from != this) {
+            // the old sheet keeps the dimming until this one has drawn, then the two swap in one step
+            root.post(() -> {
+                scrim.setAlpha(0.5f);
+                from.quiet();
+            });
+        } else {
+            scrim.animate().alpha(0.5f).setDuration(Defaults.anim(act, 200)).start();
+        }
         return this;
     }
 
@@ -410,15 +449,46 @@ final class Sheet {
     void dismiss() {
         if (closing) return;
         closing = true;
-        // Bring the previous menu back right away so it fades in while this sheet fades out; waiting
-        // for the fade-out to finish left the bare list showing for a moment (the stutter).
-        runBack();
+        // Backing out: the menu opens on top of this sheet, which stays until the menu is showing
+        // (the menu's show() then calls quiet() on it). If nothing took over, close normally below.
+        if (back != null && userCancel) {
+            handoff = this;
+            runBack();
+            if (handoff == null) return;
+            handoff = null;
+        } else {
+            runBack();
+        }
         if (!dialog.isShowing() || act.isFinishing()) {
             hardDismiss();
             return;
         }
         scrim.animate().alpha(0f).setDuration(Defaults.anim(act, 140)).start();
-        card.animate().alpha(0f).scaleX(0.95f).scaleY(0.95f)
+        card.animate().alpha(0f).scaleX(0.95f).scaleY(0.95f).withLayer()
+                .setDuration(Defaults.anim(act, 140)).setListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator a) { hardDismiss(); }
+                }).start();
+    }
+
+    /** Closes a sheet that was kept up for a hand-off nobody took. */
+    void release() {
+        closing = false;
+        back = null;
+        dismiss();
+    }
+
+    /** Fades this sheet out without the dimming (the sheet replacing it carries that), without any callback. */
+    void quiet() {
+        closing = true;
+        back = null;
+        if (!dialog.isShowing() || act.isFinishing()) {
+            hardDismiss();
+            return;
+        }
+        scrim.animate().cancel();
+        scrim.setAlpha(0f);
+        card.animate().alpha(0f).scaleX(0.97f).scaleY(0.97f).withLayer()
                 .setDuration(Defaults.anim(act, 140)).setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator a) { hardDismiss(); }

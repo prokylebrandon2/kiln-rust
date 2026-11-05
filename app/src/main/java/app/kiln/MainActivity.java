@@ -278,7 +278,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         boolean up = Defaults.upRow(this), pv = Defaults.previews(this);
-        boolean changed = up != upRowOn || pv != previewsOn;
+        int np = calcRowPx();
+        boolean changed = up != upRowOn || pv != previewsOn || np != rowPx();
+        rowPx = np;
         upRowOn = up;
         previewsOn = pv;
         if (changed && adapter != null) adapter.notifyDataSetChanged();
@@ -504,11 +506,10 @@ public class MainActivity extends Activity {
             renderSearchRow();
             onQueryChanged(searchField.getText().toString());
         });
-        deepChip.setMinimumHeight(dp(44));
+        deepChip.setMinimumHeight(dp(40));
         LinearLayout.LayoutParams dc = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         dc.leftMargin = dp(8);
-        searchTop.addView(deepChip, dc);
         searchRow.addView(searchTop, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout filterRow = new LinearLayout(this);
@@ -518,6 +519,7 @@ public class MainActivity extends Activity {
         filterChip.setMinimumHeight(dp(40));
         filterRow.addView(filterChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+        filterRow.addView(deepChip, dc);
         filterNote = Ui.label(this, "", 13, false, true);
         filterNote.setSingleLine(true);
         filterNote.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -697,11 +699,24 @@ public class MainActivity extends Activity {
         private final Drawable plain, picked;
         private boolean wasSelected;
 
+        /** Sizes the row so about Settings > Rows on screen of them fit one screen. */
+        void fit() {
+            int h = rowPx();
+            if (getMinimumHeight() != h) setMinimumHeight(h);
+            int ic = Math.min(dp(40), Math.max(dp(28), h - dp(6)));
+            LayoutParams lp = (LayoutParams) icon.getLayoutParams();
+            if (lp.width != ic) {
+                lp.width = ic;
+                lp.height = ic;
+                icon.setLayoutParams(lp);
+            }
+        }
+
         RowView() {
             super(MainActivity.this);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(16), dp(9), dp(16), dp(9));
+            setPadding(dp(16), dp(3), dp(16), dp(3));
             plain = Ui.ripple(MainActivity.this, 0, 0, 0, Ui.alpha(Ui.text(MainActivity.this), 0x22));
             picked = Ui.ripple(MainActivity.this, getColor(R.color.k_sel), 0, 0,
                     Ui.alpha(Ui.text(MainActivity.this), 0x22));
@@ -734,6 +749,7 @@ public class MainActivity extends Activity {
         }
 
         void bind(Row r, boolean selected) {
+            fit();
             int accent = Ui.accent(getContext());
             if (selected) {
                 icon.animate().cancel();
@@ -777,6 +793,20 @@ public class MainActivity extends Activity {
             setBackground(selected ? picked : plain);
             jumpDrawablesToCurrentState();
         }
+    }
+
+    private int rowPx;
+
+    /** Row height in px: the room under the app bar split into the chosen number of rows. */
+    private int rowPx() {
+        if (rowPx == 0) rowPx = calcRowPx();
+        return rowPx;
+    }
+
+    private int calcRowPx() {
+        int n = Defaults.rowsOnScreen(this);
+        int room = getResources().getDisplayMetrics().heightPixels - dp(48) - dp(64);
+        return Math.max(dp(34), room / n);
     }
 
     private final class RowAdapter extends BaseAdapter {
@@ -1309,7 +1339,7 @@ public class MainActivity extends Activity {
 
     /** A bottom-sheet menu: labels and the ids onMenu() understands. */
     private void menuSheet(String heading, String[] labels, final int[] ids) {
-        Sheet s = new Sheet(this, heading);
+        Sheet s = new Sheet(this, heading).hold();
         for (int i = 0; i < labels.length; i++) {
             final int id = ids[i];
             s.option(menuIcon(id), labels[i], false, () -> {
@@ -1381,10 +1411,10 @@ public class MainActivity extends Activity {
             l.add("Select all"); id.add(M_SELECT_ALL);
             l.add("Properties"); id.add(M_PROPS);
             l.add("Generate SHA-256"); id.add(M_SHA_GEN);
-            if (sel.size() == 1 && manifestFor(selectedFiles().get(0)) != null) {
+            if (sel.size() == 1 && hasManifest(selectedFiles().get(0))) {
                 l.add("Verify SHA-256"); id.add(M_SHA_VERIFY);
             }
-            if (sel.size() >= 2) { l.add("Compare"); id.add(M_COMPARE); }
+            if (canCompare()) { l.add("Compare"); id.add(M_COMPARE); }
             if (sel.size() == 1 && !sel.iterator().next().contains("/") && !Priv.readOnly(cwd.getPath())) { l.add("Rename"); id.add(M_RENAME); }
             if (sel.size() == 1 && selectedDir() != null) { l.add("Icon and color..."); id.add(M_ICON); }
             if (sel.size() == 1 && selectedPlainFile() != null) { l.add("Open options..."); id.add(M_OPTIONS); }
@@ -1430,14 +1460,7 @@ public class MainActivity extends Activity {
                 break;
             case M_OPTIONS: {
                 Item it = selectedPlainFile();
-                if (it != null) {
-                    File f = new File(cwd, it.name);
-                    fileSheet(f, it);                       // open first, tidy the selection after (no stutter)
-                    getWindow().getDecorView().postDelayed(() -> {
-                        sel.clear();
-                        redraw();
-                    }, 300);
-                }
+                if (it != null) fileSheet(new File(cwd, it.name), it, true);
                 break;
             }
             case M_ABOUT: aboutDialog(); break;
@@ -1481,9 +1504,10 @@ public class MainActivity extends Activity {
                 Item it = selectedDir();
                 if (it != null) {
                     File f = new File(cwd, it.name);
-                    sel.clear();
-                    redraw();
-                    iconPicker(f.getPath(), f.getName(), true, this::refreshDirIcons);
+                    iconPicker(f.getPath(), f.getName(), true, () -> {
+                        refreshDirIcons();
+                        tidySelection();                // a final choice: the selection is cleared as before
+                    }, this::refreshDirIcons);          // a swatch tap keeps the selection, so Cancel returns to the same menu
                 }
                 break;
             }
@@ -2140,7 +2164,7 @@ public class MainActivity extends Activity {
 
     /** A grid of folder icons to choose from, for a folder or a bookmark. `done` runs after a change. */
     private void iconPicker(final String path, String name, final Runnable done) {
-        iconPicker(path, name, false, done);
+        iconPicker(path, name, false, done, null);
     }
 
     /** Colours a folder can be given (the first, "default", is the app's accent). */
@@ -2149,6 +2173,12 @@ public class MainActivity extends Activity {
 
     /** With `colors`, a row of colour swatches comes first (for folders in the list, not bookmarks). */
     private void iconPicker(final String path, String name, final boolean colors, final Runnable done) {
+        iconPicker(path, name, colors, done, done);
+    }
+
+    /** `live` runs after a colour swatch is tapped (the sheet stays open); `done` after a final choice. */
+    private void iconPicker(final String path, String name, final boolean colors, final Runnable done,
+                            final Runnable live) {
         final Sheet s = new Sheet(this, (colors ? "Icon and color for " : "Icon for ") + name);
         final List<ImageView> iconViews = new ArrayList<>();
         final String cur = Defaults.folderIcon(this, path);
@@ -2193,7 +2223,7 @@ public class MainActivity extends Activity {
                         Defaults.setFolderColor(this, path, col);
                         for (ImageView iv : iconViews) Ui.tint(iv, shown);
                         fill[0].run();
-                        if (done != null) done.run();                          // the list behind updates at once
+                        if (live != null) live.run();                          // the list behind updates at once
                     });
                     LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, dp(42), 1f);
                     rowL.addView(cell, cl);
@@ -2433,6 +2463,7 @@ public class MainActivity extends Activity {
     private int[] restoreAt;                               // list spot to land on after leaving an archive
 
     private void loadDir(File dir, boolean keepSelection) {
+        shaHas.clear();
         final int[] back = arc != null && dir.equals(cwd) ? arc.back : null;
         restoreAt = back;
         if (arc != null) {
@@ -2885,8 +2916,29 @@ public class MainActivity extends Activity {
     }
 
     private void toggle(String key) {
+        boolean was = !sel.isEmpty();
         if (!sel.remove(key)) sel.add(key);
-        redraw();
+        rebindRow(key);                                   // only this row changes: no full list rebuild
+        if (was && !sel.isEmpty() && pickArc == null) {
+            title.setText(sel.size() + " selected");      // the bars and buttons are the same: leave them
+            showSelSize();
+        } else {
+            renderHeader();
+        }
+    }
+
+    /** Redraws the one visible row for key (rows off screen pick the change up when they scroll in). */
+    private void rebindRow(String key) {
+        int first = list.getFirstVisiblePosition();
+        for (int k = 0; k < list.getChildCount(); k++) {
+            View c = list.getChildAt(k);
+            if (!(c instanceof RowView)) continue;
+            Row r = rowAt(first + k);
+            if (r != null && key.equals(r.key)) {
+                ((RowView) c).bind(r, sel.contains(key));
+                return;
+            }
+        }
     }
 
     private void onRowClick(int pos) {
@@ -3005,23 +3057,44 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void fileSheet(final File f, Item it) {
+    private void fileSheet(final File f, Item it) { fileSheet(f, it, false); }
+
+    /** Clears the selection a moment after a sheet's choice has opened, so the list isn't rebuilt
+     *  while the sheet is still animating (and backing out of the sheet leaves it untouched). */
+    private void tidySelection() {
+        getWindow().getDecorView().postDelayed(() -> {
+            if (!sel.isEmpty()) {
+                sel.clear();
+                redraw();
+            }
+        }, 300);
+    }
+
+    private Runnable thenTidy(final boolean fromMenu, final Runnable r) {
+        if (!fromMenu) return r;
+        return () -> {
+            r.run();
+            tidySelection();
+        };
+    }
+
+    private void fileSheet(final File f, Item it, final boolean fromMenu) {
         int kind = kindOf(f);
         Sheet s = new Sheet(this, f.getName());
         s.text(Fmt.size(it.size) + " \u00b7 " + Fmt.date(it.mtime));
         boolean small = it.size <= TextActivity.MAX_BYTES;
         if (kind == 2 && it.size <= IMAGE_PREVIEW_MAX) {
-            s.option(R.drawable.ic_image, "View in Kiln", false, () -> showImage(f, false));
+            s.option(R.drawable.ic_image, "View in Kiln", false, thenTidy(fromMenu, () -> showImage(f, false)));
         } else if (kind == 1 && small) {
-            s.option(R.drawable.ic_open, "View in Kiln", false, () -> openText(f, false));
-            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit in Kiln", false, () -> openText(f, true));
+            s.option(R.drawable.ic_open, "View in Kiln", false, thenTidy(fromMenu, () -> openText(f, false)));
+            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit in Kiln", false, thenTidy(fromMenu, () -> openText(f, true)));
         } else if (kind == 0 && small) {
-            s.option(R.drawable.ic_open, "View as text in Kiln", false, () -> openText(f, false));
-            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, () -> openText(f, true));
+            s.option(R.drawable.ic_open, "View as text in Kiln", false, thenTidy(fromMenu, () -> openText(f, false)));
+            if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit as text in Kiln", false, thenTidy(fromMenu, () -> openText(f, true)));
         }
         s.divider();
-        s.option(R.drawable.ic_open, "Open with...", false, () -> appChooser(f, false));
-        if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit with...", false, () -> appChooser(f, true));
+        s.option(R.drawable.ic_open, "Open with...", false, thenTidy(fromMenu, () -> appChooser(f, false)));
+        if (!Priv.lockedCopy(f.getPath())) s.option(R.drawable.ic_edit, "Edit with...", false, thenTidy(fromMenu, () -> appChooser(f, true)));
         s.button("Cancel", Ui.TEXT, null).show();
     }
 
@@ -4253,6 +4326,10 @@ public class MainActivity extends Activity {
 
     /** The recycle bin: everything deleted into it, from every storage. Tap an item to restore it or delete it for good. */
     private void binSheet() {
+        final Runnable back = Sheet.nextBack;                    // the menu this was opened from, if any
+        Sheet.nextBack = null;
+        final Sheet held = Sheet.handoff;                        // the menu stays up while the bin loads
+        Sheet.handoff = null;
         final List<File> roots = binRoots();
         new Thread(() -> {
             final List<Trash.Entry> all = new ArrayList<>();
@@ -4264,17 +4341,26 @@ public class MainActivity extends Activity {
                 total += e.size;
             }
             final long sum = total;
-            ui.post(() -> showBin(all, sum));
+            ui.post(() -> {
+                Sheet.nextBack = back;
+                Sheet.handoff = held;
+                showBin(all, sum);
+                if (Sheet.handoff == held && held != null) {     // nothing took over: close the menu now
+                    Sheet.handoff = null;
+                    held.release();
+                }
+            });
         }).start();
     }
 
     private void showBin(final List<Trash.Entry> all, long total) {
         if (isFinishing()) return;
-        final Sheet s = new Sheet(this, "Recycle bin");
         if (all.isEmpty()) {
-            s.text("The recycle bin is empty.").button("Close", Ui.FILLED, null).show();
+            Sheet.nextBack = null;                       // the empty message just closes; it doesn't return to the menu
+            new Sheet(this, "Recycle bin").text("The recycle bin is empty.").button("Close", Ui.FILLED, null).show();
             return;
         }
+        final Sheet s = new Sheet(this, "Recycle bin");
         s.text(plural(all.size(), "item", "items") + " \u00b7 " + Fmt.size(total));
         ListView lv = new ListView(this);
         lv.setDivider(null);
@@ -4304,8 +4390,7 @@ public class MainActivity extends Activity {
         });
         lv.setOnItemClickListener((av, v, pos, id) -> {
             final Trash.Entry e = all.get(pos);
-            s.dismiss();
-            binItem(e);
+            s.pickAndHold(() -> binItem(e));
         });
         s.fixed(lv, 330)
                 .button("Close", Ui.TEXT, null)
@@ -4826,6 +4911,37 @@ public class MainActivity extends Activity {
     }
 
     /** The checksum file that goes with f: f itself when it is one, else the f.sha256 beside it. */
+    /** Compare is only offered for exactly two files or exactly two folders. */
+    private boolean canCompare() {
+        if (sel.size() != 2) return false;
+        int dirs = 0;
+        for (String k : sel) {
+            boolean dir = false, found = false;
+            for (Item it : items) {
+                if (it.name.equals(k)) {
+                    dir = it.kind.equals("dir");
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) dir = new File(cwd, k).isDirectory();      // e.g. a search result in a subfolder
+            if (dir) dirs++;
+        }
+        return dirs != 1;
+    }
+
+    private final HashMap<String, Boolean> shaHas = new HashMap<>();
+
+    /** manifestFor() asks the file system; the menu opens often, so remember the answer until the folder reloads. */
+    private boolean hasManifest(File f) {
+        Boolean b = shaHas.get(f.getPath());
+        if (b == null) {
+            b = manifestFor(f) != null;
+            shaHas.put(f.getPath(), b);
+        }
+        return b;
+    }
+
     private static File manifestFor(File f) {
         if (f.isFile() && f.getName().endsWith(Integrity.EXT)) return f;
         File m = Integrity.manifestOf(f);
@@ -4834,29 +4950,56 @@ public class MainActivity extends Activity {
 
     private void shaGenerate(final List<File> items) {
         if (items.isEmpty()) return;
+        List<String> names = new ArrayList<>();
         List<String> exist = new ArrayList<>();
+        File clash = null;
         for (File f : items) {
             File m = Integrity.manifestOf(f);
-            if (m.exists()) exist.add(m.getName());
+            names.add(m.getName());
+            if (m.exists()) {
+                exist.add(m.getName());
+                if (clash == null) clash = f;
+            }
         }
+        int n = items.size();
+        Sheet s;
         if (exist.isEmpty()) {
-            runSha(items);
-            return;
+            s = new Sheet(this, "Generate SHA-256?");
+            s.text(n == 1
+                    ? (items.get(0).isDirectory()
+                    ? "One checksum file covering every file inside will be saved next to the folder."
+                    : "A checksum file will be saved next to the file.")
+                    : "A checksum file will be saved next to each of the " + n + " items.");
+            Results.add(s, Results.section(this, Results.NEUTRAL, "Will be created", names, false), 4);
+            s.button("Cancel", Ui.TEXT, null);
+            s.button("Generate", Ui.FILLED, () -> {
+                runSha(items, false);
+                return true;
+            });
+        } else {
+            s = new Sheet(this, exist.size() == 1 ? "Checksum file already exists" : "Checksum files already exist");
+            s.text(exist.size() == 1
+                    ? "A checksum file with this name is already there. Keep both, or replace the old one?"
+                    : "These checksum files are already there. Keep both, or replace the old ones?");
+            Results.add(s, Results.section(this, Results.WARN, exist.size() == 1 ? "Already exists" : "Already exist",
+                    exist, false), 8);
+            Results.add(s, Results.note(this, "Keep both saves the new one as \""
+                    + Integrity.uniqueManifestOf(clash).getName() + "\"."), 4);
+            s.button("Keep both", Ui.FILLED, () -> {
+                runSha(items, true);
+                return true;
+            });
+            s.button("Replace", Ui.DANGER, () -> {
+                runSha(items, false);
+                return true;
+            });
+            s.button("Cancel", Ui.TEXT, null);
         }
-        Sheet s = new Sheet(this, exist.size() == 1 ? "Replace checksum file?" : "Replace checksum files?");
-        s.text(exist.size() == 1 ? "This checksum file already exists. A new one will take its place."
-                : "These checksum files already exist. New ones will take their place.");
-        Results.add(s, Results.section(this, Results.WARN, "Will be replaced", exist, false), 4);
-        s.button("Cancel", Ui.TEXT, null);
-        s.button("Replace", Ui.DANGER, () -> {
-            runSha(items);
-            return true;
-        });
         s.show();
     }
 
-    private void runSha(final List<File> items) {
-        runOp("Calculating SHA-256...", true, p -> Integrity.generate(items, tickOf(p)), r -> {
+    private void runSha(final List<File> items, final boolean keepBoth) {
+        runOp("Calculating SHA-256...", true, p -> Integrity.generate(items, keepBoth, tickOf(p)), r -> {
             if (r.optBoolean("cancelled")) {
                 toast("Cancelled");
                 return;
@@ -4869,10 +5012,6 @@ public class MainActivity extends Activity {
             int n = made == null ? 0 : made.length();
             JSONArray failed = r.optJSONArray("failed");
             int failedN = failed == null ? 0 : failed.length();
-            sel.clear();
-            forceRefresh = true;
-            loadDir(cwd, true);
-            redraw();
             Sheet s = new Sheet(this, "SHA-256");
             s.content(Results.header(this, Results.GOOD,
                     n == 1 ? "Checksum created" : n + " checksums created",
@@ -4888,7 +5027,18 @@ public class MainActivity extends Activity {
                     r.optInt("skippedN"), false), 8);
             Results.add(s, Results.section(this, Results.BAD, "Couldn't read", failed, failedN, false), 8);
             s.button("Done", Ui.FILLED, null).show();
+            refreshAfterSheet();
         });
+    }
+
+    /** Rescans the folder once the result sheet has finished opening, so the two don't compete. */
+    private void refreshAfterSheet() {
+        getWindow().getDecorView().postDelayed(() -> {
+            sel.clear();
+            forceRefresh = true;
+            loadDir(cwd, true);
+            redraw();
+        }, 320);
     }
 
     private void shaVerify(final File manifest) {

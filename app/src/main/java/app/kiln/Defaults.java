@@ -64,6 +64,15 @@ final class Defaults {
     static int jobs(Context c) { return Math.max(1, Math.min(8, p(c).getInt("jobs", 1))); }
     static void setJobs(Context c, int v) { p(c).edit().putInt("jobs", v).apply(); }
 
+    // ---- rows on screen: how many list rows fit one screen (16 matches ZArchiver)
+
+    static final int[] ROW_CHOICES = {10, 12, 14, 16, 18, 20, 22, 24};
+    static final int ROWS_DEFAULT = 16;
+
+    static int rowsOnScreen(Context c) { return Math.max(8, Math.min(24, p(c).getInt("rows_on_screen", ROWS_DEFAULT))); }
+
+    static void setRowsOnScreen(Context c, int v) { p(c).edit().putInt("rows_on_screen", v).apply(); }
+
     // ---- animation speed: 0 Off, 1 Fast, 2 Normal (default, a touch quicker than before), 3 Relaxed
 
     static final String[] ANIM_NAMES = {"Off", "Fast", "Normal", "Relaxed"};

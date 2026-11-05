@@ -141,8 +141,18 @@ final class Integrity {
 
     // ------------------------------------------------------------------ generate
 
+    /** The first free name for item's checksum file: name.sha256, then "name (1).sha256", and so on. */
+    static File uniqueManifestOf(File f) {
+        File t = manifestOf(f);
+        for (int i = 1; t.exists(); i++) t = new File(f.getParentFile(), f.getName() + " (" + i + ")" + EXT);
+        return t;
+    }
+
     /** Writes name.sha256 beside each item. Nothing is written unless every hash finished. */
-    static JSONObject generate(List<File> items, Tick tick) {
+    static JSONObject generate(List<File> items, Tick tick) { return generate(items, false, tick); }
+
+    /** keepBoth: a checksum file that already exists is left alone and the new one gets a free name. */
+    static JSONObject generate(List<File> items, boolean keepBoth, Tick tick) {
         try {
             Meter m = new Meter(tick);
             final class Plan {
@@ -197,7 +207,7 @@ final class Integrity {
             JSONArray made = new JSONArray();
             List<String> skipped = new ArrayList<>();
             for (Plan p : good) {
-                File target = manifestOf(p.item);
+                File target = keepBoth ? uniqueManifestOf(p.item) : manifestOf(p.item);
                 File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
                 Files.write(tmp.toPath(), p.text.getBytes(StandardCharsets.UTF_8));
                 Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);

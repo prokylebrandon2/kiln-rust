@@ -343,3 +343,18 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
 ## CP12v (based on cp12u)
 - CI run #41 (cp12u) failed in rust-engine: tests/blk_vectors.rs::blocks_match_python ("text_s0 block 0: payload differs"). Cause: the test used pack::PARSE, but the Python-made vectors (../tests/blkvec, not in the zip) were generated with the old (384,258,2,99). Fix: the test now pins REF_PARSE = (384,258,2,99); the app keeps PARSE = (128,96,2,50). Only the test file and a doc comment in pack.rs changed; compiles. I could not run it here because the vectors are not in the zip, so CI is the real check.
 - If CI still fails, regenerate the vectors with the Python engine's own PARSE, or compare against the Rust output of the reference parse instead.
+
+## Stutter fixes - NOT YET TESTED ON A DEVICE (list kept so each can be checked)
+- edit22: opening a sub-sheet ("Open options", "Icon and color") no longer clears/rebuilds the selection; menu "has checksum file"
+  check cached until the folder reloads (no file-system hit on the UI thread); every Sheet animates as a hardware layer;
+  Properties defers MD5 / selectable-text setup until after the open animation; Generate SHA-256 opens its result sheet
+  first and rescans the folder ~320 ms later.
+- edit24: selecting a row rebuilds only that row (not every visible row + bottom bar; bar only rebuilt when selecting starts/stops);
+  empty / loading recycle bin returns correctly (see edit25 for the empty-bin change).
+- edit25: empty recycle bin message just closes (no return to menu). Icon-colour swatch taps keep the selection (selection is
+  cleared only after a final icon choice / Use default).
+- edit25 "don't let go": Sheet.handoff. A menu (Sheet.hold()) is NOT dismissed when an option is tapped; the sheet that option
+  opens stays under it until drawn, then they swap (one-step dim swap, 140 ms card cross-fade via Sheet.quiet()). Backing out does the
+  same in reverse (dismiss() hands itself to the menu that reopens). Recycle bin: menu / item sheet stays up while the bin loads
+  in the background; bin list taps use pickAndHold. If nothing takes over, the held sheet closes normally (pickAndHold / release()).
+  Needs a phone check: Icon and color open + Cancel, Properties, Open options, Rename, Recycle bin (with items and empty).

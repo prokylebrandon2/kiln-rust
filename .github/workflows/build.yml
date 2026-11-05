@@ -1,3 +1,4 @@
+```yaml
 name: Build APK
 
 on:
@@ -22,8 +23,7 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      # The same build step needs an Android SDK *platform* (android.jar) and the build-tools (D8).
-      # Without a platform it stops with "No Android platforms found".
+      # The same build step needs an Android SDK platform (android.jar) and build-tools (D8).
       - name: Install the Android SDK platform and build-tools
         uses: android-actions/setup-android@v3
         with:
@@ -31,28 +31,26 @@ jobs:
             platforms;android-34
             build-tools;34.0.0
 
-      # Slint's Android backend finds android.jar through these variables, so name it explicitly.
+      # Slint's build script finds android.jar through these variables.
       - name: Point Slint's build script at android.jar
         run: |
           jar="$(ls "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -n 1)"
           echo "android.jar: $jar"
           echo "ANDROID_JAR=$jar" >> "$GITHUB_ENV"
 
+      # Use the latest stable Rust toolchain.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
       - uses: Swatinem/rust-cache@v2
 
-      # kiln-platform is the whole app as one native library, libkiln_android.so: the entry point,
-      # the Slint UI, the app logic and the engine. cargo-ndk puts it into jniLibs/<abi>/, where
-      # Gradle packs it; android.app.NativeActivity loads it. Skia's prebuilt libraries are
-      # downloaded by its build script, so this step needs network access.
+      # Build the native Android libraries.
       - name: Build libkiln_android.so with the NDK
         env:
           RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
         run: |
-          cargo install cargo-ndk
+          cargo install cargo-ndk --locked
           cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o app/src/main/jniLibs build --release -p kiln-platform
           ls -l app/src/main/jniLibs/*/
 
@@ -76,8 +74,9 @@ jobs:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
 
-      # Hand back the Cargo.lock CI resolved, in case the committed one is out of date.
+      # Hand back the Cargo.lock CI resolved.
       - uses: actions/upload-artifact@v4
         with:
           name: cargo-lock
           path: Cargo.lock
+```

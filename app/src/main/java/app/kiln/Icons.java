@@ -84,6 +84,61 @@ final class Icons {
     };
 
     /** Drawable for an icon key (the plain folder for an unknown key). */
+    /** The same icons cut to their artwork (no blank margin), used for the file list. */
+    private static final Map<Integer, Integer> ROW = new HashMap<>();
+
+    static {
+        ROW.put(R.drawable.ic_archive, R.drawable.ic_archive_t);
+        ROW.put(R.drawable.ic_code, R.drawable.ic_code_t);
+        ROW.put(R.drawable.ic_f_apk, R.drawable.ic_f_apk_t);
+        ROW.put(R.drawable.ic_f_bin, R.drawable.ic_f_bin_t);
+        ROW.put(R.drawable.ic_f_book, R.drawable.ic_f_book_t);
+        ROW.put(R.drawable.ic_f_db, R.drawable.ic_f_db_t);
+        ROW.put(R.drawable.ic_f_disk, R.drawable.ic_f_disk_t);
+        ROW.put(R.drawable.ic_f_doc, R.drawable.ic_f_doc_t);
+        ROW.put(R.drawable.ic_f_font, R.drawable.ic_f_font_t);
+        ROW.put(R.drawable.ic_f_key, R.drawable.ic_f_key_t);
+        ROW.put(R.drawable.ic_f_pdf, R.drawable.ic_f_pdf_t);
+        ROW.put(R.drawable.ic_f_sheet, R.drawable.ic_f_sheet_t);
+        ROW.put(R.drawable.ic_f_slides, R.drawable.ic_f_slides_t);
+        ROW.put(R.drawable.ic_f_term, R.drawable.ic_f_term_t);
+        ROW.put(R.drawable.ic_f_text, R.drawable.ic_f_text_t);
+        ROW.put(R.drawable.ic_f_web, R.drawable.ic_f_web_t);
+        ROW.put(R.drawable.ic_f_zip, R.drawable.ic_f_zip_t);
+        ROW.put(R.drawable.ic_file, R.drawable.ic_file_t);
+        ROW.put(R.drawable.ic_image, R.drawable.ic_image_t);
+        ROW.put(R.drawable.ic_lock, R.drawable.ic_lock_t);
+        ROW.put(R.drawable.ic_music, R.drawable.ic_music_t);
+        ROW.put(R.drawable.ic_set, R.drawable.ic_set_t);
+        ROW.put(R.drawable.ic_settings, R.drawable.ic_settings_t);
+        ROW.put(R.drawable.ic_up_dir, R.drawable.ic_up_dir_t);
+        ROW.put(R.drawable.ic_video, R.drawable.ic_video_t);
+    }
+
+    /** The tight version of a list icon (the icon itself if it has none). */
+    static int row(int res) {
+        Integer t = ROW.get(res);
+        return t == null ? res : t;
+    }
+
+    /** Folder drawables whose artwork fills its whole box (no empty margin), so they get a thinner tile padding. */
+    static boolean tight(int res) {
+        return res == R.drawable.ic_d_android
+                || res == R.drawable.ic_d_bell
+                || res == R.drawable.ic_d_camera
+                || res == R.drawable.ic_d_code
+                || res == R.drawable.ic_d_documents
+                || res == R.drawable.ic_d_download
+                || res == R.drawable.ic_d_heart
+                || res == R.drawable.ic_d_lock
+                || res == R.drawable.ic_d_movies
+                || res == R.drawable.ic_d_music
+                || res == R.drawable.ic_d_pictures
+                || res == R.drawable.ic_d_star
+                || res == R.drawable.ic_d_zip
+                || res == R.drawable.ic_folder;
+    }
+
     static int byKey(String key) {
         if (key == null) return R.drawable.ic_folder;
         switch (key) {

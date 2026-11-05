@@ -44,6 +44,8 @@ final class Props {
         final Activity a;
         final LinearLayout col;
         final List<String[]> lines = new ArrayList<>();       // label, value: what Copy puts on the clipboard
+        final List<TextView> values = new ArrayList<>();
+        final long born = System.currentTimeMillis();
         final AtomicBoolean stop = new AtomicBoolean(false);
 
         Box(Activity a) {
@@ -67,7 +69,7 @@ final class Props {
             TextView l = Ui.label(a, label, 14, true, true);
             r.addView(l, new LinearLayout.LayoutParams(Ui.dp(a, 128), ViewGroup.LayoutParams.WRAP_CONTENT));
             TextView v = Ui.label(a, value, 14, false, false);
-            v.setTextIsSelectable(true);
+            values.add(v);                       // made selectable once the box has finished opening
             r.addView(v, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             col.addView(r);
             lines.add(new String[]{label, value});
@@ -76,11 +78,22 @@ final class Props {
 
         /** Changes a row's value (from any thread) and what Copy will use. */
         void set(final TextView v, final String label, final String value) {
-            a.runOnUiThread(() -> {
+            // an answer that is ready early waits for the box to finish opening, so the text
+            // changing doesn't re-lay the card out in the middle of its animation
+            long wait = Math.max(0, 300 - (System.currentTimeMillis() - born));
+            col.postDelayed(() -> {
                 if (stop.get()) return;
                 v.setText(value);
                 for (String[] ln : lines) if (label.equals(ln[0])) ln[1] = value;
-            });
+            }, wait);
+        }
+
+        /** Called right after the box is shown: selectable text is costly to set up, so it waits
+         *  until the open animation is over. */
+        void finish() {
+            col.postDelayed(() -> {
+                for (TextView v : values) v.setTextIsSelectable(true);
+            }, 280);
         }
 
         String text() {
@@ -109,6 +122,7 @@ final class Props {
                     return false;
                 })
                 .button("OK", Ui.FILLED, null).show();
+        b.finish();
     }
 
     // ------------------------------------------------------------------ one item
@@ -386,5 +400,6 @@ final class Props {
                     return false;
                 })
                 .button("OK", Ui.FILLED, null).show();
+        b.finish();
     }
 }

@@ -7,6 +7,7 @@ import android.graphics.Outline;
 import android.media.MediaMetadataRetriever;
 import android.util.LruCache;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.widget.ImageView;
 
@@ -70,11 +71,16 @@ final class Thumbs {
 
     /** Shows the plain icon at once, then swaps in a preview if there is one to show. */
     static void bind(final ImageView iv, final File f, int icon, int iconColor, boolean wantPreview) {
+        bind(iv, f, icon, iconColor, wantPreview, false);
+    }
+
+    /** `bare`: the plain icon is drawn on its own, filling the box, with no tile behind it. */
+    static void bind(final ImageView iv, final File f, int icon, int iconColor, boolean wantPreview, boolean bare) {
         final Context c = iv.getContext();
         final int kind = kindOf(f.getName());
         final String key = f.getPath() + "|" + f.lastModified();
         iv.setTag(key);
-        showIcon(iv, icon, iconColor);
+        showIcon(iv, icon, iconColor, bare);
         if (!wantPreview || !previewable(kind) || (kind == IMAGE && f.length() > IMAGE_MAX)) return;
         Bitmap hit = CACHE.get(key);
         if (hit != null) {
@@ -100,16 +106,38 @@ final class Thumbs {
     }
 
     static void showIcon(ImageView iv, int icon, int color) {
+        showIcon(iv, icon, color, false);
+    }
+
+    static void showIcon(ImageView iv, int icon, int color, boolean bare) {
         iv.animate().cancel();
         iv.setAlpha(1f);
-        iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        int p = Ui.dp(iv.getContext(), 9);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);                    // scales up as well as down
+        ViewGroup.LayoutParams lp = iv.getLayoutParams();
+        int w = lp != null && lp.width > 0 ? lp.width : 0;
+        int p;
+        if (bare) {
+            iv.setBackground(null);                                          // no tile: the artwork fills the box
+            p = 0;
+        } else {
+            if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
+            p = w > 0 ? Math.round(w * (Icons.tight(icon) ? 0.1f : 0.2f))   // folders fill the tile's width
+                    : Ui.dp(iv.getContext(), 9);
+        }
         iv.setPadding(p, p, p, p);
+        if (bare && (Icons.tight(icon) || icon == R.drawable.ic_up_dir_t)) {
+            // a folder, drawn as one icon with its own shades and paper (see FolderDrawable)
+            boolean up = icon == R.drawable.ic_up_dir_t;
+            iv.setImageTintList(null);
+            iv.setImageDrawable(new FolderDrawable(iv.getContext(), up ? R.drawable.ic_folder : icon, color, up));
+            return;
+        }
         iv.setImageResource(icon);
         Ui.tint(iv, color);
     }
 
     private static void showBitmap(ImageView iv, Bitmap b) {
+        if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
         iv.setImageTintList(null);
         iv.setPadding(0, 0, 0, 0);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);

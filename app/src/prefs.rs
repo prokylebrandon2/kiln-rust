@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The settings that are stored in `kiln.xml`, as text by key.
 #[derive(Debug, Default)]
@@ -133,6 +133,30 @@ impl Prefs {
         } else {
             Some(key.to_string())
         }
+    }
+
+    /// `Defaults.setFolderIcon`: remember the icon `key` for a folder. An empty key goes back to
+    /// the standard look. The JSON object is written the way Android writes it, with "\/" for "/".
+    pub fn set_folder_icon(&self, path: &str, key: &str) {
+        let mut icons = self.folder_icon_map();
+        if key.is_empty() {
+            icons.remove(path);
+        } else {
+            icons.insert(path.to_string(), Value::from(key));
+        }
+        let text = Value::Object(icons).to_string();
+        self.set_string("folder_icons", &text.replace('/', "\\/"));
+    }
+
+    /// The saved folder icons (path to key), without entries whose key is empty or not text.
+    fn folder_icon_map(&self) -> Map<String, Value> {
+        let text = self.string("folder_icons", "{}");
+        let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
+            return Map::new();
+        };
+        map.into_iter()
+            .filter(|(_, v)| v.as_str().is_some_and(|s| !s.is_empty()))
+            .collect()
     }
 
     fn put(&self, kind: &str, key: &str, value: &str) {

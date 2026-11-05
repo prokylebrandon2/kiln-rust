@@ -2,7 +2,7 @@
 name = "kiln"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 description = "High-performance multicore archiver (Rust rewrite of Kiln) - Phase 3 performance and the .kiln format"
 readme = "README.md"
 publish = false

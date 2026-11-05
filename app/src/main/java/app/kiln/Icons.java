@@ -84,6 +84,16 @@ final class Icons {
     };
 
     /** Drawable for an icon key (the plain folder for an unknown key). */
+    /** Folder drawables whose artwork fills its whole box (no empty margin), so they get a thinner tile padding. */
+    static boolean tight(int res) {
+        switch (res) {
+            case R.drawable.ic_d_android: case R.drawable.ic_d_bell: case R.drawable.ic_d_camera: case R.drawable.ic_d_code: case R.drawable.ic_d_documents: case R.drawable.ic_d_download: case R.drawable.ic_d_heart: case R.drawable.ic_d_lock: case R.drawable.ic_d_movies: case R.drawable.ic_d_music: case R.drawable.ic_d_pictures: case R.drawable.ic_d_star: case R.drawable.ic_d_zip: case R.drawable.ic_folder:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     static int byKey(String key) {
         if (key == null) return R.drawable.ic_folder;
         switch (key) {

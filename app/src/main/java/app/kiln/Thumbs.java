@@ -121,7 +121,7 @@ final class Thumbs {
             p = w > 0 ? Math.round(w * 0.03f) : 0;
         } else {
             if (iv.getBackground() == null) iv.setBackground(Ui.shape(iv.getContext(), iv.getContext().getColor(R.color.k_chip), 0, 10));
-            p = w > 0 ? Math.round(w * 0.2f)                                 // the glyph is 60% of the tile at any size
+            p = w > 0 ? Math.round(w * (Icons.tight(icon) ? 0.1f : 0.2f))   // folders fill the tile's width
                     : Ui.dp(iv.getContext(), 9);
         }
         iv.setPadding(p, p, p, p);

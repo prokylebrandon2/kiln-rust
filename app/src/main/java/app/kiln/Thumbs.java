@@ -128,13 +128,18 @@ final class Thumbs {
         if (bare && Icons.tight(icon)) {
             // a folder: the folder in its colour with a small white sheet showing at the top
             Context c = iv.getContext();
-            android.graphics.drawable.Drawable base = c.getDrawable(icon).mutate();
-            // a colour filter, not a tint: ImageView clears the tint of every layer, which turned folders black
-            base.setColorFilter(new android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN));
+            android.graphics.drawable.Drawable base = c.getDrawable(icon);
             android.graphics.drawable.Drawable paper = c.getDrawable(R.drawable.ic_paper);
+            android.graphics.drawable.LayerDrawable ld = new android.graphics.drawable.LayerDrawable(
+                    new android.graphics.drawable.Drawable[]{base, paper});
+            // ImageView mutates a LayerDrawable, which rebuilds its layers and drops anything set on them
+            // beforehand, so mutate first and colour the layer that is actually shown
+            ld.mutate();
+            android.graphics.drawable.Drawable shown = ld.getDrawable(0);
+            shown.setTintList(null);                  // the vector's own tint attribute would win over the filter
+            shown.setColorFilter(new android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN));
             iv.setImageTintList(null);
-            iv.setImageDrawable(new android.graphics.drawable.LayerDrawable(
-                    new android.graphics.drawable.Drawable[]{base, paper}));
+            iv.setImageDrawable(ld);
             return;
         }
         iv.setImageResource(icon);

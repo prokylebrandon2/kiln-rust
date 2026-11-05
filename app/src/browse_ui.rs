@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use slint::{Color, Timer};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
-use crate::dialog::{Opt, Spec};
+use crate::dialog::{Btn, BtnKind, Opt, Spec};
 use crate::{App, app_do};
 
 /// `MainActivity.toast`: `Toast.LENGTH_SHORT` is two seconds.
@@ -69,6 +69,7 @@ impl App {
         ui.on_query_edited(|text| app_do(|app| app.query_edited(&text)));
         ui.on_sort_clicked(|| app_do(|app| app.sort_clicked()));
         ui.on_more_clicked(|| app_do(|app| app.show_menu()));
+        ui.on_new_clicked(|| app_do(|app| app.show_new_sheet()));
         ui.on_sort_key_chosen(|k| app_do(|app| app.sort_key_chosen(k)));
         ui.on_sort_asc_chosen(|asc| app_do(|app| app.sort_asc_chosen(asc)));
         ui.on_sort_dismissed(|| app_do(|app| app.ui.set_sort_sheet_shown(false)));
@@ -489,5 +490,67 @@ impl App {
             self.fab_hidden.set(hide);
             self.render_chrome();
         }
+    }
+}
+
+/// An I/O error as the Java shows it: the system's text, without Rust's " (os error N)".
+fn io_text(e: &std::io::Error) -> String {
+    let mut text = e.to_string();
+    if let Some(i) = text.find(" (os error") {
+        text.truncate(i);
+    }
+    text
+}
+
+impl App {
+    /// `newSheet`: what the "+ New" button opens.
+    pub(crate) fn show_new_sheet(&self) {
+        let mut spec = Spec::new("New");
+        spec.options = vec![
+            opt("new_folder", "Folder", App::new_folder_here),
+            opt("new_file", "Text file", App::new_text_file),
+        ];
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        self.show_dialog(spec);
+    }
+
+    /// `newFolderHere` (the Priv branch for protected folders comes with Phase C).
+    fn new_folder_here(&self) {
+        self.name_sheet("New folder", "", "Create", |app, name| {
+            let target = app.browser.borrow().cwd.join(name);
+            if target.exists() {
+                return Some("That name is taken".to_string());
+            }
+            if std::fs::create_dir_all(&target).is_err() {
+                return Some("Couldn't create it".to_string());
+            }
+            app.reload_here();
+            None
+        });
+    }
+
+    /// The "Text file" row of `newSheet`.
+    fn new_text_file(&self) {
+        self.name_sheet("New text file", "untitled.txt", "Create", |app, name| {
+            let target = app.browser.borrow().cwd.join(name);
+            if target.exists() {
+                return Some("That name is taken".to_string());
+            }
+            if let Err(e) = std::fs::File::create_new(&target) {
+                return Some(io_text(&e));
+            }
+            app.reload_here();
+            None
+        });
+    }
+
+    /// `loadDir(cwd)`: read the folder again after a change.
+    fn reload_here(&self) {
+        let cwd = self.browser.borrow().cwd.clone();
+        self.load_dir(cwd, false);
     }
 }

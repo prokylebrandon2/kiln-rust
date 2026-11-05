@@ -145,6 +145,7 @@ impl App {
         ui.set_dlg_title(spec.title.into());
         ui.set_dlg_body(spec.body.into());
         ui.set_dlg_has_field(has_field);
+        ui.set_dlg_error(SharedString::new());
         ui.set_dlg_placeholder(placeholder.into());
         ui.set_dlg_text(text.into());
         ui.set_dlg_buttons(ModelRc::new(VecModel::from(labels)));
@@ -227,5 +228,49 @@ impl App {
             self.cancel_dialog();
         }
         true
+    }
+}
+
+impl App {
+    /// `MainActivity.nameSheet`: a sheet with a name field, Cancel and an `ok` button. `make` gets
+    /// the trimmed name and returns the line to show under the field when it failed, or `None`
+    /// when it worked (the sheet then closes).
+    pub(crate) fn name_sheet(
+        &self,
+        heading: &str,
+        initial: &str,
+        ok: &str,
+        make: impl Fn(&App, &str) -> Option<String> + 'static,
+    ) {
+        let mut spec = Spec::new(heading);
+        spec.field = Some(Field {
+            placeholder: "Name".to_string(),
+            text: initial.to_string(),
+        });
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(move |app: &App, text: &str| -> bool {
+            let name = text.trim();
+            if name.is_empty() || name.contains('/') {
+                app.ui.set_dlg_error("Enter a name (no slashes)".into());
+                return false;
+            }
+            match make(app, name) {
+                Some(error) => {
+                    app.ui.set_dlg_error(error.into());
+                    false
+                }
+                None => true,
+            }
+        });
+        spec.buttons.push(Btn {
+            label: ok.to_string(),
+            kind: BtnKind::Filled,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
     }
 }

@@ -69,6 +69,8 @@ export component MainWindow inherits Window {
     in property <string> dlg-placeholder;
     /// What is in the field: Rust sets the start text and reads it when a button is tapped.
     in-out property <string> dlg-text;
+    /// A line under the field in the danger colour (EditText.setError). Typing clears it.
+    in-out property <string> dlg-error;
     in property <[string]> dlg-buttons;
     in property <[int]> dlg-kinds;
     in property <bool> dlg-cancelable: true;
@@ -515,6 +517,15 @@ export component MainWindow inherits Window {
             placeholder: root.dlg-placeholder;
             autofocus: true;
             text <=> root.dlg-text;
+            edited => {
+                root.dlg-error = "";
+            }
+        }
+        if root.dlg-error != "" && root.dlg-has-field: Text {
+            text: root.dlg-error;
+            color: Theme.danger;
+            font-size: Theme.sp(12px);
+            wrap: word-wrap;
         }
     }
 

@@ -66,10 +66,10 @@ final class Defaults {
 
     // ---- rows on screen: how many list rows fit one screen (16 matches ZArchiver)
 
-    static final int[] ROW_CHOICES = {10, 12, 14, 16, 18, 20, 22, 24};
+    static final int ROWS_MIN = 10, ROWS_MAX = 24;
     static final int ROWS_DEFAULT = 16;
 
-    static int rowsOnScreen(Context c) { return Math.max(8, Math.min(24, p(c).getInt("rows_on_screen", ROWS_DEFAULT))); }
+    static int rowsOnScreen(Context c) { return Math.max(ROWS_MIN, Math.min(ROWS_MAX, p(c).getInt("rows_on_screen", ROWS_DEFAULT))); }
 
     static void setRowsOnScreen(Context c, int v) { p(c).edit().putInt("rows_on_screen", v).apply(); }
 

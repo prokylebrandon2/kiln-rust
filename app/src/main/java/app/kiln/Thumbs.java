@@ -7,6 +7,7 @@ import android.graphics.Outline;
 import android.media.MediaMetadataRetriever;
 import android.util.LruCache;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.widget.ImageView;
 
@@ -103,7 +104,9 @@ final class Thumbs {
         iv.animate().cancel();
         iv.setAlpha(1f);
         iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        int p = Ui.dp(iv.getContext(), 9);
+        ViewGroup.LayoutParams lp = iv.getLayoutParams();
+        int p = lp != null && lp.width > 0 ? Math.round(lp.width * 0.2f)    // the glyph is 60% of the tile at any size
+                : Ui.dp(iv.getContext(), 9);
         iv.setPadding(p, p, p, p);
         iv.setImageResource(icon);
         Ui.tint(iv, color);

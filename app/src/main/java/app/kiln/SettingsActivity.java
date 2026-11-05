@@ -136,17 +136,34 @@ public class SettingsActivity extends Activity {
         toggle(a, "Show previews", "Pictures, album art and video frames as icons",
                 Defaults.previews(this), (b, on) -> Defaults.setPreviews(this, on));
         choiceRow(a, "Rows on screen", String.valueOf(Defaults.rowsOnScreen(this)),
-                "How many file rows fit on one screen. 16 is the default, the same as ZArchiver.", () -> {
-                    Sheet sh = new Sheet(this, "Rows on screen");
-                    sh.text("More rows means smaller rows.");
-                    for (final int n : Defaults.ROW_CHOICES) {
-                        sh.radio(String.valueOf(n), n == Defaults.ROWS_DEFAULT ? "Default" : null,
-                                n == Defaults.rowsOnScreen(this), () -> {
-                                    Defaults.setRowsOnScreen(this, n);
-                                    render();
-                                });
+                "How many file rows fit on one screen, 10 to 24. 16 is the default, the same as ZArchiver.", () -> {
+                    final android.widget.NumberPicker wheel = new android.widget.NumberPicker(this);
+                    wheel.setMinValue(Defaults.ROWS_MIN);
+                    wheel.setMaxValue(Defaults.ROWS_MAX);
+                    wheel.setValue(Defaults.rowsOnScreen(this));
+                    wheel.setWrapSelectorWheel(false);
+                    wheel.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+                    wheel.setTextColor(Ui.text(this));
+                    wheel.setTextSize(Ui.dp(this, 22));
+                    try {                                      // tint the two lines around the chosen number
+                        java.lang.reflect.Field f = android.widget.NumberPicker.class.getDeclaredField("mSelectionDivider");
+                        f.setAccessible(true);
+                        f.set(wheel, new android.graphics.drawable.ColorDrawable(Ui.accent(this)));
+                    } catch (Throwable ignored) {
                     }
-                    sh.button("Cancel", Ui.TEXT, null).show();
+                    LinearLayout box = new LinearLayout(this);
+                    box.setGravity(android.view.Gravity.CENTER);
+                    box.addView(wheel, new LinearLayout.LayoutParams(Ui.dp(this, 120), Ui.dp(this, 170)));
+                    Sheet sh = new Sheet(this, "Rows on screen");
+                    sh.text("Scroll to choose. More rows means smaller rows.");
+                    sh.content(box);
+                    sh.button("Cancel", Ui.TEXT, null);
+                    sh.button("Set", Ui.FILLED, () -> {
+                        Defaults.setRowsOnScreen(this, wheel.getValue());
+                        render();
+                        return true;
+                    });
+                    sh.show();
                 });
 
         heading("ANIMATIONS");

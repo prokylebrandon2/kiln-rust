@@ -547,6 +547,22 @@ public class MainActivity extends Activity {
         list.setDivider(null);
         list.setSelector(android.R.color.transparent);
         list.setClipToPadding(false);
+        list.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int h = b - t, w = r - l;
+            if (h <= 0) return;
+            if (w != listRoomW) {                           // first layout or a rotation: start again
+                listRoomW = w;
+                listRoom = 0;
+            }
+            if (h > listRoom) {
+                listRoom = h;
+                int np = calcRowPx();
+                if (np != rowPx) {
+                    rowPx = np;
+                    list.post(() -> adapter.notifyDataSetChanged());
+                }
+            }
+        });
         list.setPadding(0, 0, 0, dp(10));                 // grows only while a bar or the keyboard is up
         adapter = new RowAdapter();
         list.setAdapter(adapter);
@@ -700,16 +716,32 @@ public class MainActivity extends Activity {
         private boolean wasSelected;
 
         /** Sizes the row so about Settings > Rows on screen of them fit one screen. */
+        private int fitH = -1;
+
+        /** Every part scales with the row height, so each count from 10 to 24 gets its own proportions:
+         *  the icon fills the row, its glyph stays 60% of the tile, the text grows and shrinks with it. */
         void fit() {
             int h = rowPx();
-            if (getMinimumHeight() != h) setMinimumHeight(h);
-            int ic = Math.min(dp(40), Math.max(dp(28), h - dp(6)));
+            if (h == fitH) return;
+            fitH = h;
+            setMinimumHeight(h);
+            float hd = h / getResources().getDisplayMetrics().density;
+            int ic = dp(Math.round(Math.max(26f, Math.min(56f, hd - 9f))));
             LayoutParams lp = (LayoutParams) icon.getLayoutParams();
-            if (lp.width != ic) {
-                lp.width = ic;
-                lp.height = ic;
-                icon.setLayoutParams(lp);
-            }
+            lp.width = ic;
+            lp.height = ic;
+            icon.setLayoutParams(lp);
+            int hp = dp(hd < 34 ? 12 : 14);
+            setPadding(hp, dp(2), hp, dp(2));
+            LayoutParams cp = (LayoutParams) ((View) name.getParent()).getLayoutParams();
+            cp.leftMargin = dp(hd < 34 ? 10 : 13);
+            ((View) name.getParent()).setLayoutParams(cp);
+            float nameSp = Math.max(12f, Math.min(17.5f, hd * 0.37f));
+            float subSp = Math.max(10f, Math.min(13f, hd * 0.27f));
+            name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, nameSp);
+            detail.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, subSp);
+            loc.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, subSp);
+            size.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, subSp + 1f);
         }
 
         RowView() {
@@ -803,10 +835,14 @@ public class MainActivity extends Activity {
         return rowPx;
     }
 
+    /** The list's own height (the biggest seen, so opening search or a banner doesn't resize the rows). */
+    private int listRoom, listRoomW;
+
     private int calcRowPx() {
         int n = Defaults.rowsOnScreen(this);
-        int room = getResources().getDisplayMetrics().heightPixels - dp(48) - dp(64);
-        return Math.max(dp(34), room / n);
+        int room = listRoom > 0 ? listRoom
+                : getResources().getDisplayMetrics().heightPixels - dp(48) - dp(64);   // until the list is measured
+        return Math.max(dp(24), room / n);
     }
 
     private final class RowAdapter extends BaseAdapter {

@@ -235,3 +235,4 @@ and custom/fallback scripts.
 - Properties: the file and folder counts no longer get stuck at "1..." when several folders (or files and folders) are selected.
 - Properties of a single file now shows SHA-256 below the MD5 (both computed in one read).
 - Folder pictograms in the file list now sit on the right side of the folder, like ZArchiver (dialogs and the icon picker keep them centred).
+- Encrypted sets (one archive per file) now get the same folder look as other folders, with a larger lock (keyhole included) that is easy to see; still centred.

@@ -140,6 +140,7 @@ final class Icons {
         if (res == R.drawable.ic_d_pictures) return R.drawable.ic_d_pictures_l;
         if (res == R.drawable.ic_d_star) return R.drawable.ic_d_star_l;
         if (res == R.drawable.ic_d_zip) return R.drawable.ic_d_zip_l;
+        if (res == R.drawable.ic_set_t) return R.drawable.ic_d_set_l;      // encrypted set: bigger lock, centred
         return res;
     }
 
@@ -157,6 +158,7 @@ final class Icons {
                 || res == R.drawable.ic_d_pictures
                 || res == R.drawable.ic_d_star
                 || res == R.drawable.ic_d_zip
+                || res == R.drawable.ic_set_t
                 || res == R.drawable.ic_folder;
     }
 

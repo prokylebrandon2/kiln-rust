@@ -29,29 +29,87 @@ export component KFileList inherits Rectangle {
     in property <bool> has-where: false;
     /// Room under the last row: 10 dp, more while the bottom bar covers it (`padList`).
     in property <length> bottom-pad: 10px;
+    /// The info strip behind the list may be pulled into view (nothing selected, access granted).
+    in property <bool> pull-enabled: false;
     /// A tap; the index is into `rows`, or -1 for the ".." row.
     callback row-clicked(int);
     callback row-long-pressed(int);
     /// The list was scrolled (for the "+ New" button, which hides while scrolling down).
     callback scrolled(length);
-    out property <length> scroll-pos: -flick.content-y;
+    /// A pull down from the top began: fill the info strip.
+    callback pull-started();
+    /// The pull ended; `refresh` is true when it was long enough to reload the folder.
+    callback pull-ended(bool);
+    out property <length> scroll-pos: Math.max(0px, -flick.content-y - root.slack);
+    /// How far the finger has pulled the list down from the top (1:1).
+    out property <length> over: Math.max(0px, flick.content-y + root.slack);
+    /// How far the list is shown moved down: 0.6 of the pull, at most 84 dp (`PULL_H`), and back to
+    /// 0 when the finger lets go (220 ms, after 250 ms when the strip was almost fully out).
+    out property <length> shift: root.releasing || !root.pull-enabled ? 0px : Math.min(root.over * 0.6, 84px);
+    /// A pull is going on: the finger is down, or has only just left.
+    in-out property <bool> held: false;
 
+    // The Flickable cannot be dragged past its top, so its content starts `slack` (84 dp / 0.6)
+    // below the top of the viewport and rests scrolled by that much; dragging down uses up the slack.
+    property <length> slack: 140px;
+    property <bool> releasing: false;
+    property <bool> full: false;
+    property <int> still: 0;
     property <length> row-h: probe.preferred-height;
     property <int> total: root.rows.length + (root.up-row ? 1 : 0);
-    property <int> first: Math.max(0, Math.floor(-flick.content-y / root.row-h) - 1);
+    property <int> first: Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 1);
     property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
 
-    background: Theme.bg;
+    // transparent: the info strip shows through above the rows while the list is pulled down
     clip: true;
+
+    animate shift {
+        duration: root.releasing ? Theme.dur(220ms) : 0ms;
+        delay: root.full ? 250ms : 0ms;
+        easing: ease-in-out-sine;
+    }
+
+    init => {
+        flick.content-y = -root.slack;
+    }
 
     /// Scroll to the very top (a new folder always starts there).
     public function scroll-top() {
-        flick.content-y = 0px;
+        flick.content-y = -root.slack;
     }
 
     /// Scroll to `y` dp from the top (Back returns to where the folder was left).
     public function scroll-to(y: length) {
-        flick.content-y = -y;
+        flick.content-y = -(y + root.slack);
+    }
+
+    /// The finger let go (or has not moved for a while): hand the list back and say so.
+    function release() {
+        root.held = false;
+        root.full = root.over * 0.6 >= 84px * 0.9;
+        root.releasing = true;
+        root.pull-ended(root.over * 0.5 > 64px);
+        flick.content-y = -root.slack;
+    }
+
+    // Is a finger on the list? A TouchArea around the Flickable sees the pointer while it is
+    // inside, even while the Flickable has the drag.
+    Timer {
+        interval: 50ms;
+        running: root.held;
+        triggered => {
+            root.still += 1;
+            if ((!touch.has-hover && root.still >= 3) || root.still >= 40) {
+                root.release();
+            }
+        }
+    }
+
+    // covers what is below the rows, from the top of the list as it is shown
+    Rectangle {
+        y: root.shift;
+        height: parent.height - root.shift;
+        background: Theme.bg;
     }
 
     // The row that gives every row its height; never seen.
@@ -65,35 +123,48 @@ export component KFileList inherits Rectangle {
         size-text: "1 B";
     }
 
-    flick := Flickable {
-        content-width: root.width;
-        content-height: root.total * root.row-h + root.bottom-pad;
-        changed content-y => {
-            root.scrolled(-self.content-y);
-        }
-
-        for slot in root.shown: KListRow {
-            property <int> at: root.first + slot;
-            property <int> idx: self.at - (root.up-row ? 1 : 0);
-            property <bool> is-up: root.up-row && self.at == 0;
-            property <RowData> d: root.rows[self.idx];
-            x: 0px;
-            y: self.at * root.row-h;
-            width: root.width;
-            height: root.row-h;
-            icon: self.is-up ? "up_dir" : self.d.icon;
-            icon-tint: self.is-up || self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;
-            name: self.is-up ? ".." : self.d.name;
-            detail: self.is-up ? "" : self.d.detail;
-            where-line: self.is-up ? "" : self.d.where-line;
-            size-text: self.is-up ? "" : self.d.size-text;
-            selected: !self.is-up && self.d.selected;
-            clicked => {
-                root.row-clicked(self.is-up ? -1 : self.idx);
+    touch := TouchArea {
+        flick := Flickable {
+            content-width: root.width;
+            content-height: Math.max(root.slack + root.total * root.row-h + root.bottom-pad, root.height + root.slack);
+            changed content-y => {
+                root.scrolled(root.scroll-pos);
+                if (root.over > 0px) {
+                    root.still = 0;
+                    if (!root.held) {
+                        root.held = true;
+                        root.releasing = false;
+                        root.full = false;
+                        if (root.pull-enabled) {
+                            root.pull-started();
+                        }
+                    }
+                }
             }
-            long-pressed => {
-                if (!self.is-up) {
-                    root.row-long-pressed(self.idx);
+
+            for slot in root.shown: KListRow {
+                property <int> at: root.first + slot;
+                property <int> idx: self.at - (root.up-row ? 1 : 0);
+                property <bool> is-up: root.up-row && self.at == 0;
+                property <RowData> d: root.rows[self.idx];
+                x: 0px;
+                y: root.slack + root.shift - root.over + self.at * root.row-h;
+                width: root.width;
+                height: root.row-h;
+                icon: self.is-up ? "up_dir" : self.d.icon;
+                icon-tint: self.is-up || self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;
+                name: self.is-up ? ".." : self.d.name;
+                detail: self.is-up ? "" : self.d.detail;
+                where-line: self.is-up ? "" : self.d.where-line;
+                size-text: self.is-up ? "" : self.d.size-text;
+                selected: !self.is-up && self.d.selected;
+                clicked => {
+                    root.row-clicked(self.is-up ? -1 : self.idx);
+                }
+                long-pressed => {
+                    if (!self.is-up) {
+                        root.row-long-pressed(self.idx);
+                    }
                 }
             }
         }

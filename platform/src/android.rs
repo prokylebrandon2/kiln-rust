@@ -1,13 +1,13 @@
 //! The real phone: JNI calls on the `NativeActivity`, the NDK's configuration, and the entry point.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use jni::errors::Result as JniResult;
 use jni::objects::{GlobalRef, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
-use kiln_app::{Event, Host, Look};
+use kiln_app::{Event, Host, Look, Volume};
 use ndk::configuration::UiModeNight;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
@@ -171,6 +171,98 @@ fn utc_offset(env: &mut JNIEnv<'_>, epoch_seconds: i64) -> JniResult<i32> {
     Ok(millis / 1000)
 }
 
+/// `new StatFs(path)`: `(getAvailableBytes(), getTotalBytes())`.
+fn space_of(env: &mut JNIEnv<'_>, path: &str) -> JniResult<(u64, u64)> {
+    let text = env.new_string(path)?;
+    let stat = env.new_object(
+        "android/os/StatFs",
+        "(Ljava/lang/String;)V",
+        &[JValue::Object(&text)],
+    )?;
+    let free = env
+        .call_method(&stat, "getAvailableBytes", "()J", &[])?
+        .j()?;
+    let total = env.call_method(&stat, "getTotalBytes", "()J", &[])?.j()?;
+    Ok((free.max(0) as u64, total.max(0) as u64))
+}
+
+/// The mounted removable volumes of `getSystemService("storage").getStorageVolumes()`.
+fn removable_volumes(env: &mut JNIEnv<'_>, activity: &GlobalRef) -> JniResult<Vec<Volume>> {
+    let service = env.new_string("storage")?;
+    let manager = env
+        .call_method(
+            activity,
+            "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[JValue::Object(&service)],
+        )?
+        .l()?;
+    let list = env
+        .call_method(&manager, "getStorageVolumes", "()Ljava/util/List;", &[])?
+        .l()?;
+    let count = env.call_method(&list, "size", "()I", &[])?.i()?;
+    let mut out = Vec::new();
+    for i in 0..count {
+        let found = env.with_local_frame(16, |env| volume_at(env, activity, &list, i))?;
+        out.extend(found);
+    }
+    Ok(out)
+}
+
+/// One entry of that list, if it is a mounted USB drive or SD card (never the phone's own storage).
+fn volume_at(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    list: &JObject<'_>,
+    index: i32,
+) -> JniResult<Option<Volume>> {
+    let volume = env
+        .call_method(list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(index)])?
+        .l()?;
+    let dir = env
+        .call_method(&volume, "getDirectory", "()Ljava/io/File;", &[])?
+        .l()?;
+    if dir.is_null() {
+        return Ok(None);
+    }
+    let primary = env.call_method(&volume, "isPrimary", "()Z", &[])?.z()?;
+    let removable = env.call_method(&volume, "isRemovable", "()Z", &[])?.z()?;
+    if primary || !removable {
+        return Ok(None);
+    }
+    let state = env
+        .call_method(&volume, "getState", "()Ljava/lang/String;", &[])?
+        .l()?;
+    // `Environment.MEDIA_MOUNTED`
+    if state.is_null() || java_string(env, state)? != "mounted" {
+        return Ok(None);
+    }
+    let label = env
+        .call_method(
+            &volume,
+            "getDescription",
+            "(Landroid/content/Context;)Ljava/lang/String;",
+            &[JValue::Object(activity.as_obj())],
+        )?
+        .l()?;
+    let label = if label.is_null() {
+        String::new()
+    } else {
+        java_string(env, label)?
+    };
+    let path = env
+        .call_method(&dir, "getPath", "()Ljava/lang/String;", &[])?
+        .l()?;
+    let path = PathBuf::from(java_string(env, path)?);
+    let label = if label.is_empty() {
+        let name = path.file_name().unwrap_or_default();
+        name.to_string_lossy().into_owned()
+    } else {
+        label
+    };
+    Ok(Some(Volume { path, label }))
+}
+
 fn java_string(env: &mut JNIEnv<'_>, object: JObject<'_>) -> JniResult<String> {
     let string = JString::from(object);
     let text: String = env.get_string(&string)?.into();
@@ -306,6 +398,15 @@ impl Host for AndroidHost {
     fn utc_offset(&self, epoch_seconds: i64) -> i32 {
         self.with_env(|env, _| utc_offset(env, epoch_seconds))
             .unwrap_or(0)
+    }
+
+    fn volumes(&self) -> Vec<Volume> {
+        self.with_env(removable_volumes).unwrap_or_default()
+    }
+
+    fn space(&self, path: &Path) -> Option<(u64, u64)> {
+        let text = path.to_string_lossy().into_owned();
+        self.with_env(|env, _| space_of(env, &text)).ok()
     }
 
     fn version_name(&self) -> String {

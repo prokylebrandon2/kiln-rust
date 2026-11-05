@@ -1,0 +1,176 @@
+// The pull-down info strip and the pull-to-refresh circle of the main screen
+// (MainActivity.buildPullPanel / fillPull, and androidx SwipeRefreshLayout). See docs/UI-SPEC.md,
+// section "Main screen, Phase B part 2: pull down".
+
+import { Theme } from "theme.slint";
+import { KEllipsisText } from "components.slint";
+
+/// The strip behind the list (pullPanel): k_surface, padding 16 / 10 / 16 / 0, two equal columns of
+/// 13 sp lines (type and free space; name and size), then a 6 dp usage bar 10 dp below them. The
+/// panel is 84 dp high; it is only as tall as the list has been pulled down, the rest is cut off.
+export component KPullPanel inherits Rectangle {
+    in property <string> type-text;
+    in property <string> free-text;
+    in property <string> name-text;
+    in property <string> size-text;
+    /// How much of the storage is used, 0..1 (never below 8 / 1000 once the space is known).
+    in property <float> used: 0;
+    property <length> col-w: (root.width - 32px - 12px) / 2;
+
+    background: Theme.surface;
+    clip: true;
+
+    left-col := VerticalLayout {
+        x: 16px;
+        y: 10px;
+        width: root.col-w;
+        KEllipsisText {
+            text: root.type-text;
+            font-size: Theme.sp(13px);
+            mode: 1;
+            cap: Theme.surface;
+        }
+        KEllipsisText {
+            text: root.free-text;
+            font-size: Theme.sp(13px);
+            mode: 1;
+            cap: Theme.surface;
+        }
+    }
+    VerticalLayout {
+        x: 16px + root.col-w + 12px;
+        y: 10px;
+        width: root.col-w;
+        KEllipsisText {
+            text: root.name-text;
+            font-size: Theme.sp(13px);
+            mode: 1;
+            cap: Theme.surface;
+        }
+        KEllipsisText {
+            text: root.size-text;
+            font-size: Theme.sp(13px);
+            mode: 1;
+            cap: Theme.surface;
+        }
+    }
+    // the usage bar: k_line track, k_accent fill
+    Rectangle {
+        x: 16px;
+        y: 10px + left-col.preferred-height + 10px;
+        width: root.width - 32px;
+        height: 6px;
+        background: Theme.line;
+        Rectangle {
+            x: 0px;
+            width: parent.width * Math.min(1, root.used);
+            background: Theme.accent;
+        }
+    }
+}
+
+/// SwipeRefreshLayout's circle: 40 dp, k_surface with a 4 dp elevation, a 7.5 dp ring in k_accent,
+/// 2.5 dp thick. While the finger pulls (`drag` is how far it has moved) the circle follows the
+/// library's slingshot curve and the ring grows with an arrow at its end; past 128 dp of drag
+/// (64 dp after the library's 0.5 drag rate) the ring is at full strength and letting go refreshes.
+/// While refreshing the circle rests 24 dp from the top and the ring turns (1332 ms a cycle).
+export component KRefreshCircle inherits Rectangle {
+    in property <length> drag: 0px;
+    in property <bool> pulling: false;
+    in property <bool> refreshing: false;
+
+    // moveSpinner(): overscrollTop is half the drag
+    property <float> drag-pct: Math.min(1, root.drag * 0.5 / 64px);
+    property <float> adjusted: Math.max(root.drag-pct - 0.4, 0) * 5 / 3;
+    property <float> extra: root.drag * 0.5 / 1px - 64;
+    property <float> slingshot: Math.max(0, Math.min(root.extra, 128) / 64);
+    property <float> tension: (Math.max(root.slingshot / 4, 0) - Math.pow(root.slingshot / 4, 2)) * 2;
+    property <length> pull-y: -40px + 64px * root.drag-pct + 64px * root.tension * 2;
+    property <length> target-y: root.pulling ? root.pull-y : root.refreshing ? 24px : -40px;
+
+    // the ring: a start angle and a sweep, in degrees
+    property <float> phase: 0;
+    property <float> turns: (-0.25 + 0.4 * root.adjusted + root.tension * 2) * 0.5;
+    property <angle> a0: root.refreshing ? root.phase * 360deg - 90deg : root.turns * 360deg;
+    property <float> trim: root.refreshing ? 0.1 + 0.7 * (0.5 - 0.5 * Math.cos(root.phase * 360deg)) : Math.min(0.8, root.adjusted * 0.8);
+    property <angle> a1: root.a0 + root.trim * 360deg;
+    // CircularProgressDrawable draws the ring at 30 % until the drag is far enough, then at full
+    // strength (300 ms)
+    property <float> ring-alpha: root.refreshing || root.drag-pct >= 1 ? 1 : 0.3;
+    // the arrow at the end of the ring, 10 dp wide and 5 dp long, scaled by `adjusted`
+    property <float> arrow: Math.min(1, root.adjusted);
+    property <float> ex: 20 + 7.5 * Math.cos(root.a1);
+    property <float> ey: 20 + 7.5 * Math.sin(root.a1);
+
+    animate ring-alpha {
+        duration: 300ms;
+    }
+
+    Timer {
+        interval: 16ms;
+        running: root.refreshing;
+        triggered => {
+            root.phase = Math.mod(root.phase + 16 / 1332, 1);
+        }
+    }
+
+    ring := Rectangle {
+        x: (parent.width - 40px) / 2;
+        y: root.target-y;
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        background: Theme.surface;
+        drop-shadow-color: #00000040;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 3px;
+        visible: self.y > -38px;
+        animate y {
+            duration: root.pulling ? 0ms : 200ms;
+            easing: ease-out;
+        }
+
+        Path {
+            width: 40px;
+            height: 40px;
+            viewbox-width: 40;
+            viewbox-height: 40;
+            stroke: Theme.accent;
+            stroke-width: 2.5px;
+            opacity: root.ring-alpha;
+            MoveTo {
+                x: 20 + 7.5 * Math.cos(root.a0);
+                y: 20 + 7.5 * Math.sin(root.a0);
+            }
+            ArcTo {
+                radius-x: 7.5;
+                radius-y: 7.5;
+                x: root.ex;
+                y: root.ey;
+                large-arc: root.trim > 0.5;
+                sweep: true;
+            }
+        }
+        if root.pulling && root.arrow > 0.01: Path {
+            width: 40px;
+            height: 40px;
+            viewbox-width: 40;
+            viewbox-height: 40;
+            fill: Theme.accent;
+            opacity: root.ring-alpha;
+            MoveTo {
+                x: root.ex + 5 * root.arrow * Math.cos(root.a1);
+                y: root.ey + 5 * root.arrow * Math.sin(root.a1);
+            }
+            LineTo {
+                x: root.ex - 5 * root.arrow * Math.sin(root.a1);
+                y: root.ey + 5 * root.arrow * Math.cos(root.a1);
+            }
+            LineTo {
+                x: root.ex - 5 * root.arrow * Math.cos(root.a1);
+                y: root.ey - 5 * root.arrow * Math.sin(root.a1);
+            }
+            Close { }
+        }
+    }
+}

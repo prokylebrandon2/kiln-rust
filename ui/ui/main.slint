@@ -1,15 +1,17 @@
 // The main window (MainActivity.buildUi()): the top bar, the search row, the rule under them, the
-// warning banner, the body (the file list, the empty-folder line, the "+ New" button, the
-// selection bar and the opaque permission view), the sort sheet, a message sheet and a toast
-// layer. The pull-down panel and the menus come in the next part of Phase B. See
-// docs/UI-SPEC.md, section "Main screen".
+// warning banner, the body (the info strip behind the file list, the file list, the refresh
+// circle, the empty-folder line, the "+ New" button, the selection bar and the opaque permission
+// view), the bookmarks drop-down, the sort sheet, a message sheet and a toast layer. The menus come
+// in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
 import { KButton, KFab, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
+import { KMarksPopup, MarkRow } from "marks.slint";
+import { KPullPanel, KRefreshCircle } from "pull.slint";
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
-export { Theme, RowData }
+export { MarkRow, RowData, Theme }
 
 export component MainWindow inherits Window {
     // ---- what the Rust side sets ---------------------------------------------------------------
@@ -53,6 +55,22 @@ export component MainWindow inherits Window {
     in property <string> sheet-body;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
+    /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
+    in property <bool> pull-enabled: false;
+    in property <string> pull-type;
+    in property <string> pull-free;
+    in property <string> pull-name;
+    in property <string> pull-size;
+    in property <float> pull-used: 0;
+    /// The refresh circle is turning (SwipeRefreshLayout.setRefreshing); the pull sets it, and the
+    /// Rust side clears it when the folder has been read.
+    in-out property <bool> refreshing: false;
+    /// The bookmarks drop-down: its lines, and the action under them.
+    in property <bool> marks-shown: false;
+    in property <[MarkRow]> mark-rows;
+    in property <bool> mark-has-action: false;
+    in property <string> mark-action-icon: "add";
+    in property <string> mark-action-label;
 
     // ---- what the UI tells the Rust side -------------------------------------------------------
     callback allow-access();
@@ -71,6 +89,16 @@ export component MainWindow inherits Window {
     callback sort-key-chosen(int);
     callback sort-asc-chosen(bool);
     callback sort-dismissed();
+    callback pull-started();
+    /// The finger let go of a pull (the info strip may stop counting).
+    callback pull-ended();
+    /// A pull was long enough: read the folder again.
+    callback refresh-requested();
+    callback marks-dismissed();
+    callback mark-clicked(int);
+    callback mark-removed(int);
+    callback mark-icon-clicked(int);
+    callback mark-action-clicked();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -187,9 +215,25 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 clip: true;
 
+                // pullPanel: behind the list, as tall as the list has been pulled down
+                KPullPanel {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: list.shift;
+                    visible: list.shift > 0.5px;
+                    opacity: Math.min(1, list.shift / 42px);
+                    type-text: root.pull-type;
+                    free-text: root.pull-free;
+                    name-text: root.pull-name;
+                    size-text: root.pull-size;
+                    used: root.pull-used;
+                }
+
                 list := KFileList {
                     width: parent.width;
                     height: parent.height;
+                    pull-enabled: root.pull-enabled;
                     rows: root.rows;
                     up-row: root.up-row;
                     has-where: root.has-where;
@@ -203,11 +247,30 @@ export component MainWindow inherits Window {
                     scrolled(y) => {
                         root.list-scrolled(y);
                     }
+                    pull-started => {
+                        root.pull-started();
+                    }
+                    pull-ended(refresh) => {
+                        root.pull-ended();
+                        if (refresh) {
+                            root.refreshing = true;
+                            root.refresh-requested();
+                        }
+                    }
+                }
+
+                // SwipeRefreshLayout's circle, above the list
+                KRefreshCircle {
+                    width: parent.width;
+                    height: parent.height;
+                    drag: list.over;
+                    pulling: list.held;
+                    refreshing: root.refreshing;
                 }
 
                 if root.empty-text != "": Text {
                     x: 32px;
-                    y: root.empty-top;
+                    y: root.empty-top + list.shift;
                     width: parent.width - 64px;
                     text: root.empty-text;
                     color: Theme.text2;
@@ -304,6 +367,34 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // The bookmarks drop-down (showBookmarks): its frame starts at the bottom of the title block,
+    // 6 dp padding + 48 dp below the top of the page.
+    KMarksPopup {
+        width: 100%;
+        height: 100%;
+        shown: root.marks-shown;
+        rows: root.mark-rows;
+        has-action: root.mark-has-action;
+        action-icon: root.mark-action-icon;
+        action-label: root.mark-action-label;
+        anchor-y: root.safe-area-insets.top + 54px;
+        dismissed => {
+            root.marks-dismissed();
+        }
+        row-clicked(i) => {
+            root.mark-clicked(i);
+        }
+        row-removed(i) => {
+            root.mark-removed(i);
+        }
+        row-icon(i) => {
+            root.mark-icon-clicked(i);
+        }
+        action-clicked => {
+            root.mark-action-clicked();
         }
     }
 

@@ -55,6 +55,8 @@ impl App {
         ui.on_sort_asc_chosen(|asc| app_do(|app| app.sort_asc_chosen(asc)));
         ui.on_sort_dismissed(|| app_do(|app| app.ui.set_sort_sheet_shown(false)));
         ui.on_back_pressed(|| app_do(|app| app.on_back()));
+        self.wire_marks();
+        self.wire_pull();
     }
 
     /// The phone's time zone offset for a time, asked once per day.
@@ -85,6 +87,7 @@ impl App {
 
     /// Everything around the list: the top bar, the banner, the empty line, the bars and buttons.
     pub(crate) fn render_chrome(&self) {
+        self.refresh_volumes(false);
         let b = self.browser.borrow();
         let status = self.status.borrow();
         let ui = &self.ui;
@@ -97,6 +100,7 @@ impl App {
         ui.set_selecting(selecting);
         ui.set_searching(b.searching);
         ui.set_marks_ok(!selecting && b.storage_ok);
+        ui.set_pull_enabled(!selecting && b.storage_ok);
         let banner = if b.plain_set {
             "Plain view of an encrypted set. Renaming or deleting files here can make \
              the set unreadable."
@@ -183,6 +187,7 @@ impl App {
     }
 
     fn scan_done(&self, generation: u64, result: &Value) {
+        self.ui.set_refreshing(false);
         let wanted = {
             let mut offset = |t: i64| self.offset_at(t);
             let mut b = self.browser.borrow_mut();
@@ -280,6 +285,11 @@ impl App {
 
     /// `onBackPressed`.
     pub(crate) fn on_back(&self) {
+        // The bookmarks drop-down is a window of its own in the Java: Back closes it first.
+        if self.ui.get_marks_shown() {
+            self.ui.set_marks_shown(false);
+            return;
+        }
         let action = self.browser.borrow_mut().back();
         match action {
             BackAction::Changed => {

@@ -10,6 +10,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 /// The settings that are stored in `kiln.xml`, as text by key.
 #[derive(Debug, Default)]
 pub struct Prefs {
@@ -77,6 +79,60 @@ impl Prefs {
     /// `putString(..).apply()`.
     pub fn set_string(&self, key: &str, value: &str) {
         self.put("string", key, value);
+    }
+
+    /// `Defaults.bookmarks`: the folder paths, in the order they were added. They are kept as a
+    /// JSON array of strings under `bookmarks`.
+    pub fn bookmarks(&self) -> Vec<String> {
+        let text = self.string("bookmarks", "[]");
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&text) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        for path in items.iter().filter_map(Value::as_str) {
+            if !path.is_empty() && !out.iter().any(|p| p == path) {
+                out.push(path.to_string());
+            }
+        }
+        out
+    }
+
+    /// `Defaults.addBookmark`.
+    pub fn add_bookmark(&self, path: &str) {
+        let mut list = self.bookmarks();
+        if !list.iter().any(|p| p == path) {
+            list.push(path.to_string());
+            self.save_bookmarks(&list);
+        }
+    }
+
+    /// `Defaults.removeBookmark`.
+    pub fn remove_bookmark(&self, path: &str) {
+        let mut list = self.bookmarks();
+        let before = list.len();
+        list.retain(|p| p != path);
+        if list.len() != before {
+            self.save_bookmarks(&list);
+        }
+    }
+
+    /// `new JSONArray(list).toString()`: Android's JSON writer escapes every "/" as "\/".
+    fn save_bookmarks(&self, list: &[String]) {
+        let text = Value::from(list.to_vec()).to_string();
+        self.set_string("bookmarks", &text.replace('/', "\\/"));
+    }
+
+    /// `Defaults.folderIcon`: the icon key a person picked for a folder (`folder_icons` holds a
+    /// JSON object of path to key), if any.
+    pub fn folder_icon(&self, path: &str) -> Option<String> {
+        let text = self.string("folder_icons", "{}");
+        let value = serde_json::from_str::<Value>(&text).ok()?;
+        let key = value.get(path)?.as_str()?;
+        if key.is_empty() {
+            None
+        } else {
+            Some(key.to_string())
+        }
     }
 
     fn put(&self, kind: &str, key: &str, value: &str) {

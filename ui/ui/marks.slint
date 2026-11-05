@@ -1,0 +1,269 @@
+// The bookmarks drop-down under the title (MainActivity.showBookmarks, markRow, actionRow). See
+// docs/UI-SPEC.md, section "Main screen, Phase B part 2: bookmarks".
+
+import { Theme } from "theme.slint";
+import { Icon, KEllipsisText, PressArea } from "components.slint";
+
+/// One line of the list: a storage (Internal storage, a USB drive) or a bookmarked folder.
+export struct MarkRow {
+    icon: string,
+    name: string,
+    path: string,
+    /// "<free> free\nof <total>" for a storage, empty for a bookmark.
+    right: string,
+    /// A bookmark: it has a cross, and its icon can be changed.
+    removable: bool,
+    /// The folder on screen: its name is bold and in the accent colour.
+    current: bool,
+}
+
+/// rowBase(): padding 8 / 7 / 4 / 7, a 36 dp tile (radius 10, k_chip, a 22 dp accent icon), 12 dp,
+/// the name (15 sp) over the path (11 sp, cut at the start), the free space on the right (12 sp),
+/// then a 40 dp cross for a bookmark or 8 dp of room.
+component KMarkLine inherits Rectangle {
+    in property <string> icon;
+    in property <string> name;
+    in property <string> path;
+    in property <string> right;
+    in property <bool> removable: false;
+    in property <bool> current: false;
+    callback clicked();
+    callback remove();
+    callback icon-clicked();
+
+    preferred-height: Math.max(Math.max(36px, text-col.preferred-height), Math.max(right-text.preferred-height, root.removable ? 40px : 0px)) + 14px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 4px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 0px;
+        VerticalLayout {
+            width: 36px;
+            alignment: center;
+            Rectangle {
+                height: 36px;
+                border-radius: 10px;
+                background: Theme.chip;
+                Icon {
+                    x: 7px;
+                    y: 7px;
+                    width: 22px;
+                    height: 22px;
+                    name: root.icon;
+                    tint: Theme.accent;
+                }
+            }
+        }
+        Rectangle {
+            width: 12px;
+        }
+        text-col := VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            KEllipsisText {
+                text: root.name;
+                font-size: Theme.sp(15px);
+                font-weight: root.current ? Theme.bold : 400;
+                tint: root.current ? Theme.accent : Theme.text;
+                mode: 0;
+            }
+            if root.path != "": KEllipsisText {
+                text: root.path;
+                font-size: Theme.sp(11px);
+                tint: Theme.text2;
+                mode: 2;
+                cap: Theme.surface;
+            }
+        }
+        VerticalLayout {
+            padding-left: 8px;
+            alignment: center;
+            right-text := Text {
+                text: root.right;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                horizontal-alignment: right;
+                wrap: no-wrap;
+            }
+        }
+        Rectangle {
+            width: root.removable ? 40px : 8px;
+        }
+    }
+    // pressable(0, 0, 12): the whole line; a bookmark's long press picks its icon
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 12px;
+        long-press: root.removable;
+        clicked => {
+            root.clicked();
+        }
+        long-pressed => {
+            root.icon-clicked();
+        }
+    }
+    // a bookmark's tile: tap to pick its icon
+    if root.removable: PressArea {
+        x: 8px;
+        y: (parent.height - 36px) / 2;
+        width: 36px;
+        height: 36px;
+        radius: 10px;
+        clicked => {
+            root.icon-clicked();
+        }
+    }
+    // a bookmark's cross: a 40 dp round icon button
+    if root.removable: Rectangle {
+        x: parent.width - 44px;
+        y: (parent.height - 40px) / 2;
+        width: 40px;
+        height: 40px;
+        Icon {
+            x: 8px;
+            y: 8px;
+            name: "close";
+            tint: Theme.text;
+        }
+        PressArea {
+            width: 100%;
+            height: 100%;
+            radius: 24px;
+            clicked => {
+                root.remove();
+            }
+        }
+    }
+}
+
+/// The card under the title: k_surface, 1 dp k_line outline, radius 18, 6 dp padding, an 8 dp
+/// shadow, at most as wide as 360 dp or the screen less 8 dp, at most 60 % of the screen high
+/// (the rows scroll). It fades and grows from the top in 170 ms; it closes at once. A tap outside
+/// it closes it.
+export component KMarksPopup inherits Rectangle {
+    in property <bool> shown: false;
+    in property <[MarkRow]> rows;
+    /// "Bookmark this folder" / "Remove this bookmark", under a rule.
+    in property <bool> has-action: false;
+    in property <string> action-icon: "add";
+    in property <string> action-label;
+    /// Where the card's frame starts: the bottom edge of the title block.
+    in property <length> anchor-y: 54px;
+    callback dismissed();
+    callback row-clicked(int);
+    callback row-removed(int);
+    callback row-icon(int);
+    callback action-clicked();
+
+    visible: root.shown;
+
+    // PopupWindow.setOutsideTouchable: a tap anywhere else closes it
+    TouchArea {
+        clicked => {
+            root.dismissed();
+        }
+    }
+
+    // the frame: 8 dp on the sides, 2 dp above and 14 dp below the card (room for its shadow)
+    frame := Rectangle {
+        property <length> full-h: Math.min(items.preferred-height, root.height * 0.6) + 16px;
+        property <float> grow: 1.0;
+        x: -4px;
+        y: root.anchor-y - self.full-h * (1 - self.grow) / 2;
+        width: Math.min(root.width - 8px, 360px);
+        height: self.full-h;
+        opacity: 0;
+        transform-scale-y: self.grow;
+
+        card := Rectangle {
+            x: 8px;
+            y: 2px;
+            width: parent.width - 16px;
+            height: parent.height - 16px;
+            background: Theme.surface;
+            border-radius: 18px;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            drop-shadow-color: #00000040;
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 4px;
+
+            Rectangle {
+                border-radius: 18px;
+                clip: true;
+                Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: parent.width;
+                    content-height: items.preferred-height;
+                    items := VerticalLayout {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: self.preferred-height;
+                        padding: 6px;
+                        spacing: 0px;
+                        for row[i] in root.rows: KMarkLine {
+                            icon: row.icon;
+                            name: row.name;
+                            path: row.path;
+                            right: row.right;
+                            removable: row.removable;
+                            current: row.current;
+                            clicked => {
+                                root.row-clicked(i);
+                            }
+                            remove => {
+                                root.row-removed(i);
+                            }
+                            icon-clicked => {
+                                root.row-icon(i);
+                            }
+                        }
+                        // a 1 dp rule with 4 dp above and below
+                        if root.has-action: Rectangle {
+                            height: 9px;
+                            Rectangle {
+                                y: 4px;
+                                height: Theme.hair;
+                                background: Theme.line;
+                            }
+                        }
+                        if root.has-action: KMarkLine {
+                            icon: root.action-icon;
+                            name: root.action-label;
+                            clicked => {
+                                root.action-clicked();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        states [
+            open when root.shown: {
+                opacity: 1;
+                grow: 1.0;
+                in {
+                    animate opacity {
+                        duration: Theme.dur(170ms);
+                        easing: cubic-bezier(0.314, 1.0, 0.626, 1.0);
+                    }
+                    animate grow {
+                        duration: Theme.dur(170ms);
+                        easing: cubic-bezier(0.314, 1.0, 0.626, 1.0);
+                    }
+                }
+            }
+            closed when !root.shown: {
+                opacity: 0;
+                grow: 0.9;
+            }
+        ]
+    }
+}

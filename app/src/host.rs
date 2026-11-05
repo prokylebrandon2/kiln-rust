@@ -6,7 +6,7 @@
 //!
 //! All methods are called on the UI thread (the one running the Slint event loop).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What the system tells the UI about how to look: the colour scheme and the two user scales.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -17,6 +17,15 @@ pub struct Look {
     pub density: f32,
     /// Settings > Display > Font size (`Configuration.fontScale`); sp = dp * font_scale.
     pub font_scale: f32,
+}
+
+/// A mounted removable volume: a USB drive or an SD card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Volume {
+    /// Where it is mounted (`StorageVolume.getDirectory()`).
+    pub path: PathBuf,
+    /// What the phone calls it (`StorageVolume.getDescription()`, or the folder's name).
+    pub label: String,
 }
 
 /// Things that happen to the app while it runs.
@@ -44,6 +53,12 @@ pub trait Host {
     /// How many seconds the phone's time zone is ahead of UTC at a time given in epoch seconds
     /// (`TimeZone.getDefault().getOffset(ms)`), for the dates in the file list.
     fn utc_offset(&self, epoch_seconds: i64) -> i32;
+    /// The USB drives and SD cards that are plugged in and mounted, as the file browser lists them.
+    /// Empty when the phone cannot say.
+    fn volumes(&self) -> Vec<Volume>;
+    /// `(free, total)` bytes of the storage that holds `path` (`StatFs.getAvailableBytes()` and
+    /// `getTotalBytes()`), or `None` when the phone cannot say.
+    fn space(&self, path: &Path) -> Option<(u64, u64)>;
     /// The version shown in crash reports and About.
     fn version_name(&self) -> String;
     /// The current colour scheme, density and font scale.

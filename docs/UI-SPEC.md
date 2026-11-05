@@ -231,9 +231,74 @@ Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust:
   the search field ignores reaches it. Leaving an archive comes with the archive part.
 - **No grid view, breadcrumbs or view toggle.** The Phase B brief lists them, but `MainActivity`
   has none (its `grid` is a settings layout), so none is built.
-- **Not yet in this part** (the Java has them; see the Phase B list): the pull-down panel,
-  bookmarks, the menus and every dialog, file operations, thumbnails, opening files, archives, the
+- **Not yet in this part** (the Java has them; see the Phase B list): the menus and every dialog, file operations, thumbnails, opening files, archives, the
   service notification. Tapping a file says "Not in this build yet".
+
+## Main screen, Phase B part 2: pull down and bookmarks (`MainActivity`, `PullSwipe`, `SwipeRefreshLayout`)
+
+Slint: `ui/ui/browser.slint` (`KFileList`), `ui/ui/pull.slint` (`KPullPanel`, `KRefreshCircle`),
+`ui/ui/marks.slint` (`KMarksPopup`, `MarkRow`), `ui/ui/main.slint`; Rust: `app/src/pull.rs`,
+`app/src/marks.rs`, `app/src/prefs.rs` (bookmarks), `app/src/host.rs` (`volumes`, `space`).
+
+- **Info strip (`buildPullPanel`, `fillPull`, `pullMove`, `pullEnd`).** Behind the list, 84 dp
+  (`PULL_H`) high, k_surface, padding 16 / 10 / 16 / 0. Two equal columns 12 dp apart of 13 sp
+  k_text lines, cut in the middle: left `Type: Storage` or `Type: Folder`, then `Free: <free> / <total>`
+  (empty when the phone cannot say); right `Storage: <name>` or `Folder: <name>`, then `Size: ...`,
+  which climbs as the folder is counted (every 120 ms, `Size: <n>...`) and ends as `Size: <n>`.
+  Under them, 10 dp down, a 6 dp bar: k_line track, k_accent fill, `used / total` and never below
+  8 / 1000 once the space is known. The count walks the folder on a worker thread (at most 40 levels
+  deep), stops when the strip is gone (500 ms after the finger lets go) or a new pull begins.
+- **Pulling.** Only at the top of the list, with nothing selected and access granted. The list
+  (and the empty line) move down by 0.6 of the finger's travel, at most 84 dp; the strip is as tall
+  as that and fades in over the first 42 dp. On release they slide back in 220 ms (scaled by the
+  animation speed), after a 250 ms wait when the strip was at least 90 % out; the easing is
+  ease-in-out (the ViewPropertyAnimator default).
+- **Refresh (`onPull`, `SwipeRefreshLayout`).** Works with a selection too. The circle is 40 dp,
+  k_surface, 4 dp elevation, a 7.5 dp ring 2.5 dp thick in k_accent. The library's drag rate is 0.5
+  and its trigger distance 64 dp, so the pull must be longer than 128 dp. While the finger moves
+  the circle follows the library's curve (`moveSpinner`: top = -40 + 64 * drag% + the slingshot
+  term), the ring grows to 0.8 of a turn with an arrow at its end, drawn at 30 % until the pull is
+  long enough and then at full strength (300 ms). On release the circle either rises out of view
+  (200 ms) or settles 24 dp from the top and turns (1332 ms a cycle) until the folder has been read
+  again (`applyScan`: `setRefreshing(false)`). The folder is read with the selection kept. The
+  values are those of androidx `SwipeRefreshLayout` 1.1 (not in this repository).
+- **Bookmarks (`showBookmarks`, `markRow`, `actionRow`, `goTo`).** Tapping the title block (when
+  access is granted and nothing is selected) opens a card under it; tapping it again, anywhere
+  else, or Back closes it. The frame is `min(screen - 8 dp, 360 dp)` wide, starts 4 dp left of the
+  screen edge with 8 dp padding at the sides, 2 dp above and 14 dp below the card. The card:
+  k_surface, 1 dp k_line outline, radius 18, 6 dp padding, 8 dp elevation, at most 60 % of the
+  screen high (it scrolls). It fades and grows from the top (90 % to 100 %) in 170 ms
+  (decelerate 1.6, scaled by the animation speed) and closes at once.
+  Lines: Internal storage (home icon), every mounted USB drive or SD card (usb icon; name from the
+  phone), then the saved folders (in the order they were added; the folder's own icon, its name or,
+  for a root, its path). A line has padding 8 / 7 / 4 / 7, a 36 dp tile (radius 10, k_chip, a
+  22 dp accent icon) and 12 dp, the name (15 sp, cut at the end) over the path (11 sp k_text2,
+  cut at the start), and on the right 12 sp k_text2 `<free> free` / `of <total>` for a storage.
+  A bookmark ends in a 40 dp cross; a storage in 8 dp. The folder on screen has a bold accent
+  name. Below the lines, unless at a storage root, a 1 dp rule with 4 dp above and below and one
+  line: `Bookmark this folder` (add icon) or `Remove this bookmark` (cross icon), which toast
+  `Bookmarked <name>` or `Bookmark removed`. Tapping a line goes there (`That folder isn't there any
+  more` if it is gone; nothing if it is already open); the cross removes the bookmark
+  (`Bookmark removed`). Tapping a bookmark's tile, or long-pressing it, opens the icon picker; that
+  dialog comes with the dialogs, so for now it says `Not in this build yet`.
+- **Storages.** A USB drive or SD card is a storage root like the phone's own storage: the title
+  is its name, the left button is the Kiln mark, the ".." row is not shown there and Back at its top
+  asks to exit. Root (`/`) belongs with Shizuku and root (Phase C).
+- **Settings file.** Bookmarks are the JSON array `bookmarks` in `kiln.xml`, as `Defaults.java`
+  writes it (slashes escaped); picked folder icons are read from the JSON object `folder_icons`.
+
+### Differences from the Java in this part
+
+- **Pulling is done by the list.** A Slint `Flickable` cannot be dragged past its top, so the list
+  keeps 140 dp (84 dp / 0.6) of empty content above its first row, rests scrolled by that much, and
+  dragging down uses it up; the list is drawn 0.6 of that far down. The finger being down is read
+  from a `TouchArea` around the list; if the pointer never reports it, the pull lets go 150 ms after
+  the last movement (and in any case after 2 s).
+- **The circle** shows the ring's growth, the arrow and the turn as the library does, but the turning
+  ring is an approximation of `CircularProgressDrawable` (its sweep goes from 0.1 to 0.8 of a turn
+  once per cycle), and when the folder has been read it rises out of view (200 ms) instead of
+  shrinking (150 ms).
+- **Rows do not slide in yet** (`Ui.rowAnim`, on a new folder and on a refresh); that comes with the menus.
 
 ## Known differences from the Java
 

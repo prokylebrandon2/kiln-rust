@@ -15,19 +15,24 @@ pub mod engine;
 pub mod fmt;
 pub mod host;
 pub mod icons;
+mod marks;
 pub mod prefs;
+mod pull;
 pub mod sniff;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
-use kiln_ui::{MainWindow, RowData, Theme};
+use kiln_ui::{MainWindow, MarkRow, RowData, Theme};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::browser::{Browser, SortKey};
-pub use crate::host::{Event, Host, Look};
+pub use crate::host::{Event, Host, Look, Volume};
 use crate::prefs::Prefs;
 
 /// `Defaults.ANIM_SCALE`: Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
@@ -59,6 +64,12 @@ struct App {
     fab_hidden: Cell<bool>,
     was_home: Cell<bool>,
     last_dir: RefCell<PathBuf>,
+    /// The lines of the bookmarks drop-down.
+    marks_model: Rc<VecModel<MarkRow>>,
+    /// When the phone was last asked for its USB drives and SD cards (`volumes()`, cached 3 s).
+    volumes_at: Cell<Option<Instant>>,
+    /// Set to stop the folder size count of the pull-down strip that is running.
+    pull_stop: RefCell<Arc<AtomicBool>>,
 }
 
 thread_local! {
@@ -100,11 +111,15 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         fab_hidden: Cell::new(false),
         was_home: Cell::new(false),
         last_dir: RefCell::default(),
+        marks_model: Rc::new(VecModel::default()),
+        volumes_at: Cell::new(None),
+        pull_stop: RefCell::new(Arc::new(AtomicBool::new(true))),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
     app.read_settings();
     app.ui.set_rows(ModelRc::from(app.model.clone()));
+    app.ui.set_mark_rows(ModelRc::from(app.marks_model.clone()));
     app.apply_look();
     app.refresh_permission();
     app.wire();

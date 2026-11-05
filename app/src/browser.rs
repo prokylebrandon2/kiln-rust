@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::host::Volume;
 use crate::{fmt, icons};
 
 /// How long a second Back at home has to follow the first to leave the app.
@@ -130,6 +131,8 @@ pub struct Browser {
     pub show_all: bool,
     pub show_hidden: bool,
     pub up_row_on: bool,
+    /// The USB drives and SD cards that are mounted; each is a storage root of its own.
+    pub volumes: Vec<Volume>,
     /// "All files access" is granted.
     pub storage_ok: bool,
     pub searching: bool,
@@ -156,6 +159,7 @@ impl Browser {
             show_all: true,
             show_hidden: false,
             up_row_on: true,
+            volumes: Vec::new(),
             storage_ok: false,
             searching: false,
             query: String::new(),
@@ -167,9 +171,30 @@ impl Browser {
         }
     }
 
-    /// `isStorageRoot`: the top of the phone's storage.
+    /// `isStorageRoot`: the top of the phone's storage, or of a USB drive or SD card.
     pub fn is_storage_root(&self, dir: &Path) -> bool {
-        dir == self.root
+        dir == self.root || self.volumes.iter().any(|v| v.path == dir)
+    }
+
+    /// The top of the phone's own storage.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// `storageName`: what a storage root is called.
+    pub fn storage_name(&self, dir: &Path) -> String {
+        if dir == self.root {
+            return "Internal storage".to_string();
+        }
+        let volume = self.volumes.iter().find(|v| v.path == dir);
+        match volume {
+            Some(v) => v.label.clone(),
+            None => dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        }
     }
 
     pub fn selecting(&self) -> bool {
@@ -272,8 +297,10 @@ impl Browser {
             };
         }
         let at_root = self.is_storage_root(&self.cwd);
-        let title = if at_root {
+        let title = if self.cwd == self.root {
             "Kiln".to_string()
+        } else if at_root {
+            self.storage_name(&self.cwd)
         } else {
             let name = self.cwd.file_name().unwrap_or_default();
             name.to_string_lossy().into_owned()

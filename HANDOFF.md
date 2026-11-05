@@ -365,4 +365,4 @@ Status after this session (Java cannot be compiled here: no Android SDK; Python/
   (res/drawable/*_t.xml, mapped by Icons.row()) are cut to their artwork, so there is no blank margin; the box is a square of 88% of the row
   height (never taller than the row), ImageView FIT_CENTER so it scales up. Previews keep a rounded tile; the selection tick keeps a tile. NOT COMPILED.
 - edit32 rows: folders in the list get a small white sheet (res/drawable/ic_paper.xml) layered on the tinted folder (Thumbs.showIcon, bare + Icons.tight); the ".." icon (ic_up_dir_t) is a folder with an up arrow cut out. NOT COMPILED.
-- edit33: list folders are one FolderDrawable (dark back panel + tab, paper between the panels, lighter front panel, shades derived from the folder colour); the .. row is the same folder with an up arrow printed on it. ic_paper removed.
+- edit33: list folders are one FolderDrawable: the folder in its colour, a darker shade only on the tab and the strip under it (left part), a white paper bar in that dark part; shades come from the folder colour. The .. row is the same folder with an up arrow printed on it.

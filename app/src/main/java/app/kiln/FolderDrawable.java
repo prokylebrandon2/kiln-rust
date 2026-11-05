@@ -13,14 +13,13 @@ import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 
 /**
- * A folder drawn as one icon: a darker back panel with the tab, a sheet of paper showing between
- * the panels, and the lighter front panel on top. The shades come from the folder's colour, so every
+ * A folder drawn as one icon: the folder in its colour, a darker shade on the tab and the strip under it
+ * (the left part only), and a sheet of paper showing in that dark part. The shades come from the folder's colour, so every
  * colour gets the same look. The pictogram of the special folders is cut out of the front panel.
  * The artwork is on a 20 x 16 grid.
  */
 final class FolderDrawable extends Drawable {
     private static final float W = 20f, H = 16f;
-    private static final float FRONT_TOP = 4.4f;          // where the front panel starts
 
     private final Drawable back, front;
     private final Paint paper = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -69,12 +68,18 @@ final class FolderDrawable extends Drawable {
         float sx = b.width() / W, sy = b.height() / H;
         back.setBounds(b);
         front.setBounds(b);
+        front.draw(canvas);                                // the whole folder in its own colour
+        canvas.save();                                     // only the tab and the strip under it get the darker shade
+        Path dark = new Path();
+        dark.moveTo(b.left, b.top);
+        dark.lineTo(b.left + 8f * sx, b.top);
+        dark.lineTo(b.left + 11f * sx, b.top + 4.4f * sy);
+        dark.lineTo(b.left, b.top + 4.4f * sy);
+        dark.close();
+        canvas.clipPath(dark);
         back.draw(canvas);
-        canvas.drawRoundRect(new RectF(b.left + 3f * sx, b.top + 2.9f * sy, b.left + 9.6f * sx, b.top + 4.3f * sy),
-                0.6f * sy, 0.6f * sy, paper);
-        canvas.save();
-        canvas.clipRect(b.left, b.top + FRONT_TOP * sy, b.right, b.bottom);
-        front.draw(canvas);
+        canvas.drawRoundRect(new RectF(b.left + 2.4f * sx, b.top + 2.9f * sy, b.left + 8.6f * sx, b.top + 4.0f * sy),
+                0.55f * sy, 0.55f * sy, paper);            // a sheet of paper in the dark part
         canvas.restore();
         if (arrow != null) {
             canvas.save();

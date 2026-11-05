@@ -74,7 +74,11 @@ pub fn clear() {
 #[inline]
 pub fn is_set() -> bool {
     CANCEL.load(Ordering::Relaxed)
-        || CURRENT.with(|c| c.borrow().as_ref().is_some_and(|t| t.load(Ordering::Relaxed)))
+        || CURRENT.with(|c| {
+            c.borrow()
+                .as_ref()
+                .is_some_and(|t| t.load(Ordering::Relaxed))
+        })
 }
 
 /// `Err(Cancelled)` when the flag is up, `Ok` otherwise.

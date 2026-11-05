@@ -121,7 +121,8 @@ impl App {
     /// Connect what the window reports to what the app does.
     fn wire(&self) {
         let host = self.host.clone();
-        self.ui.on_allow_access(move || host.open_all_files_settings());
+        self.ui
+            .on_allow_access(move || host.open_all_files_settings());
         let ui = self.ui.as_weak();
         self.ui.on_sheet_dismissed(move || {
             if let Some(ui) = ui.upgrade() {
@@ -159,7 +160,9 @@ impl App {
                 self.status.borrow_mut().engine_up = true;
                 self.refresh_permission();
             }
-            Err(e) => self.ui.set_empty_text(format!("Kiln couldn't start: {e}").into()),
+            Err(e) => self
+                .ui
+                .set_empty_text(format!("Kiln couldn't start: {e}").into()),
         }
     }
 }

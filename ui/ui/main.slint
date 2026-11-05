@@ -53,6 +53,17 @@ export component MainWindow inherits Window {
     in property <bool> sheet-shown: false;
     in property <string> sheet-title;
     in property <string> sheet-body;
+    /// The dialog sheet (Sheet.java): a title, a line of text, an optional text field, buttons.
+    in property <bool> dlg-shown: false;
+    in property <string> dlg-title;
+    in property <string> dlg-body;
+    in property <bool> dlg-has-field: false;
+    in property <string> dlg-placeholder;
+    /// What is in the field: Rust sets the start text and reads it when a button is tapped.
+    in-out property <string> dlg-text;
+    in property <[string]> dlg-buttons;
+    in property <[int]> dlg-kinds;
+    in property <bool> dlg-cancelable: true;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -99,6 +110,8 @@ export component MainWindow inherits Window {
     callback mark-removed(int);
     callback mark-icon-clicked(int);
     callback mark-action-clicked();
+    callback dlg-button-clicked(int);
+    callback dlg-cancelled();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -455,6 +468,34 @@ export component MainWindow inherits Window {
         }
         KSheetText {
             text: root.sheet-body;
+        }
+    }
+
+    // The dialog sheet: above the message sheet, below the toast. The field exists only while the
+    // sheet is shown, so it takes the keyboard each time it opens and lets go of it on close.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.dlg-shown;
+        title: root.dlg-title;
+        buttons: root.dlg-buttons;
+        kinds: root.dlg-kinds;
+        cancelable: root.dlg-cancelable;
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.dlg-button-clicked(i);
+        }
+        cancelled => {
+            root.dlg-cancelled();
+        }
+        if root.dlg-body != "": KSheetText {
+            text: root.dlg-body;
+        }
+        if root.dlg-has-field && root.dlg-shown: KTextField {
+            placeholder: root.dlg-placeholder;
+            autofocus: true;
+            text <=> root.dlg-text;
         }
     }
 

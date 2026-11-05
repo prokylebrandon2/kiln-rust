@@ -285,6 +285,10 @@ impl App {
 
     /// `onBackPressed`.
     pub(crate) fn on_back(&self) {
+        // A dialog is a window of its own in the Java: Back closes it first.
+        if self.dialog_back() {
+            return;
+        }
         // The bookmarks drop-down is a window of its own in the Java: Back closes it first.
         if self.ui.get_marks_shown() {
             self.ui.set_marks_shown(false);

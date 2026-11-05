@@ -11,6 +11,9 @@
 mod browse_ui;
 pub mod browser;
 pub mod crash;
+// Not called yet: the menus use it from the next step on, and the allow goes with them.
+#[allow(dead_code)]
+mod dialog;
 pub mod engine;
 pub mod fmt;
 pub mod host;
@@ -70,6 +73,8 @@ struct App {
     volumes_at: Cell<Option<Instant>>,
     /// Set to stop the folder size count of the pull-down strip that is running.
     pull_stop: RefCell<Arc<AtomicBool>>,
+    /// What the buttons of the dialog sheet that is up do (see dialog.rs).
+    dialog: RefCell<dialog::Dialog>,
 }
 
 thread_local! {
@@ -114,6 +119,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         marks_model: Rc::new(VecModel::default()),
         volumes_at: Cell::new(None),
         pull_stop: RefCell::new(Arc::new(AtomicBool::new(true))),
+        dialog: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -193,6 +199,7 @@ impl App {
             }
         });
         self.wire_browser();
+        self.wire_dialog();
     }
 
     fn on_event(&self, event: Event) {

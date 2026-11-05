@@ -1,0 +1,16 @@
+[package]
+name = "kiln-app"
+version = "0.5.0"
+edition = "2024"
+description = "The Kiln Android app's logic: wires the Slint UI to the engine and to the platform"
+publish = false
+
+[lib]
+name = "kiln_app"
+path = "src/lib.rs"
+
+[dependencies]
+kiln-bridge = { path = "../bridge" }
+kiln-ui = { path = "../ui" }
+serde_json = "1"
+slint = { workspace = true }

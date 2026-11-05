@@ -8,7 +8,24 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["bridge"]
+members = ["bridge", "platform", "ui", "app"]
+
+[workspace.dependencies]
+# The UI toolkit for the Android app (see ui/). Pinned exactly: `slint`, `slint-build` and Slint's
+# Android backend must be the very same version. `default-features = false` keeps out the desktop
+# backends and the std-widgets styles; `std` and `compat-1-2` are mandatory;
+# `backend-android-activity-06` is the NativeActivity backend (android-activity 0.6).
+#
+# No renderer feature is named on purpose: Slint's Android backend draws with Skia and nothing
+# else (`renderer-femtovg` is not available on Android), and it pulls Skia in by itself. Building
+# it needs a JDK and the Android SDK (a platform and the build-tools) because the backend compiles
+# a small Java helper (soft keyboard, clipboard, back gesture, system insets) into the library;
+# .github/workflows/build.yml installs both.
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-android-activity-06",
+] }
 
 [lib]
 name = "kiln"

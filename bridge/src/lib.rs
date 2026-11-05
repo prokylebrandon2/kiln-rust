@@ -1,8 +1,9 @@
-//! `kiln-bridge`: one process per user operation, speaking JSON lines to the Java app.
+//! `kiln-bridge`: the Kiln engine's functions, called directly by the Android app.
 //!
-//! Request (stdin, first line): `{"fn": "scan", "args": [...], "jobs": 0}`.
-//! Replies (stdout): `{"progress": {...}}` lines, then one `{"result": {...}}`.
-//! Writing `cancel` to stdin (or closing it) makes the running job stop cleanly.
+//! One call is `call("scan", &json!([path, ...]), jobs)` and returns the same JSON object the old
+//! child process wrote as its `{"result": ...}` line, so the code that reads these results did not
+//! have to change. A call that should report progress or be cancellable goes through
+//! [`call_job`] with a [`Job`]. Calls block, so the app makes them on a worker thread.
 //!
 //! No `unsafe` code lives here. Packing, extracting and testing call the `kiln` engine directly;
 //! the only place archive bytes pass through this layer is `lock`, which encrypts and decrypts
@@ -29,6 +30,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use serde_json::{Value, json};
 
 use crate::args::Args;
+
+pub use crate::io::{Job, Sink};
 
 fn fail(msg: &str) -> Value {
     json!({ "ok": false, "error": msg, "message": msg })
@@ -119,27 +122,21 @@ fn dispatch(name: &str, a: &Args, jobs: usize) -> Value {
     }
 }
 
-fn main() {
-    let req = match io::read_request() {
-        Ok(v) => v,
-        Err(e) => {
-            io::result(fail(&e));
-            return;
-        }
-    };
-    io::watch_cancel();
-    let name = match req.get("fn").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => String::new(),
-    };
-    let jobs = match req.get("jobs").and_then(|v| v.as_u64()) {
-        Some(n) => n as usize,
-        None => 0,
-    };
-    let a = Args::new(req.get("args"));
-    let out = match catch_unwind(AssertUnwindSafe(|| dispatch(&name, &a, jobs))) {
+/// Call engine function `name` with the JSON array `args`. `jobs` is the thread count for the
+/// archive engine (0 = every core). Never panics: a failure inside the engine comes back as
+/// `{"ok": false, "error": ...}`.
+pub fn call(name: &str, args: &Value, jobs: usize) -> Value {
+    call_job(name, args, jobs, &Job::new())
+}
+
+/// Like [`call`], for an operation that reports progress to and can be cancelled through `job`.
+/// A cancelled operation returns the same `Cancelled` result the child process used to.
+pub fn call_job(name: &str, args: &Value, jobs: usize, job: &Job) -> Value {
+    let a = Args::new(Some(args));
+    let _cancel = kiln::cancel::enter(job.token());
+    let _progress = io::set_sink(job.sink());
+    match catch_unwind(AssertUnwindSafe(|| dispatch(name, &a, jobs))) {
         Ok(v) => v,
         Err(_) => fail("the engine stopped unexpectedly"),
-    };
-    io::result(out);
+    }
 }

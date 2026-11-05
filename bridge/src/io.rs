@@ -1,79 +1,107 @@
-//! The bridge protocol: one JSON request line on stdin, JSON lines on stdout.
+//! What a running job shares with the app: its progress sink and its cancel flag.
 //!
-//! stdin:  line 1 is the request `{"fn": "...", "args": [...], "jobs": N}`. A later line `cancel`
-//!         (or the end of stdin) asks the running job to stop cleanly.
-//! stdout: zero or more `{"progress": {...}}` lines, then exactly one `{"result": {...}}` line.
+//! The engine used to run in a child process that spoke JSON lines on stdout and took `cancel` on
+//! stdin. It now runs in the app's own process, so a [`Job`] takes the place of that pipe: the app
+//! makes one per user operation, hands it to [`call_job`](crate::call_job), keeps a clone, and
+//! calls [`Job::cancel`] on the clone to stop the operation.
+//!
+//! A job is in force on the thread that runs it (thread-locals below). The archive engine reports
+//! progress and checks for cancellation on that same thread, so this is all that is needed; the
+//! one place that starts threads of its own (`packing`) passes the job's token on explicitly.
 
-use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-static CANCEL: AtomicBool = AtomicBool::new(false);
+/// Receives progress events: `{"frac": 0..1 or -1, "done": bytes, "total": bytes, "file": name}`.
+/// It runs on the thread that runs the job, so it must be quick and must not block.
+pub type Sink = Arc<dyn Fn(&Value) + Send + Sync>;
 
-/// True once Java asked this job to stop (or closed stdin).
-pub fn cancelled() -> bool {
-    CANCEL.load(Ordering::Relaxed)
+/// One user operation: a way to ask it to stop, and optionally somewhere to send its progress.
+#[derive(Clone)]
+pub struct Job {
+    token: kiln::cancel::Token,
+    sink: Option<Sink>,
 }
 
-/// Raise the cancel flag here and in the engine (`kiln::cancel`, the UI-HOOK the archive pipelines
-/// check at their progress point), so a running pack, extract or test returns "Cancelled".
-fn raise() {
-    CANCEL.store(true, Ordering::Relaxed);
-    kiln::cancel::request();
-}
-
-/// Read the request line.
-pub fn read_request() -> Result<Value, String> {
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    let n = stdin
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    if n == 0 {
-        return Err("no request was given to the engine".to_string());
-    }
-    serde_json::from_str(line.trim()).map_err(|e| format!("bad request: {e}"))
-}
-
-/// Watch the rest of stdin on a helper thread and raise the cancel flag when told to.
-pub fn watch_cancel() {
-    std::thread::spawn(|| {
-        let stdin = std::io::stdin();
-        let mut lock = stdin.lock();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match lock.read_line(&mut line) {
-                Ok(0) | Err(_) => {
-                    raise();
-                    return;
-                }
-                Ok(_) => {
-                    if line.trim() == "cancel" {
-                        raise();
-                        return;
-                    }
-                }
-            }
+impl Job {
+    /// A job without progress reporting.
+    pub fn new() -> Self {
+        Self {
+            token: Arc::default(),
+            sink: None,
         }
-    });
+    }
+
+    /// A job that reports progress to `sink`.
+    pub fn with_progress(sink: impl Fn(&Value) + Send + Sync + 'static) -> Self {
+        Self {
+            token: Arc::default(),
+            sink: Some(Arc::new(sink)),
+        }
+    }
+
+    /// Ask the job to stop at its next check. Safe to call from any thread, and more than once.
+    pub fn cancel(&self) {
+        self.token.store(true, Ordering::Relaxed);
+    }
+
+    /// True once [`cancel`](Self::cancel) has been called.
+    pub fn is_cancelled(&self) -> bool {
+        self.token.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn token(&self) -> kiln::cancel::Token {
+        self.token.clone()
+    }
+
+    pub(crate) fn sink(&self) -> Option<Sink> {
+        self.sink.clone()
+    }
 }
 
-fn write_line(v: &Value) {
-    let text = v.to_string();
-    let out = std::io::stdout();
-    let mut lock = out.lock();
-    let _ = lock.write_all(text.as_bytes());
-    let _ = lock.write_all(b"\n");
-    let _ = lock.flush();
+impl Default for Job {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Send the final answer.
-pub fn result(v: Value) {
-    write_line(&json!({ "result": v }));
+thread_local! {
+    static SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
+}
+
+/// Keeps a progress sink in force on this thread; the previous one comes back when it is dropped.
+#[must_use = "the sink is only in force while the guard is alive"]
+pub struct SinkScope {
+    previous: Option<Sink>,
+}
+
+impl Drop for SinkScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        SINK.with(|s| *s.borrow_mut() = previous);
+    }
+}
+
+/// Send this thread's progress to `sink` (or nowhere, for `None`) until the guard is dropped.
+pub(crate) fn set_sink(sink: Option<Sink>) -> SinkScope {
+    let previous = SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), sink));
+    SinkScope { previous }
+}
+
+fn emit(event: &Value) {
+    let sink = SINK.with(|s| s.borrow().clone());
+    if let Some(sink) = sink {
+        sink(event);
+    }
+}
+
+/// True once the job running on this thread was asked to stop.
+pub fn cancelled() -> bool {
+    kiln::cancel::is_set()
 }
 
 /// "Permission denied (os error 13)" -> "Permission denied", like Python's `strerror`.
@@ -139,8 +167,6 @@ impl Meter {
             let inner = self.base + self.span * (done as f64 / total as f64).min(1.0);
             self.outer_base + self.outer_span * inner
         };
-        write_line(&json!({
-            "progress": { "frac": frac, "done": done, "total": total, "file": file }
-        }));
+        emit(&json!({ "frac": frac, "done": done, "total": total, "file": file }));
     }
 }

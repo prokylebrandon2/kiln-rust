@@ -1,0 +1,26 @@
+[package]
+name = "kiln-platform"
+version = "0.5.0"
+edition = "2024"
+description = "The Android side of Kiln: the native entry point, JNI and the NDK. The only crate in the workspace that uses unsafe"
+publish = false
+
+# This is the library the APK loads: `android.app.NativeActivity` opens `libkiln_android.so` and
+# calls `android_main` in it (see app/src/main/AndroidManifest.xml). The entry point has to be
+# exported with `#[unsafe(no_mangle)]`, which `forbid(unsafe_code)` rejects, so it lives here
+# together with the JNI calls; `kiln-app` holds the app itself and is called from `android_main`.
+[lib]
+name = "kiln_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+kiln-app = { path = "../app" }
+slint = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Calls into the Android framework (permissions, folders, Settings). 0.21.1 is exact: it is the
+# API this code was written against.
+jni = "=0.21.1"
+# `Configuration`: dark mode and density, the same values Slint's own backend reads. Exact, and the
+# same version `android-activity` 0.6 (inside Slint) depends on.
+ndk = { version = "=0.9.0", default-features = false }

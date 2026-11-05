@@ -1,0 +1,1324 @@
+// Kiln's building blocks, written to reproduce Ui.java / Sheet.java exactly (see docs/UI-SPEC.md).
+// No std-widgets: nothing here has a Material, Fluent or Cupertino look.
+//
+// Easing curves are cubic-bezier fits of Android's interpolators (maximum error 0.002):
+//   DecelerateInterpolator(1.5)    cubic-bezier(0.338, 1.0, 0.65, 0.994)
+//   DecelerateInterpolator(1.6)    cubic-bezier(0.314, 1.0, 0.626, 1.0)
+//   DecelerateInterpolator(1.8)    cubic-bezier(0.283, 1.0, 0.553, 1.0)
+//   OvershootInterpolator(2.2)     cubic-bezier(0.333, 1.733, 0.667, 1.0)
+//   OvershootInterpolator(1.4)     cubic-bezier(0.333, 1.467, 0.667, 1.0)
+//   decelerate_quad                cubic-bezier(0.239, 0.477, 0.583, 1.0)
+//   accelerate_quad                cubic-bezier(0.258, 0.0, 0.6, 0.199)
+//   AccelerateDecelerate (the ViewPropertyAnimator default)   ease-in-out-sine
+
+import { Theme } from "theme.slint";
+import { IconPaths } from "icons.slint";
+
+// ---------------------------------------------------------------------------------------------
+// Icons
+// ---------------------------------------------------------------------------------------------
+
+/// One of the 63 single-path icons (24x24 viewport). Give it a width and a height.
+export component Icon inherits Path {
+    in property <string> name;
+    in property <color> tint: Theme.text;
+    width: 24px;
+    height: 24px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: IconPaths.d(root.name);
+    fill: root.tint;
+    fill-rule: IconPaths.even-odd(root.name) ? FillRule.evenodd : FillRule.nonzero;
+}
+
+/// The Kiln mark (res/drawable/ic_kiln.xml): arched furnace, glowing mouth, brick base.
+/// The drawable is 56x56 and translated by (-26, -24); its colours are fixed.
+export component KMark inherits Rectangle {
+    width: 28px;
+    height: 28px;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-x: 26;
+        viewbox-y: 24;
+        viewbox-width: 56;
+        viewbox-height: 56;
+        commands: "M34,78 L34,52 C34,38 43,30 54,30 C65,30 74,38 74,52 L74,78 Z";
+        fill: #D9B99B;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-x: 26;
+        viewbox-y: 24;
+        viewbox-width: 56;
+        viewbox-height: 56;
+        commands: "M44,78 L44,58 C44,52 48.5,48 54,48 C59.5,48 64,52 64,58 L64,78 Z";
+        fill: #E8590C;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-x: 26;
+        viewbox-y: 24;
+        viewbox-width: 56;
+        viewbox-height: 56;
+        commands: "M49,78 L49,62 C49,59 51.2,57 54,57 C56.8,57 59,59 59,62 L59,78 Z";
+        fill: #FFA94D;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-x: 26;
+        viewbox-y: 24;
+        viewbox-width: 56;
+        viewbox-height: 56;
+        commands: "M28,78 L80,78 L80,83 L28,83 Z";
+        fill: #8A5A44;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Touch: a bounded ripple and long-press. Put it last inside the element it should cover.
+// ---------------------------------------------------------------------------------------------
+
+/// Ui.ripple(): a circle grows from the touch point (225 ms) and fades out (150 ms), clipped to
+/// the rounded shape. `pressed` is exposed so the host can squash itself (Ui.pressScale).
+export component PressArea inherits Rectangle {
+    in property <length> radius: 0px;
+    in property <color> ripple-color: Theme.ripple;
+    in property <bool> enabled: true;
+    in property <bool> long-press: false;
+    callback clicked();
+    callback long-pressed();
+    out property <bool> pressed: touch.pressed && root.enabled;
+
+    property <length> ox: 0px;
+    property <length> oy: 0px;
+    property <bool> hold: false;
+    property <bool> fired: false;
+    property <bool> live: root.pressed || root.hold;
+    property <length> ring-r: 0px;
+    property <length> max-r: Math.sqrt(Math.pow(Math.max(root.ox / 1px, (root.width - root.ox) / 1px), 2)
+            + Math.pow(Math.max(root.oy / 1px, (root.height - root.oy) / 1px), 2)) * 1px;
+
+    // keeps the ripple on screen for its whole 225 ms growth, even for a quick tap
+    Timer {
+        interval: 225ms;
+        running: root.hold;
+        triggered => {
+            root.hold = false;
+        }
+    }
+    // ViewConfiguration.getLongPressTimeout() is 400 ms
+    Timer {
+        interval: 400ms;
+        running: root.pressed && root.long-press;
+        triggered => {
+            root.fired = true;
+            root.long-pressed();
+        }
+    }
+
+    Rectangle {
+        clip: true;
+        border-radius: root.radius;
+        Rectangle {
+            x: root.ox - root.ring-r;
+            y: root.oy - root.ring-r;
+            width: root.ring-r * 2;
+            height: root.ring-r * 2;
+            border-radius: root.ring-r;
+            background: root.ripple-color;
+            opacity: root.live ? 1 : 0;
+            animate opacity {
+                duration: root.live ? 75ms : 150ms;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.ox = touch.mouse-x;
+                root.oy = touch.mouse-y;
+                root.fired = false;
+                root.hold = true;
+            }
+        }
+        clicked => {
+            if (!root.fired) {
+                root.clicked();
+            }
+        }
+    }
+
+    states [
+        live when root.live: {
+            ring-r: root.max-r;
+            in {
+                animate ring-r {
+                    duration: 225ms;
+                    easing: ease-out;
+                }
+            }
+            out {
+                animate ring-r {
+                    duration: 0ms;
+                    delay: 150ms;
+                }
+            }
+        }
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Text that is cut in the middle or at the start (TextUtils.TruncateAt.MIDDLE / START)
+// ---------------------------------------------------------------------------------------------
+
+/// mode 0: "abc..." (END), mode 1: "ab...yz" (MIDDLE), mode 2: "...xyz" (START).
+/// `cap` is the colour behind the text; it hides the half letter next to the dots.
+export component KEllipsisText inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size: Theme.sp(16px);
+    in property <color> color: Theme.text;
+    in property <int> font-weight: 400;
+    in property <int> mode: 1;
+    in property <color> cap: Theme.bg;
+    min-width: 0px;
+    preferred-height: full.preferred-height;
+    clip: true;
+
+    property <bool> fits: full.preferred-width <= root.width;
+    property <length> dots-w: dots.preferred-width + 4px;
+    property <length> half: Math.max(0px, (root.width - root.dots-w) / 2);
+
+    full := Text {
+        x: 0px;
+        y: 0px;
+        width: root.mode == 0 ? root.width : self.preferred-width;
+        text: root.text;
+        color: root.color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        wrap: no-wrap;
+        overflow: root.mode == 0 ? TextOverflow.elide : TextOverflow.clip;
+        opacity: root.fits || root.mode == 0 ? 1 : 0;
+    }
+    dots := Text {
+        visible: false;
+        text: "…";
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+    }
+    // START: the tail of the text, right-aligned, with the dots over its cut end
+    if !root.fits && root.mode == 2: Rectangle {
+        Text {
+            x: root.width - self.width;
+            y: 0px;
+            width: self.preferred-width;
+            text: root.text;
+            color: root.color;
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            wrap: no-wrap;
+        }
+        Rectangle {
+            x: 0px;
+            width: root.dots-w;
+            background: root.cap;
+            Text {
+                text: "…";
+                color: root.color;
+                font-size: root.font-size;
+                font-weight: root.font-weight;
+                horizontal-alignment: left;
+            }
+        }
+    }
+    // MIDDLE: the head and the tail, each in its own half, with the dots between
+    if !root.fits && root.mode == 1: Rectangle {
+        Rectangle {
+            x: 0px;
+            width: root.half;
+            clip: true;
+            Text {
+                x: 0px;
+                y: 0px;
+                width: self.preferred-width;
+                text: root.text;
+                color: root.color;
+                font-size: root.font-size;
+                font-weight: root.font-weight;
+                wrap: no-wrap;
+            }
+        }
+        Rectangle {
+            x: root.half;
+            width: root.dots-w;
+            background: root.cap;
+            Text {
+                text: "…";
+                color: root.color;
+                font-size: root.font-size;
+                font-weight: root.font-weight;
+                horizontal-alignment: center;
+                width: 100%;
+            }
+        }
+        Rectangle {
+            x: root.width - root.half;
+            width: root.half;
+            clip: true;
+            Text {
+                x: parent.width - self.width;
+                y: 0px;
+                width: self.preferred-width;
+                text: root.text;
+                color: root.color;
+                font-size: root.font-size;
+                font-weight: root.font-weight;
+                wrap: no-wrap;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Buttons (Ui.button, Ui.iconButton)
+// ---------------------------------------------------------------------------------------------
+
+/// Ui.button(): kind 0 FILLED, 1 OUTLINE, 2 TEXT, 3 DANGER, 4 TONAL. 15 sp bold, radius 10,
+/// at least 44 x 64, padding 16 / 10, squashes to 96 % while pressed.
+export component KButton inherits Rectangle {
+    in property <string> text;
+    in property <int> kind: 0;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    property <color> fill: root.kind == 0 ? Theme.accent : root.kind == 4 ? Theme.chip : transparent;
+    property <color> stroke: root.kind == 1 ? Theme.line : root.kind == 3 ? Theme.danger : transparent;
+    property <color> ink: root.kind == 0 ? Theme.on-accent : root.kind == 3 ? Theme.danger : Theme.accent;
+    property <bool> has-stroke: root.kind == 1 || root.kind == 3;
+
+    min-width: 64px;
+    min-height: 44px;
+    preferred-width: label.preferred-width + 32px;
+    preferred-height: label.preferred-height + 20px;
+    border-radius: 10px;
+    // a disabled button keeps its text colour and fades its fill and outline to a third
+    background: root.enabled ? root.fill : root.fill.transparentize(0.667);
+    border-width: root.has-stroke ? Theme.hair : 0px;
+    border-color: root.enabled ? root.stroke : root.stroke.transparentize(0.667);
+
+    label := Text {
+        x: 16px;
+        y: 10px;
+        width: root.width - 32px;
+        height: root.height - 20px;
+        text: root.text;
+        color: root.ink;
+        font-size: Theme.sp(15px);
+        font-weight: Theme.bold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+    area := PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 10px;
+        enabled: root.enabled;
+        ripple-color: root.kind == 0 ? Theme.ripple-solid : Theme.ripple;
+        clicked => {
+            root.clicked();
+        }
+    }
+    states [
+        down when area.pressed: {
+            transform-scale: 0.96;
+            in {
+                animate transform-scale {
+                    duration: Theme.dur(90ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+            out {
+                animate transform-scale {
+                    duration: Theme.dur(160ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+        }
+    ]
+}
+
+/// Ui.iconButton(): 48 x 48, round ripple (radius 24), a 24 dp icon. `mark` shows the untinted
+/// Kiln mark (28 dp) instead of an icon.
+export component KIconButton inherits Rectangle {
+    in property <string> icon;
+    in property <color> tint: Theme.text;
+    in property <bool> mark: false;
+    in property <bool> enabled: true;
+    /// glowMark(): set to false (scale jumps to 0.8) and back to true (420 ms, overshoot) to pulse.
+    in-out property <bool> glow-run: true;
+    callback clicked();
+    width: 48px;
+    height: 48px;
+    property <float> phase: 0.0;
+    transform-scale: 0.8 + 0.2 * root.phase;
+
+    if !root.mark: Icon {
+        x: 12px;
+        y: 12px;
+        name: root.icon;
+        tint: root.tint;
+    }
+    if root.mark: KMark {
+        x: 10px;
+        y: 10px;
+    }
+    area := PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 24px;
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+    states [
+        run when root.glow-run: {
+            phase: 1.0;
+            in {
+                animate phase {
+                    duration: Theme.dur(420ms);
+                    easing: cubic-bezier(0.333, 1.733, 0.667, 1.0);
+                }
+            }
+            out {
+                animate phase {
+                    duration: 0ms;
+                }
+            }
+        }
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Text field (Ui.field) and meter (Ui.meter)
+// ---------------------------------------------------------------------------------------------
+
+/// A single-line field: 16 sp, padding 14 / 12, 10 dp corners, 1 dp outline in k_line, k_bg fill.
+export component KTextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> secret: false;
+    in-out property <string> text;
+    callback edited(string);
+    callback accepted(string);
+    min-height: 44px;
+    preferred-height: input.preferred-height + 24px;
+    background: Theme.bg;
+    border-radius: 10px;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+
+    if input.text == "": Text {
+        x: 14px;
+        y: 12px;
+        width: root.width - 28px;
+        text: root.placeholder;
+        color: Theme.text2;
+        font-size: Theme.sp(16px);
+        overflow: elide;
+        wrap: no-wrap;
+    }
+    input := TextInput {
+        x: 14px;
+        y: 12px;
+        width: root.width - 28px;
+        text <=> root.text;
+        color: Theme.text;
+        font-size: Theme.sp(16px);
+        single-line: true;
+        input-type: root.secret ? InputType.password : InputType.text;
+        selection-background-color: Theme.accent.with-alpha(0.35);
+        selection-foreground-color: Theme.text;
+        edited => {
+            root.edited(self.text);
+        }
+        accepted => {
+            root.accepted(self.text);
+        }
+    }
+}
+
+/// Ui.meter(): an 8 dp bar, 0..1, never shown emptier than 8 / 1000.
+export component KMeter inherits Rectangle {
+    in property <float> value: 0;
+    in property <bool> accented: true;
+    height: 8px;
+    background: Theme.line;
+    Rectangle {
+        x: 0px;
+        width: parent.width * Math.max(0.008, Math.min(root.value, 1.0));
+        background: root.accented ? Theme.accent : Theme.text2;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Top bar (MainActivity.buildUi)
+// ---------------------------------------------------------------------------------------------
+
+/// Padding 4 / 6, a 48 dp button on each side, the title block in between (pressable, radius 12).
+/// Title 19 sp bold (ellipsised in the middle), sub 12 sp (ellipsised at the start).
+export component KTopBar inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <string> left-icon: "up";
+    in property <bool> left-mark: false;
+    in property <bool> left-tinted: true;
+    in property <string> search-icon: "search";
+    in property <bool> show-search: true;
+    in property <bool> show-sort: true;
+    in property <bool> show-chevron: false;
+    in property <bool> titles-enabled: false;
+    in-out property <bool> left-glow-run: true;
+    callback left-clicked();
+    callback titles-clicked();
+    callback search-clicked();
+    callback sort-clicked();
+    callback more-clicked();
+    height: 60px;
+    background: Theme.bg;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        alignment: stretch;
+        KIconButton {
+            icon: root.left-icon;
+            mark: root.left-mark;
+            glow-run: root.left-glow-run;
+            clicked => {
+                root.left-clicked();
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            titles := Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 100%;
+                border-radius: 12px;
+                VerticalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 2px;
+                        KEllipsisText {
+                            text: root.title;
+                            font-size: Theme.sp(19px);
+                            font-weight: Theme.bold;
+                            mode: 1;
+                            cap: Theme.bg;
+                        }
+                        if root.show-chevron: Icon {
+                            name: "down";
+                            tint: Theme.text2;
+                        }
+                    }
+                    KEllipsisText {
+                        text: root.sub;
+                        font-size: Theme.sp(12px);
+                        color: Theme.text2;
+                        mode: 2;
+                        cap: Theme.bg;
+                        visible: root.sub != "";
+                    }
+                }
+                PressArea {
+                    width: 100%;
+                    height: 100%;
+                    radius: 12px;
+                    enabled: root.titles-enabled;
+                    clicked => {
+                        root.titles-clicked();
+                    }
+                }
+            }
+        }
+        if root.show-search: KIconButton {
+            icon: root.search-icon;
+            clicked => {
+                root.search-clicked();
+            }
+        }
+        if root.show-sort: KIconButton {
+            icon: "sort";
+            clicked => {
+                root.sort-clicked();
+            }
+        }
+        KIconButton {
+            icon: "more";
+            clicked => {
+                root.more-clicked();
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// List row (MainActivity.RowView) and bottom-bar tile (MainActivity.tile), floating button
+// ---------------------------------------------------------------------------------------------
+
+/// One row: a 40 dp tile (radius 10, k_chip) with a 22 dp icon, the name (16 sp, middle), a date
+/// line (12 sp), an optional folder line (12 sp, accent, start-ellipsised) and the size (13 sp).
+/// Padding 16 / 9. A selected row is tinted k_sel and shows a check in the tile.
+export component KListRow inherits Rectangle {
+    in property <string> icon;
+    in property <color> icon-tint: Theme.text2;
+    in property <image> preview;
+    in property <bool> has-preview: false;
+    in property <string> name;
+    in property <string> detail;
+    in property <string> where-line;
+    in property <string> size-text;
+    in property <bool> selected: false;
+    callback clicked();
+    callback long-pressed();
+    min-height: 58px;
+    preferred-height: col.preferred-height + 18px > 58px ? col.preferred-height + 18px : 58px;
+    background: root.selected ? Theme.sel-solid : Theme.bg;
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 12px;
+        VerticalLayout {
+            width: 40px;
+            alignment: center;
+            Rectangle {
+                height: 40px;
+                border-radius: 10px;
+                background: Theme.chip;
+                clip: true;
+                if root.has-preview && !root.selected: Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.preview;
+                    image-fit: cover;
+                }
+                if !root.has-preview || root.selected: Icon {
+                    x: 9px;
+                    y: 9px;
+                    width: 22px;
+                    height: 22px;
+                    name: root.selected ? "check" : root.icon;
+                    tint: root.selected ? Theme.accent : root.icon-tint;
+                }
+            }
+        }
+        col := VerticalLayout {
+            padding-left: 2px;
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            KEllipsisText {
+                text: root.name;
+                font-size: Theme.sp(16px);
+                mode: 1;
+                cap: root.selected ? Theme.sel-solid : Theme.bg;
+            }
+            if root.detail != "": KEllipsisText {
+                text: root.detail;
+                font-size: Theme.sp(12px);
+                color: Theme.text2;
+                mode: 0;
+            }
+            if root.where-line != "": KEllipsisText {
+                text: root.where-line;
+                font-size: Theme.sp(12px);
+                color: Theme.accent;
+                mode: 2;
+                cap: root.selected ? Theme.sel-solid : Theme.bg;
+            }
+        }
+        Text {
+            text: root.size-text;
+            color: Theme.text2;
+            font-size: Theme.sp(13px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        ripple-color: Theme.ripple-row;
+        long-press: true;
+        clicked => {
+            root.clicked();
+        }
+        long-pressed => {
+            root.long-pressed();
+        }
+    }
+}
+
+/// A bottom-bar tile: an icon over a 11 sp label, padding 10 / 8 / 10 / 6, radius 14.
+export component KTile inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <color> tint: Theme.text;
+    callback clicked();
+    preferred-width: Math.max(label-text.preferred-width, 24px) + 20px;
+    preferred-height: 8px + 24px + 2px + label-text.preferred-height + 6px;
+    border-radius: 14px;
+
+    Icon {
+        x: (parent.width - 24px) / 2;
+        y: 8px;
+        name: root.icon;
+        tint: root.tint;
+    }
+    label-text := Text {
+        x: 0px;
+        y: 8px + 24px + 2px;
+        width: 100%;
+        text: root.label;
+        color: root.tint;
+        font-size: Theme.sp(11px);
+        horizontal-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+    area := PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 14px;
+        clicked => {
+            root.clicked();
+        }
+    }
+    states [
+        down when area.pressed: {
+            transform-scale: 0.96;
+            in {
+                animate transform-scale {
+                    duration: Theme.dur(90ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+            out {
+                animate transform-scale {
+                    duration: Theme.dur(160ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+        }
+    ]
+}
+
+/// The "+  New" button: a FILLED button 48 dp high with a 4 dp elevation, bottom right.
+export component KFab inherits Rectangle {
+    in property <string> text: "+  New";
+    in property <bool> shown: false;
+    callback clicked();
+    height: 48px;
+    preferred-width: Math.max(64px, label.preferred-width + 32px);
+    border-radius: 10px;
+    background: Theme.accent;
+    drop-shadow-color: #00000040;
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 3px;
+    visible: root.opacity > 0.01;
+
+    label := Text {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        color: Theme.on-accent;
+        font-size: Theme.sp(15px);
+        font-weight: Theme.bold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 10px;
+        ripple-color: Theme.ripple-solid;
+        enabled: root.shown;
+        clicked => {
+            root.clicked();
+        }
+    }
+    states [
+        on when root.shown: {
+            opacity: 1;
+            transform-scale: 1.0;
+            in {
+                animate opacity {
+                    duration: Theme.dur(200ms);
+                    easing: ease-in-out-sine;
+                }
+                animate transform-scale {
+                    duration: Theme.dur(200ms);
+                    easing: cubic-bezier(0.333, 1.467, 0.667, 1.0);
+                }
+            }
+        }
+        off when !root.shown: {
+            opacity: 0;
+            transform-scale: 0.6;
+            in {
+                animate opacity {
+                    duration: Theme.dur(120ms);
+                    easing: ease-in-out-sine;
+                }
+                animate transform-scale {
+                    duration: Theme.dur(120ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+        }
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sheet: a bordered, rounded card in the middle of the screen (Sheet.java)
+// ---------------------------------------------------------------------------------------------
+
+/// Content of a Sheet: put these (or anything else) inside a KSheet.
+export component KSheetText inherits VerticalLayout {
+    in property <string> text;
+    padding-bottom: 8px;
+    Text {
+        text: root.text;
+        color: Theme.text2;
+        font-size: Theme.sp(15px);
+        wrap: word-wrap;
+    }
+}
+
+/// Sheet.option(): padding 8 / 10, radius 12, an optional 38 dp tile with the icon in accent,
+/// the label (16 sp), and a ✓ (18 sp bold, accent) when selected.
+export component KSheetOption inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+    preferred-height: 20px + (root.icon != "" ? 38px : label-text.preferred-height) + 2px;
+    border-radius: 12px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 14px;
+        if root.icon != "": Rectangle {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: Theme.chip;
+            Icon {
+                x: 8px;
+                y: 8px;
+                width: 22px;
+                height: 22px;
+                name: root.icon;
+                tint: Theme.accent;
+            }
+        }
+        label-text := Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: Theme.sp(16px);
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        if root.selected: Text {
+            text: "✓";
+            color: Theme.accent;
+            font-size: Theme.sp(18px);
+            font-weight: Theme.bold;
+            vertical-alignment: center;
+        }
+    }
+    PressArea {
+        width: 100%;
+        height: parent.height - 2px;
+        radius: 12px;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// Sheet.radio(): a 22 dp ring (2 dp outline, 5 dp core when selected), the label, a small detail.
+export component KSheetRadio inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> selected: false;
+    callback clicked();
+    preferred-height: 24px + Math.max(22px, texts.preferred-height) + 2px;
+    border-radius: 12px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 14px;
+        VerticalLayout {
+            width: 22px;
+            alignment: center;
+            Rectangle {
+                height: 22px;
+                border-radius: 11px;
+                border-width: 2px;
+                border-color: root.selected ? Theme.accent : Theme.line;
+                if root.selected: Rectangle {
+                    x: 5px;
+                    y: 5px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 6px;
+                    background: Theme.accent;
+                }
+            }
+        }
+        texts := VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.label;
+                color: Theme.text;
+                font-size: Theme.sp(16px);
+                wrap: no-wrap;
+                overflow: elide;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+    }
+    PressArea {
+        width: 100%;
+        height: parent.height - 2px;
+        radius: 12px;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// Sheet.divider(): a 1 dp line with 6 dp above and below.
+export component KSheetDivider inherits Rectangle {
+    height: 13px;
+    Rectangle {
+        y: 6px;
+        height: Theme.hair;
+        background: Theme.line;
+    }
+}
+
+/// The modal itself. `shown` fades and scales the card in (200 ms, decelerate) and out (140 ms);
+/// the scrim goes to 50 % black. The card is at most 460 dp wide, 20 dp from the screen sides, and
+/// centred in the room that is left. Buttons: one or two share a row (they stack, main action on
+/// top, when the labels would not fit or when there are more than two); `button-clicked` gets the
+/// index in the order Sheet.button() would have been called.
+export component KSheet inherits Rectangle {
+    in property <bool> shown: false;
+    in property <string> title;
+    in property <[string]> buttons;
+    in property <[int]> kinds;
+    in property <bool> cancelable: true;
+    in property <length> inset-top: 0px;
+    in property <length> inset-bottom: 0px;
+    callback button-clicked(int);
+    callback cancelled();
+
+    property <length> card-w: Math.min(root.width - 40px, 460px);
+    property <int> n: root.buttons.length;
+    // two buttons share a row only if both labels fit: (card - 40 - 10) / 2 - 32 each
+    property <length> each: (root.card-w - 50px) / 2 - 32px;
+    property <bool> stack: root.n > 2 || (root.n == 2 && (m0.preferred-width > root.each || m1.preferred-width > root.each));
+    property <float> t: 0;
+
+    visible: root.t > 0.001;
+
+    // measuring labels (15 sp bold, as in the buttons)
+    m0 := Text {
+        visible: false;
+        text: root.n > 0 ? root.buttons[0] : "";
+        font-size: Theme.sp(15px);
+        font-weight: Theme.bold;
+    }
+    m1 := Text {
+        visible: false;
+        text: root.n > 1 ? root.buttons[1] : "";
+        font-size: Theme.sp(15px);
+        font-weight: Theme.bold;
+    }
+
+    Rectangle {
+        background: Theme.black;
+        opacity: 0.5 * root.t;
+        TouchArea {
+            clicked => {
+                if (root.cancelable) {
+                    root.cancelled();
+                }
+            }
+        }
+    }
+    // a tap beside the card closes it too
+    TouchArea {
+        clicked => {
+            if (root.cancelable) {
+                root.cancelled();
+            }
+        }
+    }
+
+    card := Rectangle {
+        width: root.card-w;
+        height: Math.min(content.preferred-height, root.height - root.inset-top - root.inset-bottom - 24px);
+        x: (root.width - self.width) / 2;
+        y: root.inset-top + 12px + ((root.height - root.inset-top - root.inset-bottom - 24px) - self.height) / 2;
+        background: Theme.surface;
+        border-radius: 22px;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+        drop-shadow-color: #00000050;
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 6px;
+        opacity: root.t;
+        transform-scale: 0.92 + 0.08 * root.t;
+        TouchArea { }
+
+        content := VerticalLayout {
+            padding: 20px;
+            if root.title != "": KEllipsisText {
+                text: root.title;
+                font-size: Theme.sp(19px);
+                font-weight: Theme.bold;
+                mode: 1;
+                cap: Theme.surface;
+            }
+            if root.title != "": Rectangle {
+                height: 12px;
+            }
+            Flickable {
+                viewport-height: body.preferred-height;
+                min-height: Math.min(72px, body.preferred-height);
+                preferred-height: body.preferred-height;
+                body := VerticalLayout {
+                    width: parent.width;
+                    @children
+                }
+            }
+            if root.n > 0: Rectangle {
+                height: 14px;
+            }
+            if root.n > 0 && !root.stack: HorizontalLayout {
+                spacing: 10px;
+                for label[i] in root.buttons: KButton {
+                    text: label;
+                    kind: root.kinds[i];
+                    clicked => {
+                        root.button-clicked(i);
+                    }
+                }
+            }
+            if root.n > 0 && root.stack: VerticalLayout {
+                spacing: 8px;
+                for label[i] in root.buttons: KButton {
+                    text: root.n == 2 ? root.buttons[1 - i] : label;
+                    kind: root.n == 2 ? root.kinds[1 - i] : root.kinds[i];
+                    clicked => {
+                        root.button-clicked(root.n == 2 ? 1 - i : i);
+                    }
+                }
+            }
+        }
+    }
+
+    states [
+        open when root.shown: {
+            t: 1;
+            in {
+                animate t {
+                    duration: Theme.dur(200ms);
+                    easing: cubic-bezier(0.314, 1.0, 0.626, 1.0);
+                }
+            }
+            out {
+                animate t {
+                    duration: Theme.dur(140ms);
+                    easing: ease-in-out-sine;
+                }
+            }
+        }
+    ]
+}
+
+/// Ui.detailCard() row data: a label and a value; `stack` puts the value under its label.
+export struct DetailRow {
+    label: string,
+    value: string,
+    stack: bool,
+}
+
+/// Ui.detailCard(): k_chip card, radius 14, padding 14 / 4, rows 11 dp apart with 1 px rules.
+export component KDetailCard inherits Rectangle {
+    in property <[DetailRow]> rows;
+    background: Theme.chip;
+    border-radius: 14px;
+    preferred-height: list.preferred-height;
+
+    list := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        for row[i] in root.rows: VerticalLayout {
+            if i > 0: Rectangle {
+                height: Theme.hair-px;
+                background: Theme.line;
+            }
+            if !row.stack: HorizontalLayout {
+                padding-top: 11px;
+                padding-bottom: 11px;
+                spacing: 16px;
+                Text {
+                    text: row.label;
+                    color: Theme.text2;
+                    font-size: Theme.sp(14px);
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: row.value;
+                    color: Theme.text;
+                    font-size: Theme.sp(14px);
+                    font-weight: Theme.bold;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+            }
+            if row.stack: VerticalLayout {
+                padding-top: 11px;
+                padding-bottom: 11px;
+                spacing: 3px;
+                Text {
+                    text: row.label;
+                    color: Theme.text2;
+                    font-size: Theme.sp(14px);
+                }
+                Text {
+                    text: row.value;
+                    color: Theme.text;
+                    font-size: Theme.sp(14px);
+                    font-weight: Theme.bold;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Switch (SettingsActivity.toggle) and check box (Ui.check)
+// ---------------------------------------------------------------------------------------------
+
+/// The stock Material Switch of Theme.DeviceDefault, tinted with colorControlActivated (k_accent):
+/// a 36 x 14 dp track and a 20 dp thumb. On: accent thumb, track accent at 30 %. Off: a light grey
+/// thumb and a track in the foreground colour at 30 %. The thumb slides in 150 ms.
+export component KSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+    width: 52px;
+    height: 48px;
+    property <float> pos: root.checked ? 1.0 : 0.0;
+    animate pos {
+        duration: Theme.dur(150ms);
+        easing: ease-in-out-sine;
+    }
+
+    Rectangle {
+        x: 8px;
+        y: 17px;
+        width: 36px;
+        height: 14px;
+        border-radius: 7px;
+        background: root.checked ? Theme.accent.with-alpha(0.3) : (Theme.dark ? #FFFFFF4D : #0000004D);
+    }
+    Rectangle {
+        x: 8px + (36px - 20px) * root.pos;
+        y: 14px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        background: root.checked ? Theme.accent : (Theme.dark ? #BDBDBD : #ECECEC);
+        drop-shadow-color: #00000040;
+        drop-shadow-blur: 2px;
+        drop-shadow-offset-y: 1px;
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 24px;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+/// Ui.check(): the stock check box, 15 sp label in k_text, box tinted with k_accent when ticked.
+export component KCheck inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+    min-height: 48px;
+    preferred-height: 48px;
+    preferred-width: 48px + 8px + label-text.preferred-width;
+
+    Rectangle {
+        x: 15px;
+        y: 15px;
+        width: 18px;
+        height: 18px;
+        border-radius: 2px;
+        border-width: 2px;
+        border-color: root.checked ? Theme.accent : Theme.text2;
+        background: root.checked ? Theme.accent : transparent;
+        if root.checked: Icon {
+            x: 2px;
+            y: 2px;
+            width: 14px;
+            height: 14px;
+            name: "check";
+            tint: Theme.on-accent;
+        }
+    }
+    label-text := Text {
+        x: 56px;
+        width: root.width - 56px;
+        height: 100%;
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.sp(15px);
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 8px;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Stat tile (Ui.statTile) and toast
+// ---------------------------------------------------------------------------------------------
+
+/// Ui.statTile(): a big number (18 sp bold) over a small label (12 sp), centred, k_chip, radius 14,
+/// padding 6 / 12.
+export component KStatTile inherits Rectangle {
+    in property <string> big;
+    in property <string> small;
+    background: Theme.chip;
+    border-radius: 14px;
+    preferred-height: col.preferred-height;
+
+    col := VerticalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        alignment: center;
+        Text {
+            text: root.big;
+            color: Theme.text;
+            font-size: Theme.sp(18px);
+            font-weight: Theme.bold;
+            horizontal-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        Text {
+            text: root.small;
+            color: Theme.text2;
+            font-size: Theme.sp(12px);
+            horizontal-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+}
+
+/// Toast.makeText(..., LENGTH_SHORT): a dark rounded pill near the bottom that fades in and out.
+/// The stock toast is drawn by the system, so this is an approximation of its look; the timing is
+/// the real one (visible for 2 s, fade 150 ms). Cover the screen with it, set `message` and flip
+/// `shown` to true; the host turns `shown` off again after 2 s. It never takes touches.
+export component KToast inherits Rectangle {
+    in property <string> message;
+    in property <bool> shown: false;
+    in property <length> inset-bottom: 0px;
+
+    pill := Rectangle {
+        width: Math.min(label.preferred-width + 48px, root.width - 48px);
+        height: label.preferred-height + 28px;
+        x: (root.width - self.width) / 2;
+        y: root.height - root.inset-bottom - 64px - self.height;
+        border-radius: self.height / 2;
+        background: Theme.dark ? #E6E6EA : #323232;
+        visible: self.opacity > 0.01;
+        opacity: root.shown ? 1 : 0;
+        animate opacity {
+            duration: Theme.dur(150ms);
+            easing: ease-in-out-sine;
+        }
+        label := Text {
+            x: 24px;
+            y: 14px;
+            width: parent.width - 48px;
+            text: root.message;
+            color: Theme.dark ? #1B1B1F : #FFFFFF;
+            font-size: Theme.sp(14px);
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

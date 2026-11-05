@@ -360,10 +360,13 @@ fn pack_each(r: &Request) -> Result<Packed, Value> {
         let sizes: Mutex<Vec<u64>> = Mutex::new(vec![0; todo.len()]);
         let failure: Mutex<Option<Stop>> = Mutex::new(None);
         let completed = AtomicUsize::new(0);
+        // The workers are new threads, so they do not inherit this job's cancel token.
+        let token = kiln::cancel::current();
         std::thread::scope(|scope| {
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
                     scope.spawn(|| {
+                        let _job = token.clone().map(kiln::cancel::enter);
                         loop {
                             if stop.load(Relaxed) || kiln::cancel::is_set() {
                                 break;

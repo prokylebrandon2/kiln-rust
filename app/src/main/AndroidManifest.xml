@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Slint draws with Skia on OpenGL ES (or Vulkan where the phone has it) -->
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
     <!-- lets "Open with..." list the apps that can open a file (Android 11+ package visibility) -->
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
@@ -22,19 +25,25 @@
         </intent>
     </queries>
 
+    <!-- hasCode="false": the app is native code only. There is no Java or Kotlin class in the APK;
+         android.app.NativeActivity (part of Android) loads libkiln_android.so and runs android_main. -->
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:hasCode="false"
         android:theme="@style/KilnTheme">
 
+        <!-- configChanges: the app handles these itself (dark mode and font size change live, a
+             rotation does not restart it), as the Java MainActivity did for the first four. -->
         <activity
-            android:name=".MainActivity"
+            android:name="android.app.NativeActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustNothing"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|smallestScreenSize|uiMode|fontScale|density|layoutDirection|locale">
+            <meta-data android:name="android.app.lib_name" android:value="kiln_android" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -72,44 +81,5 @@
                 <data android:pathPattern=".*\\..*\\..*\\..*\\.kiln" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".TextActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
-
-        <activity
-            android:name=".ImageActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
-
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.files"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
-
-        <!-- Shizuku hands this app its permission request and binder through this provider -->
-        <provider
-            android:name="rikka.shizuku.ShizukuProvider"
-            android:authorities="${applicationId}.shizuku"
-            android:enabled="true"
-            android:exported="true"
-            android:multiprocess="false"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
-
-        <service
-            android:name=".OpService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

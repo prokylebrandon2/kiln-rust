@@ -1,0 +1,181 @@
+// The main window. Phase A draws what MainActivity.buildUi() shows before a folder is loaded: the
+// top bar, the one-pixel rule under it, the body with its "Starting..." line, the (hidden) "+ New"
+// button, the opaque permission view, a message sheet and a toast layer. The file list, the pull-down panel and the
+// bottom bar come in Phase B. See docs/UI-SPEC.md, section "Main screen".
+
+import { Theme } from "theme.slint";
+import { KButton, KFab, KSheet, KSheetText, KToast, KTopBar } from "components.slint";
+
+// The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
+export { Theme }
+
+export component MainWindow inherits Window {
+    // ---- what the Rust side sets ---------------------------------------------------------------
+    /// Top bar title (19 sp bold) and the line under it (12 sp, the folder path).
+    in property <string> bar-title: "Kiln";
+    in property <string> bar-sub;
+    /// At a storage root the Kiln mark is the left button; elsewhere it is the "up" arrow.
+    in property <bool> home: true;
+    /// The little arrow after the title, and whether tapping the title opens the bookmarks. Both
+    /// are on only when storage access is granted, not selecting and not inside an archive.
+    in property <bool> marks-ok: false;
+    /// The magnifier turns into a cross while searching.
+    in property <bool> searching: false;
+    /// The line in the middle of the body ("Starting...", or "Kiln couldn't start: ...").
+    in property <string> empty-text: "Starting...";
+    /// How far down it sits: 56 dp, or 96 dp when the ".." row is showing.
+    in property <length> empty-top: 56px;
+    /// True until "All files access" is granted: the opaque permission view covers the body.
+    in property <bool> permission-missing: false;
+    in property <bool> fab-shown: false;
+    in property <string> toast-text;
+    in property <bool> toast-shown: false;
+    /// MainActivity.message(heading, body): a sheet with the text and one filled "OK" button.
+    in property <bool> sheet-shown: false;
+    in property <string> sheet-title;
+    in property <string> sheet-body;
+    /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
+    in-out property <bool> glow-run: true;
+
+    // ---- what the UI tells the Rust side -------------------------------------------------------
+    callback allow-access();
+    callback left-clicked();
+    callback titles-clicked();
+    callback search-clicked();
+    callback sort-clicked();
+    callback more-clicked();
+    callback new-clicked();
+    callback sheet-dismissed();
+
+    background: Theme.bg;
+    default-font-family: Theme.font;
+
+    VerticalLayout {
+        // Not edge-to-edge: the system bars are k_bg in the Java theme, so the page starts below
+        // them. Slint reports the bars as the safe area.
+        padding-top: root.safe-area-insets.top;
+        padding-bottom: root.safe-area-insets.bottom;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+        spacing: 0px;
+
+        KTopBar {
+            title: root.bar-title;
+            sub: root.bar-sub;
+            left-icon: "up";
+            left-mark: root.home;
+            left-glow-run: root.glow-run;
+            search-icon: root.searching ? "close" : "search";
+            show-chevron: root.marks-ok;
+            titles-enabled: root.marks-ok;
+            left-clicked => {
+                root.left-clicked();
+            }
+            titles-clicked => {
+                root.titles-clicked();
+            }
+            search-clicked => {
+                root.search-clicked();
+            }
+            sort-clicked => {
+                root.sort-clicked();
+            }
+            more-clicked => {
+                root.more-clicked();
+            }
+        }
+
+        // page.addView(line): 1 dp, k_line
+        Rectangle {
+            height: Theme.hair;
+            background: Theme.line;
+        }
+
+        // body: a FrameLayout in the Java; children are stacked, the last one is on top
+        Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+
+            if root.empty-text != "": Text {
+                x: 32px;
+                y: root.empty-top;
+                width: parent.width - 64px;
+                text: root.empty-text;
+                color: Theme.text2;
+                font-size: Theme.sp(15px);
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // fab: WRAP_CONTENT x 48 dp, bottom right, 16 dp from both edges
+            KFab {
+                x: parent.width - self.width - 16px;
+                y: parent.height - self.height - 16px;
+                shown: root.fab-shown;
+                clicked => {
+                    root.new-clicked();
+                }
+            }
+
+            // permView: opaque, so it covers everything above; 32 dp padding, content centred
+            if root.permission-missing: Rectangle {
+                background: Theme.bg;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 32px;
+                    alignment: center;
+                    Text {
+                        text: "Kiln needs access to your files to open, create and unpack archives and to manage files. Nothing leaves your phone.";
+                        color: Theme.text;
+                        font-size: Theme.sp(15px);
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Rectangle {
+                        height: 16px;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        KButton {
+                            text: "Allow access to files";
+                            kind: 0;
+                            clicked => {
+                                root.allow-access();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The message sheet: above the page, below the toast.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.sheet-shown;
+        title: root.sheet-title;
+        buttons: ["OK"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.sheet-dismissed();
+        }
+        cancelled => {
+            root.sheet-dismissed();
+        }
+        KSheetText {
+            text: root.sheet-body;
+        }
+    }
+
+    // Toast layer: above everything, never takes touches.
+    KToast {
+        width: 100%;
+        height: 100%;
+        message: root.toast-text;
+        shown: root.toast-shown;
+        inset-bottom: root.safe-area-insets.bottom;
+    }
+}

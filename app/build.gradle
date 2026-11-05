@@ -1,3 +1,7 @@
+// Packaging only. The app is Rust: `libkiln_android.so` (built by cargo-ndk, see
+// .github/workflows/build.yml) is copied into src/main/jniLibs/<abi>/ before Gradle runs, and
+// Android's own android.app.NativeActivity loads it. There is no Java or Kotlin in the build,
+// and no AndroidX, Shizuku or other library.
 plugins {
     id 'com.android.application'
 }
@@ -15,21 +19,14 @@ android {
         ndk { abiFilters "arm64-v8a", "x86_64" }
     }
 
-    buildFeatures { aidl true }      // IPrivService: the Shizuku user service
-
-    // libkiln_bridge.so is an executable (the Rust engine's bridge), not a JNI library: it has to
-    // exist as a real file in nativeLibraryDir so Engine can launch it.
-    packagingOptions { jniLibs { useLegacyPackaging true } }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+    // src/main/java and src/main/aidl still hold the old Java app, kept only as the reference the
+    // Rust port is checked against until it is deleted. Nothing in them is compiled.
+    sourceSets {
+        main {
+            java.srcDirs = []
+            aidl.srcDirs = []
+        }
     }
-}
 
-dependencies {
-    implementation "androidx.core:core:1.13.1"   // FileProvider: lets other apps open files
-    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"   // pull down to refresh
-    implementation "dev.rikka.shizuku:api:13.1.5"        // Shizuku: browse protected folders
-    implementation "dev.rikka.shizuku:provider:13.1.5"
+    buildFeatures { buildConfig false }
 }

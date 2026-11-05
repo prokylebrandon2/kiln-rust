@@ -1,0 +1,61 @@
+// Theme: every colour, size, font and timing the Android app used, in one place.
+// Values come from docs/UI-SPEC.md, which was extracted from Ui.java, Sheet.java, MainActivity.java
+// and res/values(-night)/colors.xml. Nothing here is invented.
+//
+// Colours: Android writes #AARRGGBB, Slint writes #RRGGBBAA. The conversion is done once, here.
+
+export global Theme {
+    // ---- set from Rust (platform) -------------------------------------------------------------
+    /// True while the system is in dark mode (res/values-night).
+    in-out property <bool> dark: false;
+    /// Display density: 1.0 = 160 dpi. 1 Slint logical px == 1 dp, so only hairlines need it.
+    in-out property <float> density: 2.625;
+    /// Settings > font size (Configuration.fontScale). sp = dp * font-scale.
+    in-out property <float> font-scale: 1.0;
+    /// Settings > Animation speed: Off 0, Fast 0.6, Normal 0.85, Relaxed 1.2 (Defaults.ANIM_SCALE).
+    in-out property <float> anim-scale: 0.85;
+
+    // ---- colours (res/values/colors.xml and res/values-night/colors.xml) -----------------------
+    out property <color> bg: dark ? #121214 : #F6F6F8;
+    out property <color> surface: dark ? #1D1D21 : #FFFFFF;
+    out property <color> text: dark ? #E6E6EA : #1B1B1F;
+    out property <color> text2: dark ? #9A9AA3 : #6A6A73;
+    out property <color> line: dark ? #2D2D33 : #E2E2E7;
+    out property <color> accent: dark ? #8FB0E0 : #3F5F8F;
+    out property <color> on-accent: dark ? #101820 : #FFFFFF;
+    /// k_sel: the tint of a selected row (alpha 0x1F day, 0x29 night).
+    out property <color> sel: dark ? #8FB0E029 : #3F5F8F1F;
+    out property <color> warn-bg: dark ? #3A3426 : #F3ECD9;
+    out property <color> danger: dark ? #F2B8B5 : #B3261E;
+    out property <color> chip: dark ? #26272D : #ECEEF3;
+    /// The k_sel tint already blended over k_bg (a solid colour for text caps behind a selected row).
+    out property <color> sel-solid: accent.mix(bg, dark ? 0.161 : 0.122);
+    out property <color> black: #000000;
+
+    // ---- ripple colours (Ui.pressable / RowView) ----------------------------------------------
+    /// Ripple on a solid button: k_on_accent at 0x4D.
+    out property <color> ripple-solid: dark ? #1018204D : #FFFFFF4D;
+    /// Ripple on everything else: k_text at 0x26.
+    out property <color> ripple: dark ? #E6E6EA26 : #1B1B1F26;
+    /// Ripple on list rows: k_text at 0x22.
+    out property <color> ripple-row: dark ? #E6E6EA22 : #1B1B1F22;
+
+    // ---- type scale -----------------------------------------------------------------------------
+    /// sp -> logical px (dp). Every font size in the app goes through this.
+    pure public function sp(v: length) -> length {
+        v * font-scale
+    }
+    /// dp(1) as the Java computes it: Math.round(density) physical pixels.
+    out property <length> hair: Math.max(1, Math.round(density)) * 1phx;
+    /// Ui.rule(): a separator that is exactly one physical pixel.
+    out property <length> hair-px: 1phx;
+
+    /// A base duration scaled by the animation speed (Defaults.anim).
+    pure public function dur(v: duration) -> duration {
+        v * anim-scale
+    }
+
+    /// System Roboto, as the Java UI uses (Typeface.DEFAULT / DEFAULT_BOLD).
+    out property <string> font: "Roboto";
+    out property <int> bold: 700;
+}

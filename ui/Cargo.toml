@@ -1,0 +1,17 @@
+[package]
+name = "kiln-ui"
+version = "0.5.0"
+edition = "2024"
+description = "Kiln's Slint user interface: custom components that reproduce the original Android Views"
+publish = false
+
+[lib]
+name = "kiln_ui"
+path = "src/lib.rs"
+
+[dependencies]
+slint = { workspace = true }
+
+[build-dependencies]
+# Compiles ui/main.slint to Rust at build time (same version as `slint`).
+slint-build = "=1.18.1"

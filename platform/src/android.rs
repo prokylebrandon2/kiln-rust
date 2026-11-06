@@ -1097,17 +1097,19 @@ impl Host for AndroidHost {
             .map_err(|error| error.to_string())?
     }
 
-    fn copy_incoming_async(&self, dest: PathBuf, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
+    fn copy_incoming_async(
+        &self,
+        dest: PathBuf,
+        done: Box<dyn FnOnce(Result<(), String>) + Send>,
+    ) {
         let vm = self.vm.clone();
         let activity = self.activity.clone();
 
         std::thread::spawn(move || {
             let result = (|| {
-                let mut env = vm
-                    .attach_current_thread()
-                    .map_err(|error| error.to_string())?;
-                let copied = env
-                    .with_local_frame(32, |env| copy_incoming_from_intent(env, &activity, &dest));
+                let mut env = vm.attach_current_thread().map_err(|error| error.to_string())?;
+                let copied =
+                    env.with_local_frame(32, |env| copy_incoming_from_intent(env, &activity, &dest));
                 if copied.is_err() && env.exception_check().unwrap_or(false) {
                     let _ = env.exception_clear();
                 }

@@ -298,3 +298,230 @@ pub fn strip_ext(name: &str) -> String {
         _ => name.to_string(),
     }
 }
+
+/// What a finished run's closing line says: "12 file(s), 3.4 MB in 0.8s" and the like.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Line {
+    pub files: u64,
+    /// The size, when the line has one.
+    pub size: Option<String>,
+    pub secs: String,
+}
+
+/// The first " in <seconds>s" of `s`: where it starts, and the seconds.
+fn find_in_secs(s: &str) -> Option<(usize, String)> {
+    let mut from = 0;
+    while let Some(i) = s[from..].find(" in ") {
+        let at = from + i;
+        let tail = &s[at + 4..];
+        let secs: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if !secs.is_empty() && tail[secs.len()..].starts_with('s') {
+            return Some((at, secs));
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// The number written just before `at` in `msg`.
+fn number_before(msg: &str, at: usize) -> Option<u64> {
+    let digits = msg[..at]
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .len();
+    if digits == at {
+        return None;
+    }
+    msg[digits..at].parse().ok()
+}
+
+/// `extractResult`'s regex, `(\d+) file\(s\)(?: from [^\n]+?)?(?:, ([^\n]+?))? in ([\d.]+)s`:
+/// "extracted 2 file(s), 88 B in 0.0s - ..." or "extracted 5 file(s) from /p in 0.4s - ...".
+pub fn parse_extract(msg: &str) -> Option<Line> {
+    const KEY: &str = " file(s)";
+    let mut from = 0;
+    while let Some(i) = msg[from..].find(KEY) {
+        let at = from + i;
+        from = at + 1;
+        let Some(files) = number_before(msg, at) else {
+            continue;
+        };
+        let line = msg[at + KEY.len()..].split('\n').next().unwrap_or("");
+        let Some((pos, secs)) = find_in_secs(line) else {
+            continue;
+        };
+        let head = &line[..pos];
+        let size = match head.strip_prefix(", ") {
+            Some(size) if !size.is_empty() => Some(size.to_string()),
+            Some(_) => continue,
+            None if head.is_empty() || head.starts_with(" from ") => None,
+            None => continue,
+        };
+        return Some(Line { files, size, secs });
+    }
+    None
+}
+
+/// The first form of [`parse_check`]: a size is in the line.
+fn check_with_size(msg: &str) -> Option<Line> {
+    const WITH_SIZE: &str = " file(s), ";
+    let at = msg.find(WITH_SIZE)?;
+    let files = number_before(msg, at)?;
+    let line = msg[at + WITH_SIZE.len()..].split('\n').next().unwrap_or("");
+    let (pos, secs) = find_in_secs(line)?;
+    (pos > 0).then(|| Line {
+        files,
+        size: Some(line[..pos].to_string()),
+        secs,
+    })
+}
+
+/// `checkResult`'s two regexes: "12 file(s), 3.4 MB in 0.8s" (with a size), and "14 file(s) from
+/// <path> in 5.5s" (no size: `size` is `None`).
+pub fn parse_check(msg: &str) -> Option<Line> {
+    const FROM: &str = " file(s) from ";
+    if let Some(line) = check_with_size(msg) {
+        return Some(line);
+    }
+    let at = msg.find(FROM)?;
+    let files = number_before(msg, at)?;
+    let (pos, secs) = find_in_secs(&msg[at + FROM.len()..])?;
+    (pos > 0).then_some(Line {
+        files,
+        size: None,
+        secs,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arc(paths: &[(&str, i64)]) -> ArcState {
+        let r = json!({
+            "ok": true,
+            "kind": "archive",
+            "encrypted": false,
+            "packed": 10,
+            "entries": paths.iter().map(|(p, s)| json!({"p": p, "s": s, "m": 0})).collect::<Vec<_>>(),
+        });
+        ArcState::from_open(PathBuf::from("/a/x.kiln"), String::new(), None, &r)
+    }
+
+    #[test]
+    fn folders_add_up_what_is_below_them() {
+        let mut a = arc(&[("a/b.txt", 5), ("a/c/d.txt", 7), ("e.txt", 1)]);
+        let rows = a.rows(0);
+        let dir = rows.iter().find(|r| r.key == "a/").expect("folder a");
+        assert_eq!((dir.size, dir.sub.as_str()), (12, "2 files"));
+        assert!(rows.iter().any(|r| r.key == "e.txt" && r.title == "e.txt"));
+        a.prefix = "a/".to_string();
+        let inner = a.rows(0);
+        assert!(inner.iter().any(|r| r.key == "a/c/" && r.title == "c"));
+        assert!(
+            inner
+                .iter()
+                .any(|r| r.key == "a/b.txt" && r.title == "b.txt")
+        );
+        assert_eq!(inner.len(), 2);
+    }
+
+    #[test]
+    fn back_goes_one_folder_up() {
+        let mut a = arc(&[]);
+        assert_eq!(a.parent_prefix(), None);
+        a.prefix = "a/".to_string();
+        assert_eq!(a.parent_prefix(), Some(String::new()));
+        a.prefix = "a/b/".to_string();
+        assert_eq!(a.parent_prefix(), Some("a/".to_string()));
+    }
+
+    #[test]
+    fn counts_and_totals_follow_the_keys() {
+        let a = arc(&[("a/b.txt", 5), ("a/c/d.txt", 7), ("ab.txt", 1)]);
+        assert_eq!(a.count_for(&[]), 3);
+        assert_eq!(a.count_for(&["a/".to_string()]), 2);
+        assert_eq!(a.count_for(&["ab.txt".to_string(), "a/c/".to_string()]), 2);
+        assert_eq!(a.totals_of("a/"), (12, 2, 0));
+        assert_eq!(a.raw_and_folders(), (13, 2));
+    }
+
+    #[test]
+    fn search_names_the_folder_of_a_hit() {
+        let mut a = arc(&[("a/b/note.txt", 1), ("note2.txt", 1), ("a/other.txt", 1)]);
+        let words = vec!["note".to_string()];
+        let hits = a.search_rows(&words, 0);
+        let subs: Vec<&str> = hits.iter().map(|r| r.sub.as_str()).collect();
+        assert_eq!(subs, ["a/b", ""]);
+        a.prefix = "a/".to_string();
+        let hits = a.search_rows(&words, 0);
+        assert_eq!(hits[0].sub, "b");
+        assert_eq!(hits[0].key, "a/b/note.txt");
+    }
+
+    #[test]
+    fn members_are_named_without_the_slash() {
+        let text = members_json(&["a/".to_string(), "b.txt".to_string()]);
+        let v: Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(v[0]["p"], "a");
+        assert_eq!(v[0]["dir"], true);
+        assert_eq!(v[1]["p"], "b.txt");
+        assert_eq!(v[1]["dir"], false);
+    }
+
+    #[test]
+    fn strips_one_extension() {
+        assert_eq!(strip_ext("x.kiln"), "x");
+        assert_eq!(strip_ext("x.tar.kiln"), "x.tar");
+        assert_eq!(strip_ext(".hidden"), ".hidden");
+        assert_eq!(strip_ext("plain"), "plain");
+    }
+
+    #[test]
+    fn reads_the_extraction_line() {
+        let l = parse_extract("extracted 2 file(s), 88 B in 0.0s - all checksums OK");
+        assert_eq!(
+            l,
+            Some(Line {
+                files: 2,
+                size: Some("88 B".to_string()),
+                secs: "0.0".to_string()
+            })
+        );
+        let l = parse_extract("extracted 5 file(s) from /sd/x in 0.4s - all checksums OK");
+        assert_eq!(
+            l,
+            Some(Line {
+                files: 5,
+                size: None,
+                secs: "0.4".to_string()
+            })
+        );
+        assert_eq!(parse_extract("nothing here"), None);
+    }
+
+    #[test]
+    fn reads_the_check_line() {
+        let l = parse_check("Checked 12 file(s), 3.4 MB in 0.8s - all checksums OK");
+        assert_eq!(
+            l,
+            Some(Line {
+                files: 12,
+                size: Some("3.4 MB".to_string()),
+                secs: "0.8".to_string()
+            })
+        );
+        let l = parse_check("verified 14 file(s) from /p/q in 5.5s");
+        assert_eq!(
+            l,
+            Some(Line {
+                files: 14,
+                size: None,
+                secs: "5.5".to_string()
+            })
+        );
+        assert_eq!(parse_check("No problems"), None);
+    }
+}

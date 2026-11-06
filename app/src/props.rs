@@ -2,6 +2,7 @@
 //! lives on, and the totals of a folder or a selection. No screen code lives here.
 
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +25,18 @@ pub fn size_text(n: i64) -> String {
 }
 
 /// `File.lastModified`, in epoch seconds (0 when the file cannot be read).
+#[cfg(unix)]
 pub fn modified(path: &Path) -> i64 {
     std::fs::metadata(path).map_or(0, |m| m.mtime())
+}
+
+#[cfg(not(unix))]
+pub fn modified(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
 /// "yyyy-MM-dd HH:mm:ss" in the zone whose offset from UTC is `utc_offset` seconds.
@@ -48,9 +59,19 @@ fn triple(bits: u32) -> String {
 
 /// `Props.permissions`: "rw- rw- --- (660)", or `None` when the file cannot be read.
 pub fn permissions(path: &Path) -> Option<String> {
-    let mode = std::fs::metadata(path).ok()?.mode() & 0o777;
+    let mode = mode_of(path)?;
     let [user, group, other] = [6, 3, 0].map(|shift| triple((mode >> shift) & 7));
     Some(format!("{user} {group} {other} ({mode:o})"))
+}
+
+#[cfg(unix)]
+fn mode_of(path: &Path) -> Option<u32> {
+    Some(std::fs::metadata(path).ok()?.mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn mode_of(_path: &Path) -> Option<u32> {
+    None
 }
 
 /// `Props.mountOf`: the mount point that holds `path` and its file system type, read from

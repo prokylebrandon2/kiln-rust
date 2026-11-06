@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use jni::errors::Result as JniResult;
 use jni::objects::{GlobalRef, JObject, JString, JValue};
@@ -68,7 +69,7 @@ fn translate(event: &PollEvent<'_>) -> Option<Event> {
 
 pub struct AndroidHost {
     app: AndroidApp,
-    vm: JavaVM,
+    vm: Arc<JavaVM>,
     activity: GlobalRef,
     cache: PathBuf,
     files: PathBuf,
@@ -81,7 +82,7 @@ impl AndroidHost {
     fn new(app: AndroidApp) -> JniResult<Self> {
         // SAFETY: android-activity hands out the process's `JavaVM*` here, valid for as long as the
         // process lives.
-        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast())? };
+        let vm = Arc::new(unsafe { JavaVM::from_raw(app.vm_as_ptr().cast())? });
         let activity = {
             let env = vm.attach_current_thread()?;
             // SAFETY: `activity_as_ptr` is a JNI global reference to the `NativeActivity`, valid
@@ -858,6 +859,98 @@ fn incoming_display_name(
     result.ok().flatten()
 }
 
+fn copy_incoming_from_intent(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    dest: &Path,
+) -> JniResult<Result<(), String>> {
+    let mut output = match std::fs::File::create(dest) {
+        Ok(file) => file,
+        Err(error) => return Ok(Err(error.to_string())),
+    };
+
+    let result = (|| -> JniResult<Result<bool, String>> {
+        let Some(uri) = view_uri(env, activity)? else {
+            return Ok(Ok(false));
+        };
+        let scheme_obj = env
+            .call_method(&uri, "getScheme", "()Ljava/lang/String;", &[])?
+            .l()?;
+        if text_of(env, scheme_obj)?.as_deref() != Some("content") {
+            return Ok(Ok(false));
+        }
+
+        let buffer = env.new_byte_array(8192)?;
+        let resolver = env
+            .call_method(
+                activity,
+                "getContentResolver",
+                "()Landroid/content/ContentResolver;",
+                &[],
+            )?
+            .l()?;
+        let input = env
+            .call_method(
+                &resolver,
+                "openInputStream",
+                "(Landroid/net/Uri;)Ljava/io/InputStream;",
+                &[JValue::Object(&uri)],
+            )?
+            .l()?;
+        if input.is_null() {
+            return Ok(Ok(false));
+        }
+
+        let copied = (|| -> JniResult<Result<(), String>> {
+            loop {
+                let count = env
+                    .call_method(&input, "read", "([B)I", &[JValue::Object(&buffer)])?
+                    .i()?;
+                if count < 0 {
+                    break;
+                }
+                if count == 0 {
+                    continue;
+                }
+                let mut chunk = vec![0_i8; count as usize];
+                env.get_byte_array_region(&buffer, 0, &mut chunk)?;
+                let bytes = chunk.into_iter().map(|byte| byte as u8).collect::<Vec<_>>();
+                if let Err(error) = output.write_all(&bytes) {
+                    return Ok(Err(error.to_string()));
+                }
+            }
+            Ok(Ok(()))
+        })();
+
+        let closed = env.call_method(&input, "close", "()V", &[]).map(|_| ());
+        let copied = copied?;
+        closed?;
+
+        match copied {
+            Ok(()) => Ok(Ok(true)),
+            Err(error) => Ok(Err(error)),
+        }
+    })();
+
+    drop(output);
+
+    match result {
+        Ok(Ok(true)) => Ok(Ok(())),
+        Ok(Ok(false)) => {
+            let _ = std::fs::remove_file(dest);
+            Ok(Err("can't read that file".to_string()))
+        }
+        Ok(Err(error)) => {
+            let _ = std::fs::remove_file(dest);
+            Ok(Err(error))
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(dest);
+            Err(error)
+        }
+    }
+}
+
 impl Host for AndroidHost {
     fn cache_dir(&self) -> PathBuf {
         self.cache.clone()
@@ -1000,85 +1093,28 @@ impl Host for AndroidHost {
     }
 
     fn copy_incoming(&self, dest: &Path) -> Result<(), String> {
-        let mut output = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-        let mut io_error = None;
+        self.with_env(|env, activity| copy_incoming_from_intent(env, activity, dest))
+            .map_err(|error| error.to_string())?
+    }
 
-        let result = self.with_env(|env, activity| {
-            let Some(uri) = view_uri(env, activity)? else {
-                return Ok(false);
-            };
-            let scheme_obj = env
-                .call_method(&uri, "getScheme", "()Ljava/lang/String;", &[])?
-                .l()?;
-            if text_of(env, scheme_obj)?.as_deref() != Some("content") {
-                return Ok(false);
-            }
+    fn copy_incoming_async(&self, dest: PathBuf, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
+        let vm = self.vm.clone();
+        let activity = self.activity.clone();
 
-            let buffer = env.new_byte_array(8192)?;
-            let resolver = env
-                .call_method(
-                    activity,
-                    "getContentResolver",
-                    "()Landroid/content/ContentResolver;",
-                    &[],
-                )?
-                .l()?;
-            let input = env
-                .call_method(
-                    &resolver,
-                    "openInputStream",
-                    "(Landroid/net/Uri;)Ljava/io/InputStream;",
-                    &[JValue::Object(&uri)],
-                )?
-                .l()?;
-            if input.is_null() {
-                return Ok(false);
-            }
-
-            let copied = (|| -> JniResult<()> {
-                loop {
-                    let count = env
-                        .call_method(&input, "read", "([B)I", &[JValue::Object(&buffer)])?
-                        .i()?;
-                    if count < 0 {
-                        break;
-                    }
-                    if count == 0 {
-                        continue;
-                    }
-                    let mut chunk = vec![0_i8; count as usize];
-                    env.get_byte_array_region(&buffer, 0, &mut chunk)?;
-                    let bytes = chunk.into_iter().map(|byte| byte as u8).collect::<Vec<_>>();
-                    if let Err(error) = output.write_all(&bytes) {
-                        io_error = Some(error.to_string());
-                        break;
-                    }
+        std::thread::spawn(move || {
+            let result = (|| {
+                let mut env = vm
+                    .attach_current_thread()
+                    .map_err(|error| error.to_string())?;
+                let copied = env
+                    .with_local_frame(32, |env| copy_incoming_from_intent(env, &activity, &dest));
+                if copied.is_err() && env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
                 }
-                Ok(())
+                copied.map_err(|error| error.to_string())?
             })();
-            let closed = env.call_method(&input, "close", "()V", &[]).map(|_| ());
-            copied?;
-            closed?;
-            Ok(true)
+            done(result);
         });
-
-        match result {
-            Ok(true) => {}
-            Ok(false) => {
-                let _ = std::fs::remove_file(dest);
-                return Err("can't read that file".to_string());
-            }
-            Err(error) => {
-                let _ = std::fs::remove_file(dest);
-                return Err(error.to_string());
-            }
-        }
-
-        if let Some(error) = io_error {
-            let _ = std::fs::remove_file(dest);
-            return Err(error);
-        }
-        Ok(())
     }
 
     fn finish(&self) {

@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use slint::{Color, Timer};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
-use crate::dialog::{Btn, BtnKind, Opt, Spec};
+use crate::dialog::{Btn, BtnKind, Click, Opt, Spec};
+use crate::trash;
 use crate::{App, app_do};
 
 /// `MainActivity.toast`: `Toast.LENGTH_SHORT` is two seconds.
@@ -47,6 +48,7 @@ fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'static) -> Opt 
     Opt {
         icon,
         label: label.to_string(),
+        sub: String::new(),
         selected: false,
         action: Rc::new(action),
     }
@@ -70,10 +72,14 @@ impl App {
         ui.on_sort_clicked(|| app_do(|app| app.sort_clicked()));
         ui.on_more_clicked(|| app_do(|app| app.show_menu()));
         ui.on_new_clicked(|| app_do(|app| app.show_new_sheet()));
+        ui.on_bar_clicked(|i| app_do(|app| app.bar_clicked(i)));
         ui.on_sort_key_chosen(|k| app_do(|app| app.sort_key_chosen(k)));
         ui.on_sort_asc_chosen(|asc| app_do(|app| app.sort_asc_chosen(asc)));
         ui.on_sort_dismissed(|| app_do(|app| app.ui.set_sort_sheet_shown(false)));
         ui.on_back_pressed(|| app_do(|app| app.on_back()));
+        ui.on_paste_new_folder(|| app_do(|app| app.new_folder_here()));
+        ui.on_paste_cancel(|| app_do(|app| app.cancel_clip()));
+        ui.on_paste_here(|| app_do(|app| app.paste()));
         self.wire_marks();
         self.wire_pull();
     }
@@ -140,8 +146,30 @@ impl App {
         ui.set_up_row(up);
         ui.set_empty_top(if up { 96.0 } else { 56.0 });
         ui.set_has_where(b.searching && !b.query.is_empty());
-        ui.set_bar_shown(selecting);
-        let fab_wanted = !selecting && status.engine_up && b.storage_ok && !b.searching;
+        let holding = !b.clip.is_empty();
+        ui.set_bar_shown(selecting || holding);
+        ui.set_paste_mode(holding && !selecting);
+        if holding {
+            let verb = if b.clip_move { "Moving" } else { "Copying" };
+            ui.set_paste_title(format!("{verb} {}", Self::items(b.clip.len())).into());
+            let into = if b.is_storage_root(&b.cwd) {
+                b.storage_name(&b.cwd)
+            } else {
+                b.cwd
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            ui.set_paste_sub(format!("Into {into}").into());
+            let go = if b.clip_move {
+                "Move here"
+            } else {
+                "Paste here"
+            };
+            ui.set_paste_here_text(go.into());
+        }
+        let fab_wanted = !selecting && !holding && status.engine_up && b.storage_ok && !b.searching;
         ui.set_fab_shown(fab_wanted && !self.fab_hidden.get());
 
         // A short pulse on the mark when you arrive at home.
@@ -341,7 +369,7 @@ impl App {
             out.push(opt("file", all, |app| app.menu_toggle(false)));
             out.push(opt("file", hidden, |app| app.menu_toggle(true)));
             out.push(opt("refresh", "Refresh", App::menu_refresh));
-            out.push(soon("delete", "Recycle bin"));
+            out.push(opt("delete", "Recycle bin", App::bin_sheet));
             out.push(soon("settings", "Settings"));
             out.push(soon("archive", "About"));
         }
@@ -494,7 +522,7 @@ impl App {
 }
 
 /// An I/O error as the Java shows it: the system's text, without Rust's " (os error N)".
-fn io_text(e: &std::io::Error) -> String {
+pub(crate) fn io_text(e: &std::io::Error) -> String {
     let mut text = e.to_string();
     if let Some(i) = text.find(" (os error") {
         text.truncate(i);
@@ -577,9 +605,485 @@ impl App {
         });
     }
 
+    /// The selection bar (`MainActivity.buildUi`): 0 Copy, 1 Move, 2 Delete, 3 Pack.
+    fn bar_clicked(&self, index: i32) {
+        match index {
+            0 => self.set_clip(false),
+            1 => self.set_clip(true),
+            2 => self.delete_selected(),
+            // Pack comes with B21.
+            _ => self.toast("Not in this build yet"),
+        }
+    }
+
+    /// `setClip`: hold the selected items, to paste them in another folder.
+    fn set_clip(&self, mv: bool) {
+        {
+            let mut b = self.browser.borrow_mut();
+            let cwd = b.cwd.clone();
+            let held: Vec<PathBuf> = b.selected.iter().map(|key| cwd.join(key)).collect();
+            b.clip = held;
+            b.clip_move = mv;
+            b.clear_selection();
+        }
+        self.render_rows();
+        self.render_chrome();
+        let go = if mv { "Move here" } else { "Paste here" };
+        self.toast(&format!("Open a folder, then tap \"{go}\""));
+    }
+
+    /// The paste bar's Cancel: let go of what was held.
+    fn cancel_clip(&self) {
+        self.browser.borrow_mut().clip.clear();
+        self.render_chrome();
+    }
+
+    /// `paste`: ask the engine what the paste would touch, on a worker thread.
+    fn paste(&self) {
+        let (srcs, dest, mv) = {
+            let b = self.browser.borrow();
+            let srcs: Vec<String> = b
+                .clip
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            (srcs, b.cwd.to_string_lossy().into_owned(), b.clip_move)
+        };
+        if srcs.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let plan = kiln_bridge::call("fs_plan", &json!([srcs, dest, mv]), 0);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.paste_planned(srcs, dest, mv, &plan));
+            });
+        });
+    }
+
+    /// The middle of `paste`: say why it can't, or go on when nothing in the folder is in the way.
+    fn paste_planned(&self, srcs: Vec<String>, dest: String, mv: bool, plan: &Value) {
+        if !plan["ok"].as_bool().unwrap_or(false) {
+            let why = plan["error"]
+                .as_str()
+                .or_else(|| plan["message"].as_str())
+                .unwrap_or_default();
+            self.message(if mv { "Can't move" } else { "Can't copy" }, why);
+            return;
+        }
+        if plan["conflicts"].as_array().is_some_and(|c| !c.is_empty()) {
+            // The Replace / Skip existing / Keep both sheet is B7; nothing is touched until then.
+            self.toast("Not in this build yet");
+            return;
+        }
+        std::thread::spawn(move || {
+            let args = json!([srcs, dest, mv, "replace"]);
+            let result = kiln_bridge::call("fs_transfer", &args, 0);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.transfer_done(mv, &result));
+            });
+        });
+    }
+
+    /// The end of `runTransfer`: say what happened, let go of the items, read the folder again.
+    fn transfer_done(&self, mv: bool, result: &Value) {
+        self.browser.borrow_mut().clip.clear();
+        let text = result["message"].as_str().unwrap_or_default();
+        if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+        } else if result["ok"].as_bool().unwrap_or(false) {
+            self.toast(text);
+        } else if mv {
+            self.message("Not everything was moved", text);
+        } else {
+            self.message("Not everything was copied", text);
+        }
+        self.reload_here();
+    }
+
+    /// `deleteSelected`: into the recycle bin or for good, as the Delete setting and the files
+    /// allow (the Priv branch for protected folders comes with Phase C).
+    fn delete_selected(&self) {
+        let (cwd, keys) = {
+            let b = self.browser.borrow();
+            (b.cwd.clone(), b.selected.clone())
+        };
+        let Some(first) = keys.first() else {
+            return;
+        };
+        let what = if keys.len() == 1 {
+            let name = first.rsplit('/').next().unwrap_or(first);
+            format!("\"{name}\"")
+        } else {
+            format!("{} items", keys.len())
+        };
+        let victims: Vec<PathBuf> = keys.iter().map(|k| cwd.join(k)).collect();
+        // The bin works on a storage's own files; anything else can only be deleted for good.
+        let roots = self.bin_roots();
+        let binnable = victims.iter().all(|v| trash::root_of(v, &roots).is_some());
+        let mode = self.prefs.int("delete_mode", 0).clamp(0, 2);
+        if !binnable || mode == 2 {
+            let warning = if !binnable && mode != 2 {
+                "These can't go to the recycle bin here, so this can't be undone."
+            } else {
+                "This can't be undone."
+            };
+            self.delete_for_good(victims, &what, warning);
+        } else if mode == 1 {
+            self.to_bin(victims);
+        } else {
+            let for_bin = victims.clone();
+            let for_good = victims;
+            let mut spec = Spec::new(&format!("Delete {what}?"));
+            spec.options = vec![
+                opt("delete", "Move to recycle bin", move |app| {
+                    app.to_bin(for_bin.clone());
+                }),
+                opt("close", "Delete permanently", move |app| {
+                    app.delete_for_good(for_good.clone(), &what, "This can't be undone.");
+                }),
+            ];
+            spec.buttons.push(Btn {
+                label: "Cancel".to_string(),
+                kind: BtnKind::Text,
+                click: None,
+            });
+            self.show_dialog(spec);
+        }
+    }
+
+    /// `deleteForGood`: confirm, then delete.
+    fn delete_for_good(&self, victims: Vec<PathBuf>, what: &str, warning: &str) {
+        let paths: Vec<String> = victims
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect();
+        let mut spec = Spec::new(&format!("Delete {what}?"));
+        spec.body = warning.to_string();
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
+            App::delete_paths(paths.clone());
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Delete".to_string(),
+            kind: BtnKind::Danger,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+    }
+
+    /// `binRoots`: the storages that each keep a recycle bin, Internal storage and any mounted
+    /// SD card or drive.
+    fn bin_roots(&self) -> Vec<PathBuf> {
+        self.refresh_volumes(false);
+        let mut roots = vec![self.host.storage_root()];
+        let b = self.browser.borrow();
+        roots.extend(b.volumes.iter().map(|v| v.path.clone()));
+        roots
+    }
+
+    /// `toBin`: move the items into their storage's recycle bin, on a worker thread.
+    fn to_bin(&self, victims: Vec<PathBuf>) {
+        let roots = self.bin_roots();
+        std::thread::spawn(move || {
+            let mut moved = 0;
+            let mut failed = 0;
+            let mut bad = String::new();
+            for victim in &victims {
+                let result = match trash::root_of(victim, &roots) {
+                    Some(root) => trash::put(victim, &root),
+                    None => Err("isn't on a storage with a recycle bin".to_string()),
+                };
+                match result {
+                    Ok(()) => moved += 1,
+                    Err(why) => {
+                        failed += 1;
+                        if failed <= 3 {
+                            bad.push_str("\u{2022} ");
+                            bad.push_str(&why);
+                            bad.push('\n');
+                        }
+                    }
+                }
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.to_bin_done(moved, failed, bad.trim()));
+            });
+        });
+    }
+
+    /// The end of `toBin`: a toast, or why not everything moved; then read the folder again.
+    fn to_bin_done(&self, moved: usize, failed: usize, bad: &str) {
+        if failed > 0 {
+            let body = format!("{bad}\n\nNothing that failed was deleted.");
+            self.message("Couldn't move everything", &body);
+        } else if moved == 1 {
+            self.toast("Moved to the recycle bin");
+        } else {
+            self.toast(&format!("Moved {moved} items to the recycle bin"));
+        }
+        self.reload_here();
+    }
+
+    /// `deleteForGood`'s job: `fs_delete` on a worker thread, its result back on the UI thread.
+    fn delete_paths(paths: Vec<String>) {
+        std::thread::spawn(move || {
+            let result = kiln_bridge::call("fs_delete", &json!([paths]), 0);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.delete_done(&result));
+            });
+        });
+    }
+
+    /// The end of `deleteForGood`: say what happened, then read the folder again.
+    fn delete_done(&self, result: &Value) {
+        if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+        } else if !result["ok"].as_bool().unwrap_or(false) {
+            let why = result["message"].as_str().unwrap_or_default();
+            self.message("Couldn't delete everything", why);
+        }
+        self.reload_here();
+    }
+
+    /// `message`: a sheet with the text and an "OK" button.
+    fn message(&self, heading: &str, body: &str) {
+        self.ui.set_sheet_title(heading.into());
+        self.ui.set_sheet_body(body.into());
+        self.ui.set_sheet_shown(true);
+    }
+
     /// `loadDir(cwd)`: read the folder again after a change.
     fn reload_here(&self) {
         let cwd = self.browser.borrow().cwd.clone();
         self.load_dir(cwd, false);
+    }
+
+    // ---- the recycle bin ------------------------------------------------------------------
+
+    /// `binSheet`: read every bin and count what is in it on a worker thread, then show the list.
+    pub(crate) fn bin_sheet(&self) {
+        let roots = self.bin_roots();
+        std::thread::spawn(move || {
+            let mut all: Vec<trash::Entry> = roots.iter().flat_map(|r| trash::list(r)).collect();
+            all.sort_by_key(|e| std::cmp::Reverse(e.when));
+            let mut total = 0;
+            for entry in &mut all {
+                let bytes = trash::size(&entry.data);
+                entry.size = Some(bytes);
+                total += bytes;
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.show_bin(all, total));
+            });
+        });
+    }
+
+    /// `showBin`: one row per item, then Close and Empty. Tapping a row opens that item.
+    fn show_bin(&self, all: Vec<trash::Entry>, total: u64) {
+        let mut spec = Spec::new("Recycle bin");
+        if all.is_empty() {
+            spec.body = "The recycle bin is empty.".to_string();
+            spec.buttons.push(Btn {
+                label: "Close".to_string(),
+                kind: BtnKind::Filled,
+                click: None,
+            });
+            self.show_dialog(spec);
+            return;
+        }
+        spec.body = format!("{} \u{b7} {}", Self::items(all.len()), Self::bytes(total));
+        for entry in &all {
+            let item = entry.clone();
+            let mut row = opt("", &entry.name, move |app| app.bin_item(item.clone()));
+            row.sub = self.bin_sub(entry);
+            spec.options.push(row);
+        }
+        spec.buttons.push(Btn {
+            label: "Close".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(move |app: &App, _text: &str| -> bool {
+            app.confirm_empty_bin(all.clone());
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Empty".to_string(),
+            kind: BtnKind::Danger,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+    }
+
+    /// The second line of a row of the list: what it is, when it was deleted, where it was.
+    fn bin_sub(&self, entry: &trash::Entry) -> String {
+        let size = Self::bytes(entry.size.unwrap_or(0));
+        let when = crate::fmt::date(entry.when, self.offset_at(entry.when));
+        let head = if entry.dir {
+            format!("Folder \u{b7} {size} \u{b7} {when}")
+        } else {
+            format!("{size} \u{b7} {when}")
+        };
+        match Self::bin_from(entry) {
+            Some(from) => format!("{head}\n{from}"),
+            None => head,
+        }
+    }
+
+    /// The folder an item came from (`new File(e.orig).getParentFile()`), if it has one.
+    fn bin_from(entry: &trash::Entry) -> Option<String> {
+        let parent = std::path::Path::new(&entry.orig).parent()?;
+        let text = parent.to_string_lossy();
+        (!text.is_empty()).then(|| text.into_owned())
+    }
+
+    /// `Fmt.size` of a byte count.
+    fn bytes(n: u64) -> String {
+        crate::fmt::size(i64::try_from(n).unwrap_or(i64::MAX))
+    }
+
+    /// `plural(n, "item", "items")`.
+    fn items(n: usize) -> String {
+        crate::fmt::plural(i64::try_from(n).unwrap_or(i64::MAX), "item", "items")
+    }
+
+    /// `binItem`: restore one item or delete it for good. Back and Cancel return to the list.
+    fn bin_item(&self, entry: trash::Entry) {
+        let size = Self::bytes(entry.size.unwrap_or(0));
+        let when = crate::fmt::date(entry.when, self.offset_at(entry.when));
+        let from = Self::bin_from(&entry)
+            .map(|from| format!("From {from}\n"))
+            .unwrap_or_default();
+        let mut spec = Spec::new(&entry.name);
+        spec.body = format!("{from}Deleted {when} \u{b7} {size}");
+        let restore = entry.clone();
+        spec.options.push(opt("refresh", "Restore", move |_| {
+            Self::restore_entry(restore.clone());
+        }));
+        spec.options
+            .push(opt("close", "Delete permanently", move |app| {
+                app.confirm_purge(entry.clone());
+            }));
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        spec.back = Some(Box::new(|app: &App| app.bin_sheet()));
+        self.show_dialog(spec);
+    }
+
+    /// `Trash.restore` on a worker thread, its result back on the UI thread.
+    fn restore_entry(entry: trash::Entry) {
+        std::thread::spawn(move || {
+            let to = trash::restore(&entry);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.restore_done(to));
+            });
+        });
+    }
+
+    /// The end of Restore: a toast or why not, the folder read again, the list back.
+    fn restore_done(&self, to: Option<PathBuf>) {
+        match to {
+            Some(path) => {
+                let dir = path.parent().map(|p| p.to_string_lossy().into_owned());
+                self.toast(&format!("Restored to {}", dir.unwrap_or_default()));
+            }
+            None => self.message(
+                "Couldn't restore",
+                "The original folder can't be written to.",
+            ),
+        }
+        self.reload_here();
+        self.bin_sheet();
+    }
+
+    /// The confirm of "Delete permanently".
+    fn confirm_purge(&self, entry: trash::Entry) {
+        let mut spec = Spec::new(&format!("Delete \"{}\" for good?", entry.name));
+        spec.body = "This can't be undone.".to_string();
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
+            Self::purge_entry(entry.clone());
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Delete".to_string(),
+            kind: BtnKind::Danger,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+    }
+
+    /// `Trash.purge` on a worker thread, its result back on the UI thread.
+    fn purge_entry(entry: trash::Entry) {
+        std::thread::spawn(move || {
+            let ok = trash::purge(&entry);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.purge_done(ok));
+            });
+        });
+    }
+
+    /// The end of "Delete permanently": say so if it failed, then the list again.
+    fn purge_done(&self, ok: bool) {
+        if !ok {
+            self.message("Couldn't delete it", "It may be in use.");
+        }
+        self.bin_sheet();
+    }
+
+    /// The confirm of "Empty".
+    fn confirm_empty_bin(&self, all: Vec<trash::Entry>) {
+        let mut spec = Spec::new("Empty the recycle bin?");
+        spec.body = format!(
+            "All {} will be deleted for good. This can't be undone.",
+            Self::items(all.len())
+        );
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
+            Self::empty_bin(all.clone());
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Empty".to_string(),
+            kind: BtnKind::Danger,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+    }
+
+    /// Empty the bin: `Trash.purge` for each item, on a worker thread.
+    fn empty_bin(all: Vec<trash::Entry>) {
+        std::thread::spawn(move || {
+            let failed = all.iter().filter(|entry| !trash::purge(entry)).count();
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.empty_bin_done(failed));
+            });
+        });
+    }
+
+    /// The end of Empty: a toast, or how many could not be deleted.
+    fn empty_bin_done(&self, failed: usize) {
+        if failed > 0 {
+            let body = format!("{} couldn't be deleted.", Self::items(failed));
+            self.message("Couldn't delete everything", &body);
+        } else {
+            self.toast("Recycle bin emptied");
+        }
     }
 }

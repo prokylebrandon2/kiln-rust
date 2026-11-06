@@ -346,6 +346,53 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - **Refresh** from the menu does not slide the rows in again (`forceAnim`); that comes with the
   row animations.
 
+## Main screen, Phase B part 4: the selection bar and Delete (`MainActivity.deleteSelected`, `deleteForGood`)
+
+- **Bar.** While rows are selected: Copy, Move, Delete (danger tint) and Pack tiles. Only Delete is
+  built; Copy and Move toast "Not in this build yet" until B6, Pack until B21. The Java shows a
+  single Copy tile in a protected (read-only) folder; that rule comes with Root and Shizuku
+  (Phase C), and the archive bars come with the archive part.
+- **Delete.** A dialog "Delete <what>?" (what is the quoted name for one item, "N items" for more),
+  the text "This can't be undone.", Cancel (text) and Delete (danger). Delete runs `fs_delete` on a
+  worker thread. A cancelled run toasts "Cancelled"; a failed one opens the message sheet "Couldn't
+  delete everything" with the engine's message. Either way the folder is read again (selection
+  cleared).
+
+### Differences from the Java in this part
+
+- **No progress sheet.** The Java shows "Deleting..." with Cancel after 250 ms (`runOp`). Until B8
+  there is no sheet and no way to cancel a delete.
+- **Recycle bin.** Delete follows `delete_mode` like `deleteSelected` (0 ask, 1 recycle bin, 2
+  permanent). Settings, where it is changed, is Phase C, so it stays at the default, ask: "Delete
+  <what>?" with the rows "Move to recycle bin" and "Delete permanently". Only files on Internal
+  storage or a mounted drive can go to a bin; anything else is deleted for good after the confirm
+  "These can't go to the recycle bin here, so this can't be undone." Moving to the bin runs on a
+  worker with no "Moving to recycle bin..." sheet and no Cancel (B8).
+- **Recycle bin sheet** (`binSheet`, `showBin`, `binItem`). Menu > Recycle bin lists the bins of
+  Internal storage and every mounted drive, newest first: "N items \u00b7 size", then a row per item
+  (its name; "size \u00b7 date" or "Folder \u00b7 size \u00b7 date"; the folder it came from) and Close and
+  Empty. With nothing in it: "The recycle bin is empty." and Close. A row opens the item: Restore
+  (toast "Restored to <folder>", under "name (restored).ext" when the name is taken) and Delete
+  permanently ("Delete "name" for good?"). Back and Cancel return to the list. Empty asks "Empty
+  the recycle bin?". `KSheetOption` gained a `sub` line (12 sp, muted) for these rows. Differences:
+  the whole sheet body scrolls (the Java has a fixed 330 dp list under fixed text); a long name is
+  cut at the end, not the middle; there is no "Deleting..." or "Emptying recycle bin..." sheet and
+  no Cancel until B8.
+- **Copy and Move** (`setClip`, `paste`, `runTransfer`, the paste bar of `buildUi`). Copy or Move
+  holds the selected items (the selection is cleared) and toasts `Open a folder, then tap "Paste
+  here"` (`"Move here"` for Move). While something is held and nothing is selected the bar is the
+  paste bar: "Copying N items" or "Moving N items" (15 sp bold), "Into <folder, or the storage's
+  name>" (12 sp), then New folder, Cancel and Paste here / Move here; the "+ New" button is
+  hidden. Paste here asks the engine for a plan (`fs_plan`); if it fails: "Can't copy" or "Can't
+  move" with the reason. If nothing is in the way it runs `fs_transfer` on a worker, toasts the
+  engine's message ("Cancelled", or a "Not everything was copied/moved" sheet on failure), lets go
+  of the items and reads the folder again. Differences: when something is in the way ("Replace",
+  "Skip existing", "Keep both") it toasts "Not in this build yet" and touches nothing (B7); no
+  "Copying..." or "Moving..." sheet and no Cancel (B8); the read-only rule ("Can't paste here")
+  comes with Phase C.
+- **Field errors.** The Java shows `EditText.setError` (red icon and a popup). The Slint dialog shows
+  the text as a red line under the field (`dlg-error`).
+
 ## Known differences from the Java
 
 - **Toast.** Android draws its own toast; `KToast` approximates its look and uses its timing.

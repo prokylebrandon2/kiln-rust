@@ -22,6 +22,9 @@ mod marks;
 pub mod prefs;
 mod pull;
 pub mod sniff;
+// Not used until the recycle bin is wired in (B5); the allow goes with it.
+#[allow(dead_code)]
+mod trash;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

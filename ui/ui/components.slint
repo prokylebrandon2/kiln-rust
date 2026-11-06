@@ -833,9 +833,11 @@ export component KSheetText inherits VerticalLayout {
 export component KSheetOption inherits Rectangle {
     in property <string> icon;
     in property <string> label;
+    /// A smaller second line under the label (the recycle bin rows); empty for none.
+    in property <string> sub;
     in property <bool> selected: false;
     callback clicked();
-    preferred-height: 20px + (root.icon != "" ? 38px : label-text.preferred-height) + 2px;
+    preferred-height: 20px + (root.icon != "" ? 38px : texts.preferred-height) + 2px;
     border-radius: 12px;
 
     HorizontalLayout {
@@ -858,14 +860,22 @@ export component KSheetOption inherits Rectangle {
                 tint: Theme.accent;
             }
         }
-        label-text := Text {
-            text: root.label;
-            color: Theme.text;
-            font-size: Theme.sp(16px);
-            vertical-alignment: center;
+        texts := VerticalLayout {
             horizontal-stretch: 1;
-            wrap: no-wrap;
-            overflow: elide;
+            label-text := Text {
+                text: root.label;
+                color: Theme.text;
+                font-size: Theme.sp(16px);
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+            if root.sub != "": Text {
+                text: root.sub;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: word-wrap;
+            }
         }
         if root.selected: Text {
             text: "✓";

@@ -18,6 +18,7 @@ export { MarkRow, RowData, Theme }
 export struct DlgOption {
     icon: string,
     label: string,
+    sub: string,
     selected: bool,
 }
 
@@ -45,6 +46,11 @@ export component MainWindow inherits Window {
     in property <bool> has-where: false;
     /// The selection bar (Copy, Move, Delete, Pack) is up.
     in property <bool> bar-shown: false;
+    /// Copy or Move is holding items: the bar shows the paste row instead of the four tiles.
+    in property <bool> paste-mode: false;
+    in property <string> paste-title;
+    in property <string> paste-sub;
+    in property <string> paste-here-text;
     in property <bool> sort-sheet-shown: false;
     in property <int> sort-key: 0;
     in property <bool> sort-asc: true;
@@ -110,6 +116,9 @@ export component MainWindow inherits Window {
     callback list-scrolled(length);
     callback query-edited(string);
     callback bar-clicked(int);
+    callback paste-new-folder();
+    callback paste-cancel();
+    callback paste-here();
     callback sort-key-chosen(int);
     callback sort-asc-chosen(bool);
     callback sort-dismissed();
@@ -325,7 +334,7 @@ export component MainWindow inherits Window {
                     x: 12px;
                     y: parent.height - self.height - 12px + (root.bar-shown ? 0px : 70px);
                     width: parent.width - 24px;
-                    height: tile-probe.preferred-height + 12px;
+                    height: (root.paste-mode ? paste-col.preferred-height : tile-probe.preferred-height) + 12px;
                     background: Theme.surface;
                     border-radius: 20px;
                     border-width: Theme.hair;
@@ -355,11 +364,83 @@ export component MainWindow inherits Window {
                         x: 6px + i * bar.cell;
                         y: 6px;
                         width: bar.cell;
+                        visible: !root.paste-mode;
                         icon: bar.icons[i];
                         label: caption;
                         tint: i == 2 ? Theme.danger : i == 3 ? Theme.accent : Theme.text;
                         clicked => {
                             root.bar-clicked(i);
+                        }
+                    }
+
+                    // The paste row (bottomBar while items are held): the title (15 sp bold) and
+                    // "Into <folder>" (12 sp), then New folder, Cancel and Paste here / Move here.
+                    paste-col := VerticalLayout {
+                        x: 6px;
+                        y: 6px;
+                        width: parent.width - 12px;
+                        height: parent.height - 12px;
+                        visible: root.paste-mode;
+                        VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 8px;
+                            padding-bottom: 2px;
+                            Text {
+                                text: root.paste-title;
+                                color: Theme.text;
+                                font-size: Theme.sp(15px);
+                                font-weight: Theme.bold;
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: root.paste-sub;
+                                color: Theme.text2;
+                                font-size: Theme.sp(12px);
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 2px;
+                            padding-right: 4px;
+                            padding-top: 4px;
+                            padding-bottom: 2px;
+                            KTile {
+                                icon: "new_folder";
+                                label: "New folder";
+                                tint: Theme.accent;
+                                clicked => {
+                                    root.paste-new-folder();
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                KButton {
+                                    text: "Cancel";
+                                    kind: 2;
+                                    clicked => {
+                                        root.paste-cancel();
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                width: 6px;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                KButton {
+                                    text: root.paste-here-text;
+                                    kind: 0;
+                                    clicked => {
+                                        root.paste-here();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -509,6 +590,7 @@ export component MainWindow inherits Window {
         for option[i] in root.dlg-options: KSheetOption {
             icon: option.icon;
             label: option.label;
+            sub: option.sub;
             selected: option.selected;
             clicked => {
                 root.dlg-option-clicked(i);

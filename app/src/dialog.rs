@@ -57,6 +57,8 @@ pub(crate) struct Opt {
     /// An icon name; empty for no tile.
     pub icon: &'static str,
     pub label: String,
+    /// A smaller second line under the label; empty for none.
+    pub sub: String,
     pub selected: bool,
     pub action: Action,
 }
@@ -132,6 +134,7 @@ impl App {
                 let row = DlgOption {
                     icon: o.icon.into(),
                     label: o.label.as_str().into(),
+                    sub: o.sub.as_str().into(),
                     selected: o.selected,
                 };
                 (row, o.action)

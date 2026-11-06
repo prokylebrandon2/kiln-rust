@@ -126,6 +126,9 @@ pub struct Browser {
     /// The folder itself, kept while a search narrows `rows`.
     source: Vec<Row>,
     pub selected: Vec<String>,
+    /// What Copy or Move is holding to paste (`clip`), and whether Paste moves it (`clipMove`).
+    pub clip: Vec<PathBuf>,
+    pub clip_move: bool,
     pub sort_key: SortKey,
     pub sort_asc: bool,
     pub show_all: bool,
@@ -154,6 +157,8 @@ impl Browser {
             rows: Vec::new(),
             source: Vec::new(),
             selected: Vec::new(),
+            clip: Vec::new(),
+            clip_move: false,
             sort_key: SortKey::Name,
             sort_asc: true,
             show_all: true,

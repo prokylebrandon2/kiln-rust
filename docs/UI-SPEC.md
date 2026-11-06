@@ -279,8 +279,7 @@ Slint: `ui/ui/browser.slint` (`KFileList`), `ui/ui/pull.slint` (`KPullPanel`, `K
   line: `Bookmark this folder` (add icon) or `Remove this bookmark` (cross icon), which toast
   `Bookmarked <name>` or `Bookmark removed`. Tapping a line goes there (`That folder isn't there any
   more` if it is gone; nothing if it is already open); the cross removes the bookmark
-  (`Bookmark removed`). Tapping a bookmark's tile, or long-pressing it, opens the icon picker; that
-  dialog comes with the dialogs, so for now it says `Not in this build yet`.
+  (`Bookmark removed`). Tapping a bookmark's tile, or long-pressing it, opens the icon picker (see part 5 below).
 - **Storages.** A USB drive or SD card is a storage root like the phone's own storage: the title
   is its name, the left button is the Kiln mark, the ".." row is not shown there and Back at its top
   asks to exit. Root (`/`) belongs with Shizuku and root (Phase C).
@@ -331,7 +330,7 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - **Built.** Select all adds every row shown. Clear selection. The two Show toggles flip
   `show_all` / `show_hidden`, save them to `kiln.xml` and read the folder again (selection cleared).
   Refresh reads the folder again and keeps the selection. Browse as plain folder opens the set as an
-  ordinary folder (with the banner). Every other row toasts "Not in this build yet" until its
+  ordinary folder (with the banner). Icon and color... opens the folder icon picker (see part 5 below). Every other row toasts "Not in this build yet" until its
   dialog is built.
 - **Rename** is also hidden in a protected (read-only) folder in the Java; that rule comes with
   Root and Shizuku (Phase C).

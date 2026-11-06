@@ -67,6 +67,8 @@ pub trait Host {
     fn has_all_files_access(&self) -> bool;
     /// Open the system page where the user grants "All files access" to Kiln.
     fn open_all_files_settings(&self);
+    /// Put `text` on the system clipboard (`ClipboardManager.setPrimaryClip`).
+    fn set_clipboard(&self, text: &str);
     /// Close the app's screen (`Activity.finish()`).
     fn finish(&self);
     /// Replace the handler that is told about [`Event`]s. It runs on the UI thread.

@@ -382,6 +382,37 @@ fn start_settings(
     Ok(())
 }
 
+/// Put `text` on the clipboard: `ClipData.newPlainText("Properties", text)` handed to
+/// `getSystemService("clipboard").setPrimaryClip`.
+fn put_clipboard(env: &mut JNIEnv<'_>, activity: &GlobalRef, text: &str) -> JniResult<()> {
+    let name = env.new_string("clipboard")?;
+    let manager = env
+        .call_method(
+            activity,
+            "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[JValue::Object(&name)],
+        )?
+        .l()?;
+    let label = env.new_string("Properties")?;
+    let content = env.new_string(text)?;
+    let clip = env
+        .call_static_method(
+            "android/content/ClipData",
+            "newPlainText",
+            "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
+            &[JValue::Object(&label), JValue::Object(&content)],
+        )?
+        .l()?;
+    env.call_method(
+        &manager,
+        "setPrimaryClip",
+        "(Landroid/content/ClipData;)V",
+        &[JValue::Object(&clip)],
+    )?;
+    Ok(())
+}
+
 impl Host for AndroidHost {
     fn cache_dir(&self) -> PathBuf {
         self.cache.clone()
@@ -450,6 +481,10 @@ impl Host for AndroidHost {
                 )
             });
         }
+    }
+
+    fn set_clipboard(&self, text: &str) {
+        let _ = self.with_env(|env, activity| put_clipboard(env, activity, text));
     }
 
     fn finish(&self) {

@@ -21,6 +21,7 @@ pub mod icons;
 mod marks;
 pub mod prefs;
 pub mod props;
+mod props_ui;
 mod pull;
 pub mod sniff;
 // Not used until the recycle bin is wired in (B5); the allow goes with it.
@@ -83,6 +84,7 @@ struct App {
     /// that tells one from the next.
     op: RefCell<Option<dialog::Running>>,
     op_gen: Cell<u64>,
+    props: RefCell<props_ui::Open>,
 }
 
 thread_local! {
@@ -130,6 +132,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         dialog: RefCell::default(),
         op: RefCell::default(),
         op_gen: Cell::new(0),
+        props: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -210,6 +213,7 @@ impl App {
         });
         self.wire_browser();
         self.wire_dialog();
+        self.wire_props();
     }
 
     fn on_event(&self, event: Event) {

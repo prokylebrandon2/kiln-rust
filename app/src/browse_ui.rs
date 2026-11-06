@@ -408,7 +408,7 @@ impl App {
         if b.selecting() {
             let one = b.only_selected().map(|r| r.kind);
             out.push(select_all);
-            out.push(soon("file", "Properties"));
+            out.push(opt("file", "Properties", App::props_selected));
             if b.only_selected().is_some_and(|r| !r.key.contains('/')) {
                 out.push(opt("edit", "Rename", App::rename_selected));
             }
@@ -508,6 +508,11 @@ impl App {
         // A dialog is a window of its own in the Java: Back closes it first.
         // The progress sheet is modal: Back does nothing while it is up.
         if self.ui.get_prog_shown() {
+            return;
+        }
+        // The properties sheet is a sheet of its own: Back closes it.
+        if self.ui.get_props_shown() {
+            self.close_props();
             return;
         }
         // The icon picker is a sheet of its own: Back closes it.

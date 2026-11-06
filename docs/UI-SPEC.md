@@ -333,7 +333,7 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - **Built.** Select all adds every row shown. Clear selection. The two Show toggles flip
   `show_all` / `show_hidden`, save them to `kiln.xml` and read the folder again (selection cleared).
   Refresh reads the folder again and keeps the selection. Browse as plain folder opens the set as an
-  ordinary folder (with the banner). Icon and color... opens the folder icon picker (see part 5 below). Every other row toasts "Not in this build yet" until its
+  ordinary folder (with the banner). Icon and color... opens the folder icon picker (see part 5 below). Properties opens the properties sheet (see part 6 below). Every other row toasts "Not in this build yet" until its
   dialog is built.
 - **Rename** is also hidden in a protected (read-only) folder in the Java; that rule comes with
   Root and Shizuku (Phase C).
@@ -449,6 +449,35 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - The icon grid always has 5 rows, which is what 18 icons need at 4 to a row.
 - The picker's Slint (nested `for` loops, a `\u{2713}` tick) was written without a build; check it
   in CI before anything else in this part.
+
+## Main screen, Phase B part 6: the Properties sheet (`Props`, `MainActivity.propertiesSelected`)
+
+- **Where it opens.** "Properties" in the selection menu, for any selection of files and folders.
+  Back closes the sheet.
+- **Buttons.** "Copy" and "OK". Copy puts the rows on the clipboard as text (the host's
+  `set_clipboard`, `ClipboardManager.setPrimaryClip` on Android) and toasts "Copied".
+- **One item.** A name line, then the heading "General information" with these rows: Type, File
+  count (folders), Size, Last modification, Permissions (when the file system has them), FS path and
+  FS type (when the mount is known) and MD5 (files). A folder shows "Calculating..." for File count
+  and Size until a background walk has counted it; a file shows "Calculating..." for MD5 until the
+  digest is done ("unavailable" if the file cannot be read). An archive or a set adds the heading
+  "Archive properties" with Type, Encrypted, File count, Content size and Compression ratio, filled
+  in by a background probe. A folder also shows the `.nomedia` check box.
+- **Background work.** The walk, the MD5 and the archive probe run on worker threads that post
+  their answers to the UI thread. Closing the sheet, or opening it again, sets a stop flag, and
+  answers that arrive after that are dropped.
+
+### Differences from the Java in this part
+
+- Values are plain text and cannot be selected. Copy is the way to take them.
+- There is no 300 ms wait before late answers change the sheet.
+- "Last modification" is empty for a time of 0, where the Java prints 1970.
+- The MIME table is partial compared with Android's `MimeTypeMap`.
+- The properties box inside an archive (`Props.showInArchive`) is not built. It waits for the
+  archive part, because there is no open-archive state yet.
+- In the Java a set is a folder, so its "Archive properties" block never runs. It is ported as is.
+- The sheet and `props_ui.rs` were written without a full build of the app crate; check them in CI
+  before anything else in this part.
 
 ## Known differences from the Java
 

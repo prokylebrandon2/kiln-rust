@@ -93,7 +93,7 @@ fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
 }
 
 /// A menu row that does something (`Sheet.option`).
-fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'static) -> Opt {
+pub(crate) fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'static) -> Opt {
     Opt {
         icon,
         label: label.to_string(),
@@ -558,8 +558,7 @@ impl App {
             }
             BackAction::Up(dir) => self.load_dir(dir, false),
             BackAction::ArcUp(prefix) => self.arc_back_to(&prefix),
-            // TODO(task 23): guard_leave(close_archive) asks about unsaved changes first.
-            BackAction::ArcLeave => self.close_archive(),
+$1BackAction::ArcLeave => self.guard_leave(Box::new(|app| app.close_archive())),
             BackAction::ExitHint => self.toast("Tap Back again to exit"),
             BackAction::Exit => self.host.finish(),
         }

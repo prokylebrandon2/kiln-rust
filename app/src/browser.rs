@@ -117,9 +117,9 @@ pub enum BackAction {
     ExitHint,
     /// Second Back at home: leave.
     Exit,
-    /// Back inside an archive: the folder of the archive to go up to (rcBackTo).
+    /// Back inside an archive: the folder of the archive to go up to (`arcBackTo`).
     ArcUp(String),
-    /// Back at the top of an archive: leave it (guardLeave(closeArchive)).
+    /// Back at the top of an archive: leave it (`guardLeave(closeArchive)`).
     ArcLeave,
 }
 

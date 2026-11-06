@@ -82,7 +82,7 @@ impl AndroidHost {
         // process lives.
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast())? };
         let activity = {
-            let mut env = vm.attach_current_thread()?;
+            let env = vm.attach_current_thread()?;
             // SAFETY: `activity_as_ptr` is a JNI global reference to the `NativeActivity`, valid
             // until the activity is destroyed. `JObject` does not delete the reference it wraps,
             // and a global reference of our own is taken before this thread detaches.

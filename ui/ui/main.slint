@@ -281,6 +281,10 @@ export component MainWindow inherits Window {
     in property <float> pack-res-frac: 0;
     in property <string> pack-res-caption;
     in property <[DetailRow]> pack-res-rows;
+    /// The About sheet (MainActivity.showAbout): the chip's text and the detail rows.
+    in property <bool> about-shown: false;
+    in property <string> about-version;
+    in property <[DetailRow]> about-rows;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -354,6 +358,8 @@ export component MainWindow inherits Window {
     callback pack-cancelled();
     /// The Pack result sheet: OK, or a tap outside the card.
     callback pack-res-dismissed();
+    /// The About sheet: OK, or a tap outside the card.
+    callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -1217,6 +1223,92 @@ export component MainWindow inherits Window {
         KProgressBar {
             value: root.prog-frac;
             indeterminate: root.prog-indeterminate;
+        }
+    }
+
+    // The About sheet (MainActivity.showAbout): the mark in a 72 dp tile, "Kiln", the version chip
+    // and the tagline, then the detail card and OK.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.about-shown;
+        buttons: ["OK"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.about-dismissed();
+        }
+        cancelled => {
+            root.about-dismissed();
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 72px;
+                height: 72px;
+                background: Theme.chip;
+                border-radius: 20px;
+                KMark {
+                    x: 14px;
+                    y: 14px;
+                    width: 44px;
+                    height: 44px;
+                }
+            }
+        }
+        Rectangle {
+            height: 12px;
+        }
+        Text {
+            text: "Kiln";
+            color: Theme.text;
+            font-size: Theme.sp(24px);
+            font-weight: Theme.bold;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            height: 6px;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                background: Theme.chip;
+                border-radius: 12px;
+                preferred-width: about-chip.preferred-width;
+                preferred-height: about-chip.preferred-height;
+                about-chip := HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    Text {
+                        text: root.about-version;
+                        color: Theme.accent;
+                        font-size: Theme.sp(13px);
+                        font-weight: Theme.bold;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 10px;
+        }
+        Text {
+            text: "Open, create and unpack Kiln archives, and manage ordinary files.";
+            color: Theme.text2;
+            font-size: Theme.sp(14px);
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 16px;
+        }
+        KDetailCard {
+            rows: root.about-rows;
+        }
+        Rectangle {
+            height: 4px;
         }
     }
 

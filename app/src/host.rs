@@ -61,6 +61,8 @@ pub trait Host {
     fn space(&self, path: &Path) -> Option<(u64, u64)>;
     /// The version shown in crash reports and About.
     fn version_name(&self) -> String;
+    /// The build number shown in About (`PackageInfo.getLongVersionCode()`), 0 when unknown.
+    fn version_code(&self) -> i64;
     /// The current colour scheme, density and font scale.
     fn look(&self) -> Look;
     /// Whether "All files access" is granted (always true before Android 11).

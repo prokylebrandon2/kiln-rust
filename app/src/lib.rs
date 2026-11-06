@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod about_ui;
 mod browse_ui;
 pub mod browser;
 pub mod crash;
@@ -218,6 +219,7 @@ impl App {
         self.wire_dialog();
         self.wire_props();
         self.wire_pack();
+        self.wire_about();
     }
 
     fn on_event(&self, event: Event) {

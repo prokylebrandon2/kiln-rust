@@ -530,6 +530,23 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - The form, the result sheet and `pack_ui.rs` were written without being seen on screen; check them
   on a device. The line reader has unit tests.
 
+## Main screen, Phase B part 8: the About sheet (`MainActivity.aboutDialog`, `showAbout`)
+
+- **Where it opens.** "About" in the menu with nothing selected.
+- **Head.** The Kiln mark in a 72 dp k_chip tile (radius 20, 14 dp padding), "Kiln" (24 sp bold), a
+  chip "Version x" (13 sp bold, accent, k_chip, radius 12, 12 / 4 dp padding) and the line "Open,
+  create and unpack Kiln archives, and manage ordinary files." (14 sp, centred).
+- **Details.** A detail card: Version ("x", plus " (build N)" when N is above 0), Engine ("kiln x")
+  and Fast mode ("On", or "Off – <reason>"), both only when the engine answered, and Encryption
+  (AES-256-GCM). The engine's `version` is asked on a worker thread; the sheet opens when it answers.
+- **Button.** OK closes the sheet. A tap outside the card does too.
+
+### Differences from the Java in this part
+
+- The tagline has no extra line spacing (the Java sets 1.15).
+- The build number comes from `Host::version_code` (`PackageInfo.getLongVersionCode()`).
+- The sheet was written without being seen on screen; check it on a device.
+
 ## Known differences from the Java
 
 - **Toast.** Android draws its own toast; `KToast` approximates its look and uses its timing.

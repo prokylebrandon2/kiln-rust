@@ -303,6 +303,32 @@ fn version_name(env: &mut JNIEnv<'_>, activity: &GlobalRef) -> JniResult<String>
     java_string(env, version)
 }
 
+/// `getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode()` (API 28; the app
+/// needs 30).
+fn version_code(env: &mut JNIEnv<'_>, activity: &GlobalRef) -> JniResult<i64> {
+    let manager = env
+        .call_method(
+            activity,
+            "getPackageManager",
+            "()Landroid/content/pm/PackageManager;",
+            &[],
+        )?
+        .l()?;
+    let name = env
+        .call_method(activity, "getPackageName", "()Ljava/lang/String;", &[])?
+        .l()?;
+    let info = env
+        .call_method(
+            &manager,
+            "getPackageInfo",
+            "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+            &[JValue::Object(&name), JValue::Int(0)],
+        )?
+        .l()?;
+    env.call_method(&info, "getLongVersionCode", "()J", &[])?
+        .j()
+}
+
 /// `getResources().getConfiguration().fontScale`
 fn font_scale(env: &mut JNIEnv<'_>, activity: &GlobalRef) -> JniResult<f32> {
     let resources = env
@@ -442,6 +468,11 @@ impl Host for AndroidHost {
 
     fn version_name(&self) -> String {
         self.version.clone()
+    }
+
+    fn version_code(&self) -> i64 {
+        self.with_env(|env, activity| version_code(env, activity))
+            .unwrap_or(0)
     }
 
     fn look(&self) -> Look {

@@ -446,7 +446,7 @@ impl App {
             out.push(opt("refresh", "Refresh", App::menu_refresh));
             out.push(opt("delete", "Recycle bin", App::bin_sheet));
             out.push(soon("settings", "Settings"));
-            out.push(soon("archive", "About"));
+            out.push(opt("archive", "About", App::about));
         }
         out
     }

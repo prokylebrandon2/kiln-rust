@@ -59,6 +59,15 @@ fn soon(icon: &'static str, label: &str) -> Opt {
     opt(icon, label, |app| app.toast("Not in this build yet"))
 }
 
+/// A row of the paste conflict sheet: run the transfer under that policy.
+fn policy_opt(label: &str, srcs: &[String], dest: &str, mv: bool, policy: &'static str) -> Opt {
+    let srcs = srcs.to_vec();
+    let dest = dest.to_string();
+    opt("", label, move |_app| {
+        App::run_transfer(srcs.clone(), dest.clone(), mv, policy);
+    })
+}
+
 impl App {
     /// Connect the file browser's callbacks.
     pub(crate) fn wire_browser(&self) {
@@ -660,7 +669,7 @@ impl App {
         });
     }
 
-    /// The middle of `paste`: say why it can't, or go on when nothing in the folder is in the way.
+    /// The middle of `paste`: say why it can't, ask about names already in the folder, or go on.
     fn paste_planned(&self, srcs: Vec<String>, dest: String, mv: bool, plan: &Value) {
         if !plan["ok"].as_bool().unwrap_or(false) {
             let why = plan["error"]
@@ -670,13 +679,43 @@ impl App {
             self.message(if mv { "Can't move" } else { "Can't copy" }, why);
             return;
         }
-        if plan["conflicts"].as_array().is_some_and(|c| !c.is_empty()) {
-            // The Replace / Skip existing / Keep both sheet is B7; nothing is touched until then.
-            self.toast("Not in this build yet");
+        let clashes = plan["conflicts"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if clashes.is_empty() {
+            Self::run_transfer(srcs, dest, mv, "replace");
             return;
         }
+        let mut lines: Vec<String> = clashes
+            .iter()
+            .take(5)
+            .map(|c| format!("\u{2022} {}", c.as_str().unwrap_or_default()))
+            .collect();
+        if clashes.len() > 5 {
+            lines.push(format!("and {} more", clashes.len() - 5));
+        }
+        let count = i64::try_from(clashes.len()).unwrap_or(i64::MAX);
+        let title = crate::fmt::plural(count, "item already exists", "items already exist");
+        let mut spec = Spec::new(&title);
+        spec.body = lines.join("\n");
+        spec.options = vec![
+            policy_opt("Replace", &srcs, &dest, mv, "replace"),
+            policy_opt("Skip existing", &srcs, &dest, mv, "skip"),
+            policy_opt("Keep both", &srcs, &dest, mv, "keep"),
+        ];
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        self.show_dialog(spec);
+    }
+
+    /// `runTransfer`: copy or move on a worker thread under the chosen policy, then report.
+    fn run_transfer(srcs: Vec<String>, dest: String, mv: bool, policy: &'static str) {
         std::thread::spawn(move || {
-            let args = json!([srcs, dest, mv, "replace"]);
+            let args = json!([srcs, dest, mv, policy]);
             let result = kiln_bridge::call("fs_transfer", &args, 0);
             let _ = slint::invoke_from_event_loop(move || {
                 app_do(|app| app.transfer_done(mv, &result));

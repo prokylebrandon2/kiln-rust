@@ -8,7 +8,7 @@ use kiln_ui::DetailRow;
 use serde_json::{Value, json};
 use slint::{ModelRc, SharedString, VecModel};
 
-use crate::arc::{members_json, parse_extract};
+use crate::arc::{members_json, parse_check, parse_extract};
 use crate::dialog::{Btn, BtnKind, Click, Spec};
 use crate::{App, app_do};
 
@@ -29,6 +29,7 @@ impl App {
         ui.on_ext_cancelled(|| app_do(|app| app.close_extract()));
         ui.on_ext_res_button_clicked(|i| app_do(|app| app.extract_result_button(i)));
         ui.on_ext_res_dismissed(|| app_do(|app| app.extract_result_button(0)));
+        ui.on_chk_res_dismissed(|| app_do(|app| app.ui.set_chk_res_shown(false)));
     }
 
     /// `extractDialog`: the form for the given members (empty is all of them).
@@ -213,6 +214,123 @@ impl App {
     }
 }
 
+impl App {
+    /// `runTest`: the engine's `test` behind the progress sheet.
+    // TODO(task 24): remove the allow when the archive menu calls this.
+    #[allow(dead_code)]
+    pub(crate) fn run_check(&self) {
+        let (file, password, dirty) = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            (
+                a.file.to_string_lossy().into_owned(),
+                a.password.clone(),
+                a.dirty,
+            )
+        };
+        if dirty {
+            self.message(
+                "Unsaved changes",
+                "Save your changes first; Check works on the saved archive.",
+            );
+            return;
+        }
+        let args = json!([file, password]);
+        self.run_op(
+            "Checking...",
+            true,
+            move |job| kiln_bridge::call_job("test", &args, 0, job),
+            |app, result| app.check_done(result),
+        );
+    }
+
+    /// The end of `runTest`.
+    fn check_done(&self, result: &Value) {
+        let msg = result["message"].as_str().unwrap_or_default();
+        if result["ok"].as_bool().unwrap_or(false) {
+            self.show_check_result(true, msg);
+        } else if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+        } else {
+            self.show_check_result(false, msg);
+        }
+    }
+
+    /// `checkResult`: a verdict, the numbers as tiles, and the details underneath.
+    fn show_check_result(&self, ok: bool, msg: &str) {
+        let (name, encrypted, count, raw) = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            (
+                a.file_name(),
+                a.encrypted,
+                a.ents.len(),
+                a.raw_and_folders().0,
+            )
+        };
+        let ui = &self.ui;
+        let mut rows = Vec::new();
+        match if ok { parse_check(msg) } else { None } {
+            Some(line) => {
+                ui.set_chk_res_has_stats(true);
+                ui.set_chk_res_n_big(line.files.to_string().into());
+                let label = if line.files == 1 {
+                    "file checked"
+                } else {
+                    "files checked"
+                };
+                ui.set_chk_res_n_label(label.into());
+                // The folder-of-archives line has no size: it comes from the archive's listing.
+                let size = line
+                    .size
+                    .unwrap_or_else(|| crate::fmt::size(raw).to_string());
+                ui.set_chk_res_size(size.into());
+                ui.set_chk_res_time(format!("{} s", line.secs).into());
+                rows.push(detail("Result", "Every checksum matches", false));
+            }
+            None if ok => {
+                ui.set_chk_res_has_stats(false);
+                let text = if msg.is_empty() {
+                    "No problems found"
+                } else {
+                    msg
+                };
+                rows.push(detail("Result", text, true));
+            }
+            None => {
+                ui.set_chk_res_has_stats(false);
+                let (first, more) = if msg.is_empty() {
+                    ("The check failed.", String::new())
+                } else {
+                    let mut lines = msg.split('\n');
+                    let first = lines.next().unwrap_or_default().trim();
+                    let more: Vec<&str> = lines.map(str::trim).filter(|l| !l.is_empty()).collect();
+                    (first, more.join("\n"))
+                };
+                rows.push(detail("What went wrong", first, true));
+                if !more.is_empty() {
+                    rows.push(detail("Details", &more, true));
+                }
+            }
+        }
+        rows.push(detail(
+            "Encryption",
+            if encrypted { "AES-256-GCM" } else { "None" },
+            false,
+        ));
+        rows.push(detail("Files in archive", &count.to_string(), false));
+        let hint = if ok {
+            ""
+        } else {
+            "The archive may be damaged. Keep your original files until you've restored or re-created it."
+        };
+        ui.set_chk_res_hint(hint.into());
+        ui.set_chk_res_ok(ok);
+        ui.set_chk_res_name(name.into());
+        ui.set_chk_res_rows(ModelRc::new(VecModel::from(rows)));
+        ui.set_chk_res_shown(true);
+    }
+}
 fn detail(label: &str, value: &str, stack: bool) -> DetailRow {
     DetailRow {
         label: label.into(),

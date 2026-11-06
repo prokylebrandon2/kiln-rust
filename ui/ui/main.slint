@@ -290,6 +290,16 @@ export component MainWindow inherits Window {
     in property <string> ext-res-size;
     in property <string> ext-res-time;
     in property <[DetailRow]> ext-res-rows;
+    in property <bool> chk-res-shown: false;
+    in property <bool> chk-res-ok: true;
+    in property <string> chk-res-name;
+    in property <bool> chk-res-has-stats: false;
+    in property <string> chk-res-n-big;
+    in property <string> chk-res-n-label;
+    in property <string> chk-res-size;
+    in property <string> chk-res-time;
+    in property <[DetailRow]> chk-res-rows;
+    in property <string> chk-res-hint;
     /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
@@ -387,6 +397,7 @@ export component MainWindow inherits Window {
     callback ext-cancelled();
     callback ext-res-button-clicked(int);
     callback ext-res-dismissed();
+    callback chk-res-dismissed();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
@@ -1246,6 +1257,97 @@ export component MainWindow inherits Window {
         }
         KDetailCard {
             rows: root.ext-res-rows;
+        }
+    }
+
+    // The Check result sheet (MainActivity.checkResult): above the Extract result sheet. The tone is
+    // the accent when the archive is intact and the danger colour when it is not.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.chk-res-shown;
+        buttons: ["OK"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.chk-res-dismissed();
+        }
+        cancelled => {
+            root.chk-res-dismissed();
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                background: (root.chk-res-ok ? Theme.accent : Theme.danger).with-alpha(0.15);
+                border-radius: 16px;
+                Icon {
+                    x: 13px;
+                    y: 13px;
+                    width: 28px;
+                    height: 28px;
+                    name: root.chk-res-ok ? "check" : "close";
+                    tint: root.chk-res-ok ? Theme.accent : Theme.danger;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: root.chk-res-ok ? "Archive is intact" : "Problem found";
+                    color: Theme.text;
+                    font-size: Theme.sp(18px);
+                    font-weight: Theme.bold;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.chk-res-name;
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        if root.chk-res-has-stats: VerticalLayout {
+            HorizontalLayout {
+                spacing: 8px;
+                KStatTile {
+                    big: root.chk-res-n-big;
+                    small: root.chk-res-n-label;
+                }
+                KStatTile {
+                    big: root.chk-res-size;
+                    small: "of data";
+                }
+                KStatTile {
+                    big: root.chk-res-time;
+                    small: "took";
+                }
+            }
+            Rectangle {
+                height: 16px;
+            }
+        }
+        KDetailCard {
+            rows: root.chk-res-rows;
+        }
+        if root.chk-res-hint != "": VerticalLayout {
+            Rectangle {
+                height: 12px;
+            }
+            Text {
+                text: root.chk-res-hint;
+                color: Theme.text2;
+                font-size: Theme.sp(13px);
+                wrap: word-wrap;
+            }
         }
     }
 

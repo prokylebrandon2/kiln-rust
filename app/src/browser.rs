@@ -413,10 +413,12 @@ impl Browser {
             self.close_search();
             return BackAction::Changed;
         }
-        if !self.is_storage_root(&self.cwd) {
-            if let Some(parent) = self.cwd.parent() {
-                return BackAction::Up(parent.to_path_buf());
-            }
+        let parent = self
+            .cwd
+            .parent()
+            .filter(|_| !self.is_storage_root(&self.cwd));
+        if let Some(parent) = parent {
+            return BackAction::Up(parent.to_path_buf());
         }
         let now = Instant::now();
         let again = self

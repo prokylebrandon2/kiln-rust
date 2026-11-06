@@ -112,12 +112,15 @@ pub(crate) struct Dialog {
     serial: u64,
 }
 
+/// What an operation does when it ends, with the engine's result.
+type OnDone = Box<dyn FnOnce(&App, &Value)>;
+
 /// A running operation (`MainActivity.runOp`): the way to stop it, and what to do when it ends.
 pub(crate) struct Running {
     id: u64,
     job: Job,
     cancelling: bool,
-    done: Box<dyn FnOnce(&App, &Value)>,
+    done: OnDone,
 }
 
 /// An operation that ends within this long never shows its sheet (`ProgressUi.SHOW_AFTER_MS`).

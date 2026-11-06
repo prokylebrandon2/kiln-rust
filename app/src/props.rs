@@ -379,8 +379,9 @@ impl Md5 {
     /// Mix one 64-byte block into the state.
     fn compress(state: &mut [u32; 4], block: &[u8; 64]) {
         let mut words = [0u32; 16];
-        for (word, bytes) in words.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        for (i, word) in words.iter_mut().enumerate() {
+            let at = i * 4;
+            *word = u32::from_le_bytes([block[at], block[at + 1], block[at + 2], block[at + 3]]);
         }
         let [mut a, mut b, mut c, mut d] = *state;
         for (i, (&sine, &shift)) in SINES.iter().zip(SHIFT.iter()).enumerate() {

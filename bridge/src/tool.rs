@@ -359,7 +359,7 @@ fn check_names(ctx: &Ctx) -> Result<(), String> {
     let long = format!("{}.txt", "x".repeat(120));
     let files = vec![
         (
-            format!("src/\u{fc}n\u{ef}-\u{6587}\u{4ef6}-\u{1f642}.txt"),
+            "src/\u{fc}n\u{ef}-\u{6587}\u{4ef6}-\u{1f642}.txt".to_string(),
             data(7, 5_000, false),
         ),
         (format!("src/{long}"), data(8, 2_000, false)),
@@ -411,8 +411,11 @@ fn check_garbage(ctx: &Ctx) -> Result<(), String> {
     }
 }
 
+/// The folder, the archive and the expected files of `make_plain`.
+type Plain = (PathBuf, PathBuf, Vec<(String, Vec<u8>)>);
+
 /// A plain archive of the sample folder at `<dir>/a.kiln`.
-fn make_plain(ctx: &Ctx, name: &str) -> Result<(PathBuf, PathBuf, Vec<(String, Vec<u8>)>), String> {
+fn make_plain(ctx: &Ctx, name: &str) -> Result<Plain, String> {
     let d = ctx.dir(name)?;
     let expect = sample(&d.join("in"))?;
     let archive = d.join("a.kiln");

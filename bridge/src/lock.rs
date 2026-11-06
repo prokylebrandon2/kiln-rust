@@ -146,10 +146,13 @@ impl Setup {
     }
 }
 
+/// The last derived key: the header's `log_n`, `r`, `p`, the salt and the key.
+type LastKey = (u8, u32, u32, [u8; 16], [u8; 32]);
+
 /// Derives keys for files being read, and remembers the last one (a set shares a salt).
 pub struct Ring {
     password: String,
-    last: Option<(u8, u32, u32, [u8; 16], [u8; 32])>,
+    last: Option<LastKey>,
 }
 
 impl Ring {

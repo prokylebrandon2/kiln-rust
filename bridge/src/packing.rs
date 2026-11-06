@@ -388,11 +388,10 @@ fn pack_each(r: &Request) -> Result<Packed, Value> {
                                 Err(st) => {
                                     if let Ok(mut f) = failure.lock() {
                                         // a real error beats the "cancelled" the others report after it
-                                        let replace = match (&*f, &st) {
-                                            (None, _) => true,
-                                            (Some(Stop::Cancelled), Stop::Failed(_)) => true,
-                                            _ => false,
-                                        };
+                                        let replace = matches!(
+                                            (&*f, &st),
+                                            (None, _) | (Some(Stop::Cancelled), Stop::Failed(_))
+                                        );
                                         if replace {
                                             *f = Some(st);
                                         }

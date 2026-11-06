@@ -117,6 +117,10 @@ pub enum BackAction {
     ExitHint,
     /// Second Back at home: leave.
     Exit,
+    /// Back inside an archive: the folder of the archive to go up to (rcBackTo).
+    ArcUp(String),
+    /// Back at the top of an archive: leave it (guardLeave(closeArchive)).
+    ArcLeave,
 }
 
 pub struct Browser {
@@ -451,6 +455,12 @@ impl Browser {
         if self.searching {
             self.close_search();
             return BackAction::Changed;
+        }
+        if let Some(arc) = &self.arc {
+            return match arc.parent_prefix() {
+                Some(prefix) => BackAction::ArcUp(prefix),
+                None => BackAction::ArcLeave,
+            };
         }
         let parent = self
             .cwd

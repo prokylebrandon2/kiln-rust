@@ -206,3 +206,58 @@ impl App {
         self.load_dir(dir, false);
     }
 }
+
+impl App {
+    /// `onRowClick` inside an archive: a folder is entered, a file gets its sheet. False when no
+    /// archive is open.
+    pub(crate) fn arc_row_clicked(&self, key: &str, kind: Option<Kind>) -> bool {
+        if self.browser.borrow().arc.is_none() {
+            return false;
+        }
+        if matches!(kind, Some(Kind::Dir)) {
+            self.arc_enter(key);
+        } else {
+            // TODO(task 25): `arcFileSheet` (open options) comes with the Open part.
+            self.toast("Not in this build yet");
+        }
+        true
+    }
+
+    /// `arcEnter`: open a folder of the archive; the one left is remembered where it was scrolled.
+    fn arc_enter(&self, prefix: &str) {
+        let y = self.ui.get_list_pos();
+        {
+            let mut b = self.browser.borrow_mut();
+            let searching = b.searching;
+            if let Some(arc) = b.arc.as_mut() {
+                if !searching {
+                    arc.pos.insert(arc.prefix.clone(), y);
+                }
+                arc.prefix = prefix.to_string();
+            }
+            b.arc_rebuild();
+        }
+        self.render_rows();
+        self.render_chrome();
+        self.ui.invoke_scroll_list_top();
+    }
+
+    /// `arcBackTo`: Back to a folder of the archive, at the spot it was left.
+    pub(crate) fn arc_back_to(&self, prefix: &str) {
+        let y = {
+            let mut b = self.browser.borrow_mut();
+            let y = match b.arc.as_mut() {
+                Some(arc) => {
+                    arc.prefix = prefix.to_string();
+                    arc.pos.get(prefix).copied().unwrap_or(0.0)
+                }
+                None => 0.0,
+            };
+            b.arc_rebuild();
+            y
+        };
+        self.render_rows();
+        self.render_chrome();
+        self.ui.invoke_scroll_list_to(y);
+    }
+}

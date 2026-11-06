@@ -354,6 +354,9 @@ impl App {
             self.toggle(&key);
             return;
         }
+        if self.arc_row_clicked(&key, kind) {
+            return;
+        }
         match kind {
             Some(Kind::Dir) => {
                 let dir = self.browser.borrow().cwd.join(&key);
@@ -549,6 +552,9 @@ impl App {
                 self.render_chrome();
             }
             BackAction::Up(dir) => self.load_dir(dir, false),
+            BackAction::ArcUp(prefix) => self.arc_back_to(&prefix),
+            // TODO(task 23): guard_leave(close_archive) asks about unsaved changes first.
+            BackAction::ArcLeave => self.close_archive(),
             BackAction::ExitHint => self.toast("Tap Back again to exit"),
             BackAction::Exit => self.host.finish(),
         }

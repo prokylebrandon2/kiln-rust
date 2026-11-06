@@ -1,5 +1,6 @@
 import { ArcTile } from "components.slint";
-export { ArcTile }
+import { FcRow } from "components.slint";
+export { ArcTile, FcRow }
 
 // The main window (MainActivity.buildUi()): the top bar, the search row, the rule under them, the
 // warning banner, the body (the info strip behind the file list, the file list, the refresh
@@ -313,6 +314,12 @@ export component MainWindow inherits Window {
     in property <float> inf-frac: 0;
     in property <string> inf-caption;
     in property <[DetailRow]> inf-rows;
+    in property <bool> fc-shown: false;
+    in property <string> fc-path;
+    in property <[FcRow]> fc-rows;
+    in property <bool> fc-naming: false;
+    in-out property <string> fc-name;
+    in-out property <string> fc-name-error;
     /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
@@ -412,6 +419,9 @@ export component MainWindow inherits Window {
     callback ext-res-dismissed();
     callback chk-res-dismissed();
     callback inf-dismissed();
+    callback fc-row-clicked(int);
+    callback fc-button-clicked(int);
+    callback fc-cancelled();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
@@ -1483,6 +1493,58 @@ export component MainWindow inherits Window {
         }
         KDetailCard {
             rows: root.inf-rows;
+        }
+    }
+
+    // The folder chooser (MainActivity.pickFolder): above the Pack and Extract sheets. The path,
+    // then a 320 dp list. "New folder..." swaps the list for a name field (the dialog sheet lies
+    // below this one), and Cancel there goes back to the list.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.fc-shown;
+        title: root.fc-naming ? "New folder" : "Choose a folder";
+        buttons: root.fc-naming ? ["Cancel", "Create"] : ["Cancel", "Select this folder"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.fc-button-clicked(i);
+        }
+        cancelled => {
+            root.fc-cancelled();
+        }
+        if !root.fc-naming: VerticalLayout {
+            Text {
+                text: root.fc-path;
+                color: Theme.text2;
+                font-size: Theme.sp(13px);
+                wrap: no-wrap;
+                overflow: elide;
+            }
+            Rectangle {
+                height: 6px;
+            }
+            Flickable {
+                height: 320px;
+                content-height: fc-col.preferred-height;
+                fc-col := VerticalLayout {
+                    width: parent.width;
+                    for r[i] in root.fc-rows: KSheetOption {
+                        icon: r.icon;
+                        label: r.label;
+                        opacity: r.kind == 3 ? 0.5 : 1.0;
+                        clicked => {
+                            root.fc-row-clicked(i);
+                        }
+                    }
+                }
+            }
+        }
+        if root.fc-naming: KFormField {
+            placeholder: "Name";
+            text <=> root.fc-name;
+            error <=> root.fc-name-error;
         }
     }
 

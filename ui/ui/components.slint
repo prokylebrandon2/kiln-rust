@@ -1384,3 +1384,11 @@ export struct ArcTile {
     label: string,
     kind: int,
 }
+
+/// One row of the folder chooser. kind: 0 "New folder...", 1 "..", 2 folder, 3 file (dimmed,
+/// not tappable), 4 another storage.
+export struct FcRow {
+    icon: string,
+    label: string,
+    kind: int,
+}

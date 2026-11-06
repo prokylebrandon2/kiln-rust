@@ -651,6 +651,9 @@ impl App {
         out.push(select_all);
         out.push(opt("archive", "Archive info", App::info_dialog));
         if arc.is_set {
+            out.push(opt("folder", "Browse as plain folder", |app| {
+                app.guard_leave(Box::new(|app| app.arc_plain()));
+            }));
             out.push(opt("lock", "Decrypt folder in place...", App::decrypt_dialog));
         }
         out
@@ -712,5 +715,22 @@ impl App {
             }
             None => {}
         }
+    }
+}
+
+impl App {
+    /// `M_PLAIN` inside an archive: leave it and show the set as an ordinary folder. The scan
+    /// sets `plain_set`, which brings the banner.
+    fn arc_plain(&self) {
+        let dir = self.browser.borrow().arc.as_ref().map(|a| a.file.clone());
+        let Some(dir) = dir else { return };
+        self.close_session();
+        {
+            let mut b = self.browser.borrow_mut();
+            b.arc = None;
+            b.selected.clear();
+        }
+        self.ui.set_arc_dirty(false);
+        self.load_dir(dir, false);
     }
 }

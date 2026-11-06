@@ -191,7 +191,20 @@ pub fn pack_with_progress(
         .filter(|&i| !stored_by_class(i))
         .collect();
     // Files that share a filter sit together, so a chunk never mixes filters.
-    order.sort_by_key(|&i| filters[i]);
+    if options.classify {
+        // Similar files (same class, same extension) end up in the same chunk; the sort is
+        // stable, so walk order is kept inside a group.
+        order.sort_by_cached_key(|&i| {
+            let e = &collected.entries[i];
+            let plain = e.kind == EntryKind::File && e.size > 0;
+            (
+                filters[i],
+                similarity_key(&e.name, plain.then_some(classes[i])),
+            )
+        });
+    } else {
+        order.sort_by_key(|&i| filters[i]);
+    }
     order.extend((0..collected.entries.len()).filter(|&i| stored_by_class(i)));
     let ordered: Vec<&SourceEntry> = order.iter().map(|&i| &collected.entries[i]).collect();
     let store_flags: Vec<bool> = order.iter().map(|&i| stored_by_class(i)).collect();
@@ -337,6 +350,29 @@ pub fn pack_with_progress(
     stats.skipped = collected.skipped;
     stats.grew = source.grew;
     Ok(stats)
+}
+
+/// Grouping key for the compressible lane: `(class rank, lower-case extension)`.
+///
+/// `None` stands for directories and empty files, which keep rank 0 and no extension. The
+/// extension is the text after the last `.` of the file-name part of `name`; it is empty when
+/// there is no dot or the only dot is the first character.
+fn similarity_key(name: &str, class: Option<Class>) -> (u8, String) {
+    let Some(class) = class else {
+        return (0, String::new());
+    };
+    let rank = match class {
+        Class::Text => 0,
+        Class::Data => 1,
+        Class::Binary => 2,
+        _ => 3,
+    };
+    let file_name = name.rsplit_once('/').map_or(name, |(_, file)| file);
+    let ext = match file_name.rfind('.') {
+        Some(dot) if dot > 0 => file_name[dot + 1..].to_lowercase(),
+        _ => String::new(),
+    };
+    (rank, ext)
 }
 
 /// Read the sampling windows of one file.
@@ -531,5 +567,37 @@ impl Source for PackSource<'_> {
                 filter,
             })),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(name: &str, class: Class) -> (u8, String) {
+        similarity_key(name, Some(class))
+    }
+
+    #[test]
+    fn extension_is_the_lower_cased_text_after_the_last_dot_of_the_file_name() {
+        assert_eq!(key("p/Main.RS", Class::Text).1, "rs");
+        assert_eq!(key("p/a.tar.GZ", Class::Data).1, "gz");
+        assert_eq!(key("p.d/Makefile", Class::Text).1, "");
+        assert_eq!(key("p/trailing.", Class::Text).1, "");
+        // Dotfiles: the only dot is the first character, so there is no extension.
+        assert_eq!(key("p/.gitignore", Class::Text).1, "");
+        assert_eq!(key(".bashrc", Class::Text).1, "");
+        assert_eq!(key("p/.config.JSON", Class::Text).1, "json");
+    }
+
+    #[test]
+    fn class_rank_orders_text_data_binary_unknown() {
+        let classes = [Class::Text, Class::Data, Class::Binary, Class::Unknown];
+        assert_eq!(classes.map(|c| key("f", c).0), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn directories_and_empty_files_have_no_key() {
+        assert_eq!(similarity_key("dir/x.txt", None), (0, String::new()));
     }
 }

@@ -47,7 +47,7 @@ method u8 | raw_len u32 | comp_len u32 | crc32 u32 | payload[comp_len]      (13-
 ```
 
 `method`: 0 store, 1 LZ4 block, 2 Zstandard frame, 3 LZMA2 in an xz container (no check). The xz block header names its filter chain, so a payload may start with a BCJ (x86, ARM64) or delta filter ahead of LZMA2; any xz decoder undoes it, so ids and the version are unchanged. Ids are
-permanent. `crc32` covers the payload bytes as stored and is verified **before** any decoder runs.
+permanent. `crc32` covers the payload bytes as stored and is verified **before** any decoder runs. Zstd frames may declare a window up to 2^27 bytes (the chunk size limit) and writers pick it from the chunk size.
 
 Rules: `raw_len <= chunk size` (index record: `<= 256 MiB`); `0 < comp_len <= raw_len` (a chunk that
 does not shrink is stored); store requires `comp_len == raw_len`; the record must lie inside the

@@ -48,6 +48,21 @@ impl BlockCodec for Zstd {
                 ));
             }
             let (_, compressor) = slot.as_mut().expect("compressor was just created");
+            if self.level >= 10 {
+                use zstd::zstd_safe::CParameter;
+
+                // Window sized to the chunk; long-distance matching pays off on big chunks.
+                // Parameters stick to a cached compressor, so both are set on every call.
+                let bits = usize::BITS - input.len().saturating_sub(1).leading_zeros();
+                let window_log = bits.clamp(10, 27);
+                let long_range = input.len() >= 4 << 20;
+                compressor
+                    .set_parameter(CParameter::WindowLog(window_log))
+                    .map_err(err)?;
+                compressor
+                    .set_parameter(CParameter::EnableLongDistanceMatching(long_range))
+                    .map_err(err)?;
+            }
             compressor.compress(input).map_err(err)
         })
     }

@@ -161,7 +161,7 @@ impl CodecSpec {
             Method::Zstd => match self.level {
                 ..=3 => 4 * MIB + 2 * block.min(2 * MIB),
                 4..=9 => 8 * MIB + 4 * block.min(4 * MIB),
-                _ => 8 * MIB + 10 * block.min(8 * MIB),
+                _ => 8 * MIB + 10 * block.min(16 * MIB),
             },
             Method::Lzma2 => {
                 let dict = match self.level {
@@ -349,6 +349,24 @@ mod tests {
                 assert_eq!(&back, input, "{spec} len {}", input.len());
             }
         }
+    }
+
+    #[test]
+    fn zstd_window_and_long_range_matching_reach_a_repeat_ten_mebibytes_back() {
+        let half = noise(10 << 20, 11);
+        let mut data = half.clone();
+        data.extend_from_slice(&half);
+        let packed = CodecSpec::parse("zstd:10")
+            .unwrap()
+            .build()
+            .unwrap()
+            .compress(&data)
+            .unwrap();
+        assert!(packed.len() < 12 << 20, "packed to {} bytes", packed.len());
+        let back = decoder_for(Method::Zstd)
+            .decompress(&packed, data.len())
+            .unwrap();
+        assert!(back == data, "round trip differs");
     }
 
     /// Pseudo-prose: random picks from a 300-word vocabulary built from random letters.

@@ -153,6 +153,44 @@ fn classification_stores_incompressible_files_in_their_own_chunks() {
 }
 
 #[test]
+fn adaptive_profile_groups_files_with_equal_extensions_in_the_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let exts = ["txt", "rs", "md"];
+    for i in 0..18u64 {
+        let name = format!("f{i:02}.{}", exts[i as usize % exts.len()]);
+        fs::write(src.join(name), prose(3_000 + i as usize * 111, i)).unwrap();
+    }
+    let arc = dir.path().join("g.kiln");
+    pack(
+        &arc,
+        std::slice::from_ref(&src),
+        &PackOptions::from_profile(Profile::Adaptive),
+    )
+    .unwrap();
+    let a = Archive::open(&arc).unwrap();
+    let order: Vec<&str> = a
+        .entries()
+        .iter()
+        .filter(|e| e.kind == EntryKind::File)
+        .map(|e| e.path.rsplit('.').next().unwrap())
+        .collect();
+    assert_eq!(order.len(), 18);
+    let mut runs = order.clone();
+    runs.dedup();
+    assert_eq!(
+        runs,
+        ["md", "rs", "txt"],
+        "extensions interleaved: {order:?}"
+    );
+
+    let out = dir.path().join("out");
+    extract(&a, &ExtractOptions::new(&out)).unwrap();
+    assert_same_tree(&src, &out.join("src"));
+}
+
+#[test]
 fn non_classifying_profiles_keep_walk_order_and_unknown_class() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");

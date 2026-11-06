@@ -1,3 +1,6 @@
+import { ArcTile } from "components.slint";
+export { ArcTile }
+
 // The main window (MainActivity.buildUi()): the top bar, the search row, the rule under them, the
 // warning banner, the body (the info strip behind the file list, the file list, the refresh
 // circle, the empty-folder line, the "+ New" button, the selection bar and the opaque permission
@@ -181,6 +184,12 @@ export component MainWindow inherits Window {
     in property <bool> has-where: false;
     /// The selection bar (Copy, Move, Delete, Pack) is up.
     in property <bool> bar-shown: false;
+    in property <bool> arc-bar-shown: false;
+    in property <[ArcTile]> arc-tiles;
+    in property <bool> arc-dirty: false;
+    callback arc-save-clicked();
+    callback arc-discard-clicked();
+    callback arc-tile-clicked(int);
     /// Copy or Move is holding items: the bar shows the paste row instead of the four tiles.
     in property <bool> paste-mode: false;
     in property <string> paste-title;
@@ -207,6 +216,7 @@ export component MainWindow inherits Window {
     in property <string> dlg-title;
     in property <string> dlg-body;
     in property <bool> dlg-has-field: false;
+    in property <bool> dlg-secret: false;
     in property <string> dlg-placeholder;
     /// What is in the field: Rust sets the start text and reads it when a button is tapped.
     in-out property <string> dlg-text;
@@ -822,6 +832,7 @@ export component MainWindow inherits Window {
             }
         }
         if root.dlg-has-field && root.dlg-shown: KTextField {
+            secret: root.dlg-secret;
             placeholder: root.dlg-placeholder;
             autofocus: true;
             select-end: root.dlg-select-end;

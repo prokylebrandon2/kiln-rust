@@ -1377,3 +1377,10 @@ export component KToast inherits Rectangle {
         }
     }
 }
+
+/// One tile of the archive bottom bar. kind: 0 accent, 1 text colour, 2 danger.
+export struct ArcTile {
+    icon: string,
+    label: string,
+    kind: int,
+}

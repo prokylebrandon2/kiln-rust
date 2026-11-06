@@ -221,8 +221,8 @@ impl App {
         ui.set_up_row(up);
         ui.set_empty_top(if up { 96.0 } else { 56.0 });
         ui.set_has_where(b.searching && !b.query.is_empty());
-        let holding = !b.clip.is_empty();
-        ui.set_bar_shown(selecting || holding);
+        let holding = !b.clip.is_empty() && b.arc.is_none();
+        ui.set_bar_shown((selecting && b.arc.is_none()) || holding);
         ui.set_paste_mode(holding && !selecting);
         if holding {
             let verb = if b.clip_move { "Moving" } else { "Copying" };
@@ -251,6 +251,7 @@ impl App {
             && !b.searching
             && b.arc.is_none();
         ui.set_fab_shown(fab_wanted && !self.fab_hidden.get());
+        self.render_arc_bar(&b);
 
         // A short pulse on the mark when you arrive at home.
         let home = header.home;
@@ -407,6 +408,9 @@ impl App {
     /// The rows `showMenu` builds for a folder: with something selected, or without.
     fn menu_options(&self) -> Vec<Opt> {
         let b = self.browser.borrow();
+        if b.arc.is_some() {
+            return self.arc_menu(&b);
+        }
         let select_all = opt("check", "Select all", |app| {
             app.browser.borrow_mut().select_all();
             app.render_rows();

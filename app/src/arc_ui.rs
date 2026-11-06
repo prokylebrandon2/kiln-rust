@@ -10,13 +10,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kiln_ui::ArcTile;
 use serde_json::{Value, json};
+use slint::{ModelRc, VecModel};
 
 use crate::arc::ArcState;
 use crate::browse_ui::opt;
-use crate::browser::Kind;
-use crate::dialog::{Btn, BtnKind, Click, Field, Spec};
-use crate::{App, fmt};
+use crate::browser::{Browser, Kind};
+use crate::dialog::{Btn, BtnKind, Click, Field, Opt, Spec};
+use crate::{App, app_do, fmt};
 
 /// What runs once something has been done (`Runnable`).
 pub(crate) type After = Box<dyn FnOnce(&App)>;
@@ -169,7 +171,6 @@ impl App {
         }
         self.render_rows();
         self.render_chrome();
-        // TODO(task 24): `render_arc_bar` shows the bottom bar here.
         self.ui.invoke_scroll_list_top();
         if let Some(after) = after {
             after(self);
@@ -285,7 +286,6 @@ impl App {
         }
         self.render_rows();
         self.render_chrome();
-        // TODO(task 24): `render_arc_bar` redraws the bottom bar here.
     }
 
     /// `apply_edit`, but only when `file` is still the archive that is open.
@@ -381,7 +381,7 @@ impl App {
             move |_| kiln_bridge::call("transfer", &args, 0),
             move |app, r| {
                 if r["ok"].as_bool().unwrap_or(false) {
-                    // TODO(task 24): the archive's clip (`arcClip`) is cleared here.
+                    // NOTE: Copy and Move inside an archive are not built, so the archive's clip (`arcClip`) is cleared here.
                     app.apply_edit(r);
                     return;
                 }
@@ -583,7 +583,7 @@ impl App {
             "Discard",
             BtnKind::Danger,
             Box::new(move |app| {
-                // TODO(task 24): the archive's clip (`arcClip`) is cleared here.
+                // NOTE: Copy and Move inside an archive are not built, so the archive's clip (`arcClip`) is cleared here.
                 let args = json!([sid]);
                 app.run_op(
                     "Discarding...",
@@ -602,5 +602,115 @@ impl App {
                 );
             }),
         );
+    }
+}
+
+impl App {
+    pub(crate) fn wire_arc(&self) {
+        let ui = &self.ui;
+        ui.on_arc_tile_clicked(|i| app_do(|app| app.arc_tile(i)));
+        ui.on_arc_save_clicked(|| app_do(|app| app.save_archive(None)));
+        ui.on_arc_discard_clicked(|| app_do(|app| app.discard_archive(None)));
+    }
+
+    /// `showMenu`, with an archive open. (`Priv` is not in this build, so no archive is a locked
+    /// copy and Rename is always offered.)
+    pub(crate) fn arc_menu(&self, b: &Browser) -> Vec<Opt> {
+        let Some(arc) = b.arc.as_ref() else {
+            return Vec::new();
+        };
+        let select_all = opt("check", "Select all", |app| {
+            app.browser.borrow_mut().select_all();
+            app.render_rows();
+            app.render_chrome();
+        });
+        let mut out = Vec::new();
+        if b.selecting() {
+            if b.selected.len() == 1 {
+                out.push(opt("edit", "Rename", App::arc_rename));
+            }
+            out.push(opt("file", "Properties", App::props_in_archive));
+            out.push(select_all);
+            out.push(opt("close", "Clear selection", |app| {
+                app.browser.borrow_mut().clear_selection();
+                app.render_rows();
+                app.render_chrome();
+            }));
+            return out;
+        }
+        if arc.dirty {
+            out.push(opt("file", "Save changes", |app| app.save_archive(None)));
+            out.push(opt("file", "Discard changes", |app| {
+                app.discard_archive(None);
+            }));
+        }
+        out.push(opt("extract", "Extract all...", |app| {
+            app.extract_dialog(Vec::new());
+        }));
+        out.push(opt("check", "Check integrity", App::run_check));
+        out.push(select_all);
+        out.push(opt("archive", "Archive info", App::info_dialog));
+        if arc.is_set {
+            out.push(opt("lock", "Decrypt folder in place...", App::decrypt_dialog));
+        }
+        out
+    }
+
+    /// The archive's bottom bar (`renderBars` with an archive open): the "Unsaved changes" row
+    /// and four tiles, drawn by `main.slint` over the page.
+    pub(crate) fn render_arc_bar(&self, b: &Browser) {
+        let ui = &self.ui;
+        let Some(arc) = b.arc.as_ref() else {
+            ui.set_arc_bar_shown(false);
+            return;
+        };
+        // (what a tap does, icon, label, colour: 0 accent, 1 text, 2 danger)
+        let wanted: [(Tile, &str, &str, i32); 4] = if b.selecting() {
+            [
+                (Tile::ExtractSelected, "extract", "Extract", 0),
+                (Tile::Copy, "copy", "Copy", 1),
+                (Tile::Move, "move", "Move", 1),
+                (Tile::Delete, "delete", "Delete", 2),
+            ]
+        } else {
+            [
+                (Tile::ExtractAll, "extract", "Extract all", 0),
+                (Tile::Add, "add", "Add", 0),
+                (Tile::Check, "check", "Check", 1),
+                (Tile::Info, "archive", "Info", 1),
+            ]
+        };
+        let rows: Vec<ArcTile> = wanted
+            .iter()
+            .map(|(_, icon, label, kind)| ArcTile {
+                icon: (*icon).into(),
+                label: (*label).into(),
+                kind: *kind,
+            })
+            .collect();
+        self.arcui.borrow_mut().tiles = wanted.iter().map(|w| w.0).collect();
+        ui.set_arc_tiles(ModelRc::new(VecModel::from(rows)));
+        ui.set_arc_dirty(arc.dirty);
+        ui.set_arc_bar_shown(true);
+    }
+
+    /// A tile of the archive bar was tapped. Copy, Move, Delete and Add are not built yet.
+    fn arc_tile(&self, index: i32) {
+        let tile = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.arcui.borrow().tiles.get(i).copied());
+        match tile {
+            Some(Tile::ExtractSelected) => {
+                let keys = self.browser.borrow().selected.clone();
+                self.extract_dialog(keys);
+            }
+            Some(Tile::ExtractAll) => self.extract_dialog(Vec::new()),
+            Some(Tile::Check) => self.run_check(),
+            Some(Tile::Info) => self.info_dialog(),
+            Some(Tile::Copy | Tile::Move | Tile::Delete | Tile::Add) => {
+                self.toast("Not in this build yet");
+            }
+            None => {}
+        }
     }
 }

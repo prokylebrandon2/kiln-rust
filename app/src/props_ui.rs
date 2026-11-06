@@ -320,8 +320,6 @@ fn entry_path(key: &str) -> &str {
 impl App {
     /// `Props.showInArchive`: the sheet for what is selected inside the open archive. Nothing here
     /// is slow, so there are no workers; Copy and OK work as in `props_selected`.
-    // TODO(task 25): remove the allow when the selection bar calls this.
-    #[allow(dead_code)]
     pub(crate) fn props_in_archive(&self) {
         let (archive, picked, offset) = {
             let b = self.browser.borrow();

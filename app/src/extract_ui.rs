@@ -33,8 +33,6 @@ impl App {
     }
 
     /// `extractDialog`: the form for the given members (empty is all of them).
-    // TODO(task 24): remove the allow when the archive menu calls this.
-    #[allow(dead_code)]
     pub(crate) fn extract_dialog(&self, keys: Vec<String>) {
         let form = {
             let b = self.browser.borrow();
@@ -226,8 +224,6 @@ impl App {
 
 impl App {
     /// `runTest`: the engine's `test` behind the progress sheet.
-    // TODO(task 24): remove the allow when the archive menu calls this.
-    #[allow(dead_code)]
     pub(crate) fn run_check(&self) {
         let (file, password, dirty) = {
             let b = self.browser.borrow();
@@ -343,8 +339,6 @@ impl App {
 }
 impl App {
     /// `infoDialog`: the Archive info sheet.
-    // TODO(task 24): remove the allow when the archive menu calls this.
-    #[allow(dead_code)]
     pub(crate) fn info_dialog(&self) {
         let (file, name, is_set, encrypted, packed, count, raw, folders, offset) = {
             let b = self.browser.borrow();
@@ -443,8 +437,6 @@ fn detail(label: &str, value: &str, stack: bool) -> DetailRow {
 
 impl App {
     /// `decryptInPlace`: the confirm sheet. Decrypt runs `run_decrypt`.
-    // TODO(task 24): remove the allow when the archive menu calls this.
-    #[allow(dead_code)]
     pub(crate) fn decrypt_dialog(&self) {
         let name = {
             let b = self.browser.borrow();

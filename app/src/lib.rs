@@ -94,6 +94,7 @@ struct App {
     pack: RefCell<pack_ui::Open>,
     extract: RefCell<extract_ui::Open>,
     chooser: RefCell<folder_ui::Chooser>,
+    arcui: RefCell<arc_ui::ArcUi>,
 }
 
 thread_local! {
@@ -145,6 +146,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         pack: RefCell::default(),
         extract: RefCell::default(),
         chooser: RefCell::default(),
+        arcui: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -228,6 +230,7 @@ impl App {
         self.wire_props();
         self.wire_pack();
         self.wire_extract();
+        self.wire_arc();
         self.wire_folder();
         self.wire_about();
     }

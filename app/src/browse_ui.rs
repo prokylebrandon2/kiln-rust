@@ -510,6 +510,11 @@ impl App {
         if self.ui.get_prog_shown() {
             return;
         }
+        // The About sheet is a sheet of its own: Back closes it.
+        if self.ui.get_about_shown() {
+            self.ui.set_about_shown(false);
+            return;
+        }
         // The Pack sheets are sheets of their own: Back closes them.
         if self.ui.get_pack_res_shown() {
             self.close_pack_result();

@@ -5,7 +5,7 @@
 // in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { Icon, KButton, KCheck, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar, PressArea } from "components.slint";
+import { DetailRow, Icon, KButton, KCheck, KDetailCard, KFab, KMeter, KProgressBar, KSheet, KSheetOption, KSheetText, KStatTile, KTextField, KTile, KToast, KTopBar, PressArea } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
@@ -122,8 +122,32 @@ component KPickCell inherits Rectangle {
 }
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
-export { MarkRow, RowData, Theme }
+export { DetailRow, MarkRow, RowData, Theme }
 
+
+/// A text field with the red line under it that `EditText.setError` gives in the Java. Typing
+/// clears the line.
+component KFormField inherits VerticalLayout {
+    in property <string> placeholder;
+    in property <bool> secret: false;
+    in-out property <string> text;
+    in-out property <string> error;
+    spacing: 4px;
+    KTextField {
+        placeholder: root.placeholder;
+        secret: root.secret;
+        text <=> root.text;
+        edited => {
+            root.error = "";
+        }
+    }
+    if root.error != "": Text {
+        text: root.error;
+        color: Theme.danger;
+        font-size: Theme.sp(12px);
+        wrap: word-wrap;
+    }
+}
 
 /// One option row of the dialog sheet (`Sheet.option`); an empty icon means no tile.
 export struct DlgOption {
@@ -224,6 +248,39 @@ export component MainWindow inherits Window {
     in property <[PropRow]> props-rows;
     in property <bool> props-has-nomedia: false;
     in-out property <bool> props-nomedia: false;
+    /// The Pack sheet (MainActivity.packDialog): the title, the fields (Rust sets the start text
+    /// and reads them when Create is tapped), a red line under each field, the boxes and a note.
+    in property <bool> pack-shown: false;
+    in property <string> pack-title;
+    in-out property <string> pack-name;
+    in-out property <string> pack-where;
+    in-out property <string> pack-pw1;
+    in-out property <string> pack-pw2;
+    in-out property <string> pack-name-error;
+    in-out property <string> pack-where-error;
+    in-out property <string> pack-pw1-error;
+    in-out property <string> pack-pw2-error;
+    in-out property <bool> pack-enc: true;
+    in-out property <bool> pack-show-pw: false;
+    in-out property <bool> pack-store: false;
+    in-out property <bool> pack-each: false;
+    in-out property <bool> pack-wipe: false;
+    in property <string> pack-note;
+    /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
+    /// compression card (only when `pack-res-has-stats`), then the detail rows.
+    in property <bool> pack-res-shown: false;
+    in property <string> pack-res-icon: "archive";
+    in property <string> pack-res-heading;
+    in property <string> pack-res-name;
+    in property <bool> pack-res-has-stats: false;
+    in property <string> pack-res-n-big;
+    in property <string> pack-res-n-label;
+    in property <string> pack-res-stored;
+    in property <string> pack-res-time;
+    in property <string> pack-res-saved;
+    in property <float> pack-res-frac: 0;
+    in property <string> pack-res-caption;
+    in property <[DetailRow]> pack-res-rows;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -289,6 +346,14 @@ export component MainWindow inherits Window {
     callback props-button-clicked(int);
     callback props-nomedia-toggled(bool);
     callback props-cancelled();
+    /// The Pack sheet: a button (0 = Cancel, 1 = Create), Browse, "Encrypt" or "Separate archive"
+    /// turned on or off (Rust fixes the name and the note), and a tap outside the card.
+    callback pack-button-clicked(int);
+    callback pack-browse-clicked();
+    callback pack-options-changed();
+    callback pack-cancelled();
+    /// The Pack result sheet: OK, or a tap outside the card.
+    callback pack-res-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -833,6 +898,225 @@ export component MainWindow inherits Window {
                     root.props-nomedia-toggled(on);
                 }
             }
+        }
+    }
+
+    // The Pack sheet (MainActivity.packDialog): above the dialog sheet. Name, folder and Browse, the
+    // encryption box with the password fields (only while it is ticked, like the Java), the
+    // options and a note. A bad field gets a red line and the sheet stays open (Rust decides).
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.pack-shown;
+        title: root.pack-title;
+        buttons: ["Cancel", "Create"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.pack-button-clicked(i);
+        }
+        cancelled => {
+            root.pack-cancelled();
+        }
+        KFormField {
+            placeholder: "Name";
+            text <=> root.pack-name;
+            error <=> root.pack-name-error;
+        }
+        Rectangle {
+            height: 8px;
+        }
+        KFormField {
+            placeholder: "Save in";
+            text <=> root.pack-where;
+            error <=> root.pack-where-error;
+        }
+        Rectangle {
+            height: 8px;
+        }
+        KButton {
+            text: "Browse";
+            kind: 1;
+            clicked => {
+                root.pack-browse-clicked();
+            }
+        }
+        Rectangle {
+            height: 8px;
+        }
+        KCheck {
+            text: "Encrypt with a password";
+            checked <=> root.pack-enc;
+            toggled => {
+                root.pack-options-changed();
+            }
+        }
+        if root.pack-enc: VerticalLayout {
+            KFormField {
+                placeholder: "Password (8+ characters)";
+                secret: !root.pack-show-pw;
+                text <=> root.pack-pw1;
+                error <=> root.pack-pw1-error;
+            }
+            Rectangle {
+                height: 8px;
+            }
+            KFormField {
+                placeholder: "Repeat password";
+                secret: !root.pack-show-pw;
+                text <=> root.pack-pw2;
+                error <=> root.pack-pw2-error;
+            }
+            KCheck {
+                text: "Show passwords";
+                checked <=> root.pack-show-pw;
+            }
+            KCheck {
+                text: "Don't compress (faster for photos, music, video)";
+                checked <=> root.pack-store;
+            }
+        }
+        KCheck {
+            text: "Separate archive for each file";
+            checked <=> root.pack-each;
+            toggled => {
+                root.pack-options-changed();
+            }
+        }
+        KCheck {
+            text: "Delete original files after packing";
+            checked <=> root.pack-wipe;
+        }
+        if root.pack-note != "": Text {
+            text: root.pack-note;
+            color: Theme.text2;
+            font-size: Theme.sp(12px);
+            wrap: word-wrap;
+        }
+    }
+
+    // The Pack result sheet (MainActivity.packResult): above the Pack sheet. A 54 dp tile with the
+    // icon, the heading and the archive's name; then, when kiln's line could be read, three number
+    // tiles and the compression card; then the details and OK.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.pack-res-shown;
+        buttons: ["OK"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.pack-res-dismissed();
+        }
+        cancelled => {
+            root.pack-res-dismissed();
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                background: Theme.accent.with-alpha(0.15);
+                border-radius: 16px;
+                Icon {
+                    x: 13px;
+                    y: 13px;
+                    width: 28px;
+                    height: 28px;
+                    name: root.pack-res-icon;
+                    tint: Theme.accent;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: root.pack-res-heading;
+                    color: Theme.text;
+                    font-size: Theme.sp(18px);
+                    font-weight: Theme.bold;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.pack-res-name;
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        if root.pack-res-has-stats: VerticalLayout {
+            HorizontalLayout {
+                spacing: 8px;
+                KStatTile {
+                    big: root.pack-res-n-big;
+                    small: root.pack-res-n-label;
+                }
+                KStatTile {
+                    big: root.pack-res-stored;
+                    small: "stored";
+                }
+                KStatTile {
+                    big: root.pack-res-time;
+                    small: "took";
+                }
+            }
+            Rectangle {
+                height: 16px;
+            }
+            Rectangle {
+                background: Theme.chip;
+                border-radius: 14px;
+                preferred-height: cmp.preferred-height;
+                cmp := VerticalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    HorizontalLayout {
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "Compression";
+                            color: Theme.text2;
+                            font-size: Theme.sp(13px);
+                        }
+                        Text {
+                            text: root.pack-res-saved;
+                            color: Theme.accent;
+                            font-size: Theme.sp(13px);
+                            font-weight: Theme.bold;
+                        }
+                    }
+                    Rectangle {
+                        height: 8px;
+                    }
+                    KMeter {
+                        value: root.pack-res-frac;
+                    }
+                    Rectangle {
+                        height: 6px;
+                    }
+                    Text {
+                        text: root.pack-res-caption;
+                        color: Theme.text2;
+                        font-size: Theme.sp(12px);
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Rectangle {
+                height: 14px;
+            }
+        }
+        KDetailCard {
+            rows: root.pack-res-rows;
         }
     }
 

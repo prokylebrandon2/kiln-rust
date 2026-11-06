@@ -312,6 +312,90 @@ impl App {
     }
 }
 
+/// A key of the archive's list as a path: a folder's "/" at the end goes.
+fn entry_path(key: &str) -> &str {
+    key.strip_suffix('/').unwrap_or(key)
+}
+
+impl App {
+    /// `Props.showInArchive`: the sheet for what is selected inside the open archive. Nothing here
+    /// is slow, so there are no workers; Copy and OK work as in `props_selected`.
+    // TODO(task 25): remove the allow when the selection bar calls this.
+    #[allow(dead_code)]
+    pub(crate) fn props_in_archive(&self) {
+        let (archive, picked, offset) = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            let picked: Vec<(String, (i64, i64, i64))> = b
+                .selected
+                .iter()
+                .map(|key| (key.clone(), a.totals_of(key)))
+                .collect();
+            (a.file_name(), picked, b.date_offset_secs())
+        };
+        if picked.is_empty() {
+            return;
+        }
+        let mut rows = Vec::new();
+        if let [(key, _)] = picked.as_slice() {
+            let path = entry_path(key);
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            rows.push(PropRow {
+                label: leaf.into(),
+                kind: NAME,
+                ..Default::default()
+            });
+        }
+        heading(&mut rows, "General information");
+        let size: i64 = picked.iter().map(|(_, t)| t.0).sum();
+        let files: i64 = picked.iter().map(|(_, t)| t.1).sum();
+        match picked.as_slice() {
+            [(key, (_, _, newest))] => {
+                let dir = key.ends_with('/');
+                let path = entry_path(key);
+                let kind = if dir {
+                    "Folder".to_string()
+                } else {
+                    props::type_of(Path::new(path), "file")
+                };
+                row(&mut rows, "Type", &kind);
+                row(&mut rows, "Path", path);
+                if dir {
+                    row(&mut rows, "File count", &files.to_string());
+                }
+                row(&mut rows, "Size", &props::size_text(size));
+                if *newest > 0 {
+                    row(
+                        &mut rows,
+                        "Last modification",
+                        &props::modified_text(*newest, offset),
+                    );
+                }
+            }
+            _ => {
+                row(&mut rows, "Items", &format!("{} selected", picked.len()));
+                row(&mut rows, "File count", &files.to_string());
+                row(&mut rows, "Size", &props::size_text(size));
+            }
+        }
+        row(&mut rows, "In archive", &archive);
+
+        let model = Rc::new(VecModel::from(rows));
+        let ui = &self.ui;
+        ui.set_props_rows(ModelRc::from(model.clone()));
+        ui.set_props_has_nomedia(false);
+        {
+            let mut open = self.props.borrow_mut();
+            open.stop.store(true, Ordering::Relaxed);
+            *open = Open {
+                stop: Arc::new(AtomicBool::new(false)),
+                model: Some(model),
+                nomedia: None,
+            };
+        }
+        ui.set_props_shown(true);
+    }
+}
 /// `Props.several`: what a selection of more than one adds up to.
 fn several_rows(rows: &mut Vec<PropRow>, stop: &Arc<AtomicBool>, picked: &[(PathBuf, Kind)]) {
     heading(rows, "General information");

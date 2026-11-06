@@ -281,6 +281,15 @@ export component MainWindow inherits Window {
     in-out property <string> ext-where;
     in-out property <string> ext-where-error;
     in-out property <bool> ext-replace: false;
+    in property <bool> ext-res-shown: false;
+    in property <string> ext-res-name;
+    in property <bool> ext-res-has-stats: false;
+    in property <bool> ext-res-has-size: false;
+    in property <string> ext-res-n-big;
+    in property <string> ext-res-n-label;
+    in property <string> ext-res-size;
+    in property <string> ext-res-time;
+    in property <[DetailRow]> ext-res-rows;
     /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
@@ -376,6 +385,8 @@ export component MainWindow inherits Window {
     callback ext-button-clicked(int);
     callback ext-browse-clicked();
     callback ext-cancelled();
+    callback ext-res-button-clicked(int);
+    callback ext-res-dismissed();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
@@ -1154,6 +1165,87 @@ export component MainWindow inherits Window {
         KCheck {
             text: "Replace files that already exist";
             checked <=> root.ext-replace;
+        }
+    }
+
+    // The Extract result sheet (MainActivity.extractResult): above the Extract sheet. A 54 dp
+    // tile with the icon, the heading and the archive's name; the numbers read from kiln's line
+    // (two or three tiles); then the detail rows. OK closes it, "Open folder" goes to the folder.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.ext-res-shown;
+        buttons: ["OK", "Open folder"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.ext-res-button-clicked(i);
+        }
+        cancelled => {
+            root.ext-res-dismissed();
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                background: Theme.accent.with-alpha(0.15);
+                border-radius: 16px;
+                Icon {
+                    x: 13px;
+                    y: 13px;
+                    width: 28px;
+                    height: 28px;
+                    name: "extract";
+                    tint: Theme.accent;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: "Extraction complete";
+                    color: Theme.text;
+                    font-size: Theme.sp(18px);
+                    font-weight: Theme.bold;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.ext-res-name;
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        if root.ext-res-has-stats: VerticalLayout {
+            HorizontalLayout {
+                spacing: 8px;
+                KStatTile {
+                    big: root.ext-res-n-big;
+                    small: root.ext-res-n-label;
+                }
+                if root.ext-res-has-size: KStatTile {
+                    big: root.ext-res-size;
+                    small: "extracted";
+                }
+                KStatTile {
+                    big: root.ext-res-time;
+                    small: "took";
+                }
+            }
+            Rectangle {
+                height: 16px;
+            }
+        }
+        KDetailCard {
+            rows: root.ext-res-rows;
         }
     }
 

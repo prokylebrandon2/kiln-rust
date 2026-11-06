@@ -810,8 +810,8 @@ impl App {
             kind: BtnKind::Text,
             click: None,
         });
-        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
-            App::delete_paths(paths.clone());
+        let click: Click = Rc::new(move |app: &App, _text: &str| -> bool {
+            app.delete_paths(paths.clone());
             true
         });
         spec.buttons.push(Btn {
@@ -832,39 +832,62 @@ impl App {
         roots
     }
 
-    /// `toBin`: move the items into their storage's recycle bin, on a worker thread.
+    /// `toBin`: move the items into their storage's recycle bin, with a progress sheet and Cancel
+    /// (it stops before the next item).
     fn to_bin(&self, victims: Vec<PathBuf>) {
         let roots = self.bin_roots();
-        std::thread::spawn(move || {
-            let mut moved = 0;
-            let mut failed = 0;
-            let mut bad = String::new();
-            for victim in &victims {
-                let result = match trash::root_of(victim, &roots) {
-                    Some(root) => trash::put(victim, &root),
-                    None => Err("isn't on a storage with a recycle bin".to_string()),
-                };
-                match result {
-                    Ok(()) => moved += 1,
-                    Err(why) => {
-                        failed += 1;
-                        if failed <= 3 {
-                            bad.push_str("\u{2022} ");
-                            bad.push_str(&why);
-                            bad.push('\n');
+        self.run_op(
+            "Moving to recycle bin...",
+            true,
+            move |job| {
+                let mut moved = 0_i64;
+                let mut failed = 0;
+                let mut stopped = false;
+                let mut bad = String::new();
+                for victim in &victims {
+                    if job.is_cancelled() {
+                        stopped = true;
+                        break;
+                    }
+                    let result = match trash::root_of(victim, &roots) {
+                        Some(root) => trash::put(victim, &root),
+                        None => Err("isn't on a storage with a recycle bin".to_string()),
+                    };
+                    match result {
+                        Ok(()) => moved += 1,
+                        Err(why) => {
+                            failed += 1;
+                            if failed <= 3 {
+                                bad.push_str("\u{2022} ");
+                                bad.push_str(&why);
+                                bad.push('\n');
+                            }
                         }
                     }
                 }
-            }
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.to_bin_done(moved, failed, bad.trim()));
-            });
-        });
+                json!({
+                    "ok": failed == 0 && !stopped,
+                    "cancelled": stopped,
+                    "moved": moved,
+                    "message": bad.trim(),
+                })
+            },
+            |app, result| app.to_bin_done(result),
+        );
     }
 
     /// The end of `toBin`: a toast, or why not everything moved; then read the folder again.
-    fn to_bin_done(&self, moved: usize, failed: usize, bad: &str) {
-        if failed > 0 {
+    fn to_bin_done(&self, result: &Value) {
+        let moved = result["moved"].as_i64().unwrap_or(0);
+        if result["cancelled"].as_bool().unwrap_or(false) {
+            if moved > 0 {
+                let items = crate::fmt::plural(moved, "item", "items");
+                self.toast(&format!("Cancelled after {items}"));
+            } else {
+                self.toast("Cancelled");
+            }
+        } else if !result["ok"].as_bool().unwrap_or(false) {
+            let bad = result["message"].as_str().unwrap_or_default();
             let body = format!("{bad}\n\nNothing that failed was deleted.");
             self.message("Couldn't move everything", &body);
         } else if moved == 1 {
@@ -875,14 +898,14 @@ impl App {
         self.reload_here();
     }
 
-    /// `deleteForGood`'s job: `fs_delete` on a worker thread, its result back on the UI thread.
-    fn delete_paths(paths: Vec<String>) {
-        std::thread::spawn(move || {
-            let result = kiln_bridge::call("fs_delete", &json!([paths]), 0);
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.delete_done(&result));
-            });
-        });
+    /// `deleteForGood`'s job: `fs_delete` with a progress sheet and Cancel.
+    fn delete_paths(&self, paths: Vec<String>) {
+        self.run_op(
+            "Deleting...",
+            true,
+            move |job| kiln_bridge::call_job("fs_delete", &json!([paths]), 0, job),
+            |app, result| app.delete_done(result),
+        );
     }
 
     /// The end of `deleteForGood`: say what happened, then read the folder again.
@@ -1059,8 +1082,8 @@ impl App {
             kind: BtnKind::Text,
             click: None,
         });
-        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
-            Self::purge_entry(entry.clone());
+        let click: Click = Rc::new(move |app: &App, _text: &str| -> bool {
+            app.purge_entry(entry.clone());
             true
         });
         spec.buttons.push(Btn {
@@ -1071,14 +1094,15 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `Trash.purge` on a worker thread, its result back on the UI thread.
-    fn purge_entry(entry: trash::Entry) {
-        std::thread::spawn(move || {
-            let ok = trash::purge(&entry);
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.purge_done(ok));
-            });
-        });
+    /// `Trash.purge` with the "Deleting..." sheet. As in the Java, Cancel is offered but the one
+    /// purge is not interrupted.
+    fn purge_entry(&self, entry: trash::Entry) {
+        self.run_op(
+            "Deleting...",
+            true,
+            move |_job| json!({ "ok": trash::purge(&entry) }),
+            |app, result| app.purge_done(result["ok"].as_bool().unwrap_or(false)),
+        );
     }
 
     /// The end of "Delete permanently": say so if it failed, then the list again.
@@ -1101,8 +1125,8 @@ impl App {
             kind: BtnKind::Text,
             click: None,
         });
-        let click: Click = Rc::new(move |_app: &App, _text: &str| -> bool {
-            Self::empty_bin(all.clone());
+        let click: Click = Rc::new(move |app: &App, _text: &str| -> bool {
+            app.empty_bin(all.clone());
             true
         });
         spec.buttons.push(Btn {
@@ -1113,21 +1137,39 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// Empty the bin: `Trash.purge` for each item, on a worker thread.
-    fn empty_bin(all: Vec<trash::Entry>) {
-        std::thread::spawn(move || {
-            let failed = all.iter().filter(|entry| !trash::purge(entry)).count();
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.empty_bin_done(failed));
-            });
-        });
+    /// Empty the bin: `Trash.purge` for each item, with a progress sheet and Cancel (it stops
+    /// before the next item).
+    fn empty_bin(&self, all: Vec<trash::Entry>) {
+        self.run_op(
+            "Emptying recycle bin...",
+            true,
+            move |job| {
+                let mut failed = 0_i64;
+                let mut stopped = false;
+                for entry in &all {
+                    if job.is_cancelled() {
+                        stopped = true;
+                        break;
+                    }
+                    if !trash::purge(entry) {
+                        failed += 1;
+                    }
+                }
+                json!({ "cancelled": stopped, "failed": failed })
+            },
+            |app, result| app.empty_bin_done(result),
+        );
     }
 
     /// The end of Empty: a toast, or how many could not be deleted.
-    fn empty_bin_done(&self, failed: usize) {
+    fn empty_bin_done(&self, result: &Value) {
+        let failed = result["failed"].as_i64().unwrap_or(0);
         if failed > 0 {
-            let body = format!("{} couldn't be deleted.", Self::items(failed));
+            let items = crate::fmt::plural(failed, "item", "items");
+            let body = format!("{items} couldn't be deleted.");
             self.message("Couldn't delete everything", &body);
+        } else if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
         } else {
             self.toast("Recycle bin emptied");
         }

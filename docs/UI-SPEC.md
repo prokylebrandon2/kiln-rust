@@ -360,14 +360,29 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 
 ### Differences from the Java in this part
 
-- **No progress sheet.** The Java shows "Deleting..." with Cancel after 250 ms (`runOp`). Until B8
-  there is no sheet and no way to cancel a delete.
+- **Progress sheet** (`runOp`, `ProgressUi`; `run_op` in dialog.rs, `prog-*` in main.slint).
+  Copying, Moving, Deleting, Moving to recycle bin, Emptying recycle bin and Deleting one item
+  from the bin run behind a modal sheet that opens only when the work lasts 250 ms. It has the
+  heading as its title ("Copying...", "Moving...", "Deleting...", "Moving to recycle bin...",
+  "Emptying recycle bin..."), a line for the current file (14 sp, muted) with the percent (16 sp
+  bold) to its right, a bar (`KProgressBar`: 4 dp, accent on the line colour, a sliding segment
+  while the progress is unknown) and an outline Cancel. Back and a tap outside do nothing.
+  Cancel stops the job at its next check, turns the line into "Cancelling...", greys Cancel out
+  and keeps the sheet up until the work returns; the usual result follows ("Cancelled", or
+  "Cancelled after N items" when some items had gone to the bin). Cancel on the one "Delete
+  permanently" of the bin does nothing, as in the Java. A second operation started while one
+  runs is ignored. Differences: no "Keep the screen from turning off" box (the platform crate
+  has no call for it yet); the bar jumps to each report where the Java eases it and creeps
+  between reports; a long file name is cut at the end, not the middle; no notification, no
+  foreground service after 1.5 s and no notification permission request (B18); the bin jobs send
+  no progress, so their bar slides; the 4 dp bar in a 16 dp box is the Material default, not
+  measured in the Java.
 - **Recycle bin.** Delete follows `delete_mode` like `deleteSelected` (0 ask, 1 recycle bin, 2
   permanent). Settings, where it is changed, is Phase C, so it stays at the default, ask: "Delete
   <what>?" with the rows "Move to recycle bin" and "Delete permanently". Only files on Internal
   storage or a mounted drive can go to a bin; anything else is deleted for good after the confirm
-  "These can't go to the recycle bin here, so this can't be undone." Moving to the bin runs on a
-  worker with no "Moving to recycle bin..." sheet and no Cancel (B8).
+  "These can't go to the recycle bin here, so this can't be undone." Moving to the bin shows the
+  "Moving to recycle bin..." progress sheet (see **Progress sheet** above).
 - **Recycle bin sheet** (`binSheet`, `showBin`, `binItem`). Menu > Recycle bin lists the bins of
   Internal storage and every mounted drive, newest first: "N items \u00b7 size", then a row per item
   (its name; "size \u00b7 date" or "Folder \u00b7 size \u00b7 date"; the folder it came from) and Close and
@@ -376,8 +391,8 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
   permanently ("Delete "name" for good?"). Back and Cancel return to the list. Empty asks "Empty
   the recycle bin?". `KSheetOption` gained a `sub` line (12 sp, muted) for these rows. Differences:
   the whole sheet body scrolls (the Java has a fixed 330 dp list under fixed text); a long name is
-  cut at the end, not the middle; there is no "Deleting..." or "Emptying recycle bin..." sheet and
-  no Cancel until B8.
+  cut at the end, not the middle. Emptying shows the progress sheet "Emptying recycle bin..." and
+  deleting one item "Deleting..." (see **Progress sheet** above).
 - **Copy and Move** (`setClip`, `paste`, `runTransfer`, the paste bar of `buildUi`). Copy or Move
   holds the selected items (the selection is cleared) and toasts `Open a folder, then tap "Paste
   here"` (`"Move here"` for Move). While something is held and nothing is selected the bar is the
@@ -391,9 +406,8 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
   "\u2022 name" lines and "and N more", with the rows Replace, Skip existing and Keep both (no
   icon tile; each runs `fs_transfer` with policy replace, skip or keep) and Cancel (text; the
   items stay held). Differences: the rows without an icon have not been compared pixel by pixel
-  with the Java; no
-  "Copying..." or "Moving..." sheet and no Cancel (B8); the read-only rule ("Can't paste here")
-  comes with Phase C.
+  with the Java; the read-only rule ("Can't paste here") comes with Phase C. The transfer shows
+  the "Copying..." or "Moving..." progress sheet (see **Progress sheet** above).
 - **Field errors.** The Java shows `EditText.setError` (red icon and a popup). The Slint dialog shows
   the text as a red line under the field (`dlg-error`).
 

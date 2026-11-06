@@ -29,7 +29,7 @@ impl App {
         ui.on_marks_dismissed(|| app_do(|app| app.ui.set_marks_shown(false)));
         ui.on_mark_clicked(|i| app_do(|app| app.mark_clicked(i)));
         ui.on_mark_removed(|i| app_do(|app| app.mark_removed(i)));
-        ui.on_mark_icon_clicked(|_| app_do(|app| app.toast("Not in this build yet")));
+        ui.on_mark_icon_clicked(|i| app_do(|app| app.mark_icon_clicked(i)));
         ui.on_mark_action_clicked(|| app_do(|app| app.mark_action_clicked()));
     }
 
@@ -166,6 +166,23 @@ impl App {
             self.prefs.remove_bookmark(&row.path);
             self.toast("Bookmark removed");
         }
+    }
+
+    /// A bookmark's icon tile or long press: close the drop-down, pick the icon (no colours), and
+    /// open the drop-down again once something was changed.
+    fn mark_icon_clicked(&self, index: i32) {
+        let Some(row) = self.mark_at(index) else {
+            return;
+        };
+        if !row.removable {
+            return;
+        }
+        self.ui.set_marks_shown(false);
+        let (path, name) = (row.path.to_string(), row.name.to_string());
+        self.icon_picker(&path, &name, false, |app| {
+            app.render_rows();
+            app.marks_clicked();
+        });
     }
 
     /// "Bookmark this folder" or "Remove this bookmark".

@@ -160,10 +160,27 @@ impl App {
         let b = self.browser.borrow();
         let hits = b.searching && !b.query.is_empty();
         let where_line = if hits { "This folder" } else { "" };
+        // A folder's picked icon and colour (`dirIcon`, and `Defaults.folderColor` in the row).
+        let picked_icons = self.prefs.folder_icon_map();
+        let picked_colors = self.prefs.folder_color_map();
         let rows: Vec<RowData> = b
             .rows
             .iter()
-            .map(|r| row_data(r, b.selected.contains(&r.key), where_line))
+            .map(|r| {
+                let selected = b.selected.contains(&r.key);
+                if r.kind != Kind::Dir {
+                    return row_data(r, selected, where_line);
+                }
+                let path = b.cwd.join(&r.key).to_string_lossy().into_owned();
+                let mut r = r.clone();
+                if let Some(key) = picked_icons.get(&path).and_then(Value::as_str) {
+                    r.icon = crate::icons::by_key(key);
+                }
+                if let Some(color) = picked_colors.get(&path).and_then(Value::as_i64) {
+                    r.tint = Tint::Rgb(color as u32 & 0x00FF_FFFF);
+                }
+                row_data(&r, selected, where_line)
+            })
             .collect();
         self.model.set_vec(rows);
     }

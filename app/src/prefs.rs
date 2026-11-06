@@ -149,7 +149,7 @@ impl Prefs {
     }
 
     /// The saved folder icons (path to key), without entries whose key is empty or not text.
-    fn folder_icon_map(&self) -> Map<String, Value> {
+    pub fn folder_icon_map(&self) -> Map<String, Value> {
         let text = self.string("folder_icons", "{}");
         let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
             return Map::new();

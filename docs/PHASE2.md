@@ -101,9 +101,8 @@ All numbers below were produced by the final code unless marked otherwise.
 * Archives larger than 4 GiB, a genuinely full disk, and files of tens of gigabytes were not tested.
 * The format is provisional (version 1) with no compatibility promise until Phase 3.
 * Linux only; Windows/macOS unverified. No encryption, append/update or fuzzing.
-* **Android APK workflow is unrun.** `android/` and `.github/workflows/android-apk.yml` were
-  written without an Android SDK/NDK or a GitHub runner. The Java was compile-checked against
-  stubs only; no Gradle wrapper is included; the NDK cross-compile of the C dependencies, the
-  pinned SDK/NDK/AGP versions and release signing are all untested. `ci.yml` is also unrun.
+* **Android APK (as of Phase 2, since superseded).** This phase's report was written without an
+  Android SDK/NDK or a GitHub runner, so the APK workflow and `ci.yml` had not run yet. Both now run
+  on every commit and the app is tested on a device; see the README's "Android APK" section.
 * One I/O error message formatting bug (message printed twice) was found and fixed in the second
   half; error text elsewhere has not been audited.

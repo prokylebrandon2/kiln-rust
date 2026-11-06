@@ -307,6 +307,9 @@ export component KButton inherits Rectangle {
     preferred-width: label.preferred-width + 32px;
     preferred-height: label.preferred-height + 20px;
     border-radius: 10px;
+    // the pressed state below only sets the scale, and Slint draws the element at scale 0 (an
+    // invisible button) unless the resting scale is set explicitly
+    transform-scale: 1;
     // a disabled button keeps its text colour and fades its fill and outline to a third
     background: root.enabled ? root.fill : root.fill.transparentize(0.667);
     border-width: root.has-stroke ? Theme.hair : 0px;

@@ -23,7 +23,7 @@ use std::thread;
 
 use super::{Progress, pipeline_config};
 use crate::classify::{self, Class, SAMPLE_HEAD, SAMPLE_MID};
-use crate::codec::{CodecSpec, Method, looks_incompressible};
+use crate::codec::{BlockCodec, CodecSpec, Filter, Method, detect_filter, looks_incompressible};
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{ChunkInfo, Entry, EntryKind, Extension, Index, TAG_CREATOR};
 use crate::format::record::EncodedBlock;
@@ -130,6 +130,7 @@ pub fn pack(output: &Path, inputs: &[PathBuf], options: &PackOptions) -> Result<
 struct Chunk {
     raw: Vec<u8>,
     store: bool,
+    filter: Filter,
 }
 
 /// [`pack`], reporting `(raw_bytes_done, raw_bytes_total)` after every chunk is written.
@@ -167,18 +168,52 @@ pub fn pack_with_progress(
     // Classify (optional), then order: everything that will be compressed first, in walk order,
     // then the files that will be stored verbatim, in walk order.
     let threads = resolve_threads(options.threads);
-    let classes = if options.classify && options.codec.method != Method::Store {
-        classify_files(&collected.entries, threads)?
+    let want_classes = options.classify && options.codec.method != Method::Store;
+    let want_filters = options.codec.method == Method::Lzma2;
+    let (mut classes, mut filters): (Vec<Class>, Vec<Filter>) = if want_classes || want_filters {
+        sample_files(&collected.entries, threads)?
+            .into_iter()
+            .unzip()
     } else {
-        vec![Class::Unknown; collected.entries.len()]
+        (
+            vec![Class::Unknown; collected.entries.len()],
+            vec![Filter::None; collected.entries.len()],
+        )
     };
+    if !want_classes {
+        classes.fill(Class::Unknown);
+    }
+    if !want_filters {
+        filters.fill(Filter::None);
+    }
     let stored_by_class = |i: usize| classes[i].is_incompressible();
     let mut order: Vec<usize> = (0..collected.entries.len())
         .filter(|&i| !stored_by_class(i))
         .collect();
+    // Files that share a filter sit together, so a chunk never mixes filters.
+    order.sort_by_key(|&i| filters[i]);
     order.extend((0..collected.entries.len()).filter(|&i| stored_by_class(i)));
     let ordered: Vec<&SourceEntry> = order.iter().map(|&i| &collected.entries[i]).collect();
     let store_flags: Vec<bool> = order.iter().map(|&i| stored_by_class(i)).collect();
+    let chunk_filters: Vec<Filter> = order
+        .iter()
+        .map(|&i| {
+            if stored_by_class(i) {
+                Filter::None
+            } else {
+                filters[i]
+            }
+        })
+        .collect();
+    // One encoder per filter in use (LZMA2 only); chunks look theirs up by filter.
+    let mut used: Vec<Filter> = chunk_filters.clone();
+    used.sort();
+    used.dedup();
+    used.retain(|f| *f != Filter::None);
+    let filtered = used
+        .into_iter()
+        .map(|f| options.codec.build_filtered(f).map(|c| (f, c)))
+        .collect::<Result<Vec<_>>>()?;
 
     let (guard, file) = TempOutput::create(output, options.overwrite)?;
     let mut out = BufWriter::with_capacity(1 << 20, file);
@@ -200,7 +235,7 @@ pub fn pack_with_progress(
     let mut done_bytes = 0u64;
     let sample = options.skip_incompressible && options.codec.is_heavy();
 
-    let source = PackSource::new(&ordered, &store_flags, block_bytes as usize);
+    let source = PackSource::new(&ordered, &store_flags, &chunk_filters, block_bytes as usize);
     let mut chunks: Vec<ChunkInfo> = Vec::new();
     let mut position = HEADER_LEN as u64;
     let mut stats = PackStats::default();
@@ -214,7 +249,11 @@ pub fn pack_with_progress(
             } else if sample && looks_incompressible(&chunk.raw) {
                 EncodedBlock::stored(chunk.raw).map(|b| (b, true))
             } else {
-                EncodedBlock::from_raw(codec.as_ref(), chunk.raw).map(|b| (b, false))
+                let codec: &dyn BlockCodec = filtered
+                    .iter()
+                    .find(|(f, _)| *f == chunk.filter)
+                    .map_or(codec.as_ref(), |(_, c)| c.as_ref());
+                EncodedBlock::from_raw(codec, chunk.raw).map(|b| (b, false))
             }
         },
         |(block, skipped): (EncodedBlock, bool)| {
@@ -316,19 +355,22 @@ fn read_sample(path: &Path, size: u64) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
     Ok((head, mid))
 }
 
-/// Classify every file with up to `threads` workers. Directories and empty files are
-/// [`Class::Unknown`]. Memory: at most 64 KiB of samples per worker.
-fn classify_files(entries: &[SourceEntry], threads: usize) -> Result<Vec<Class>> {
+/// A file's content class and the pre-filter suited to it.
+type Sample = (Class, Filter);
+
+/// Sample every file with up to `threads` workers. Directories and empty files are
+/// [`Class::Unknown`] with no filter. Memory: at most 64 KiB of samples per worker.
+fn sample_files(entries: &[SourceEntry], threads: usize) -> Result<Vec<Sample>> {
     let files: Vec<usize> = (0..entries.len())
         .filter(|&i| entries[i].kind == EntryKind::File && entries[i].size > 0)
         .collect();
-    let mut classes = vec![Class::Unknown; entries.len()];
+    let mut samples = vec![(Class::Unknown, Filter::None); entries.len()];
     let workers = threads.min(files.len().div_ceil(64)).max(1);
     let cursor = AtomicUsize::new(0);
-    let results: Vec<Result<Vec<(usize, Class)>>> = thread::scope(|scope| {
+    let results: Vec<Result<Vec<(usize, Sample)>>> = thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
-                scope.spawn(|| -> Result<Vec<(usize, Class)>> {
+                scope.spawn(|| -> Result<Vec<(usize, Sample)>> {
                     let mut done = Vec::new();
                     loop {
                         let n = cursor.fetch_add(1, Ordering::Relaxed);
@@ -337,7 +379,8 @@ fn classify_files(entries: &[SourceEntry], threads: usize) -> Result<Vec<Class>>
                         };
                         let e = &entries[i];
                         let (head, mid) = read_sample(&e.fs_path, e.size).at(&e.fs_path)?;
-                        done.push((i, classify::classify(&head, &mid, e.size)));
+                        let class = classify::classify(&head, &mid, e.size);
+                        done.push((i, (class, detect_filter(&head))));
                     }
                 })
             })
@@ -351,11 +394,11 @@ fn classify_files(entries: &[SourceEntry], threads: usize) -> Result<Vec<Class>>
             .collect()
     });
     for part in results {
-        for (i, class) in part? {
-            classes[i] = class;
+        for (i, sample) in part? {
+            samples[i] = sample;
         }
     }
-    Ok(classes)
+    Ok(samples)
 }
 
 /// An open input file while its bytes are being consumed.
@@ -373,6 +416,7 @@ struct OpenFile {
 struct PackSource<'a> {
     entries: &'a [&'a SourceEntry],
     store: &'a [bool],
+    filters: &'a [Filter],
     next_entry: usize,
     current: Option<OpenFile>,
     /// BLAKE3 per entry (zero for directories), filled in as files complete.
@@ -382,10 +426,16 @@ struct PackSource<'a> {
 }
 
 impl<'a> PackSource<'a> {
-    fn new(entries: &'a [&'a SourceEntry], store: &'a [bool], block_size: usize) -> Self {
+    fn new(
+        entries: &'a [&'a SourceEntry],
+        store: &'a [bool],
+        filters: &'a [Filter],
+        block_size: usize,
+    ) -> Self {
         Self {
             entries,
             store,
+            filters,
             next_entry: 0,
             current: None,
             hashes: vec![[0u8; HASH_LEN]; entries.len()],
@@ -445,17 +495,17 @@ impl Source for PackSource<'_> {
         // Reading appends into spare capacity (`read_to_end`), so the buffer is never zero-filled.
         // (A recycling buffer pool was tried and removed: no speedup, 2.5x the peak memory.)
         let mut block = Vec::with_capacity(self.block_size);
-        let mut group: Option<bool> = None;
+        let mut group: Option<(bool, Filter)> = None;
         while block.len() < self.block_size {
             if self.current.is_none() {
                 let Some(idx) = self.peek_file() else { break };
-                if group.is_some_and(|g| g != self.store[idx]) {
+                if group.is_some_and(|g| g != (self.store[idx], self.filters[idx])) {
                     break; // next file belongs to the other group: close this chunk here
                 }
                 self.open(idx)?;
             }
             let cur = self.current.as_mut().expect("a file is open");
-            group = Some(self.store[cur.entry]);
+            group = Some((self.store[cur.entry], self.filters[cur.entry]));
             let want = cur.remaining.min((self.block_size - block.len()) as u64);
             let path = &self.entries[cur.entry].fs_path;
             let before = block.len();
@@ -475,7 +525,11 @@ impl Source for PackSource<'_> {
         }
         match group {
             None => Ok(None),
-            Some(store) => Ok(Some(Chunk { raw: block, store })),
+            Some((store, filter)) => Ok(Some(Chunk {
+                raw: block,
+                store,
+                filter,
+            })),
         }
     }
 }

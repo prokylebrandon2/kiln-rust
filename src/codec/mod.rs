@@ -11,6 +11,8 @@ mod lzma;
 mod store;
 mod zstd;
 
+pub use lzma::{Filter, detect_filter};
+
 use std::fmt;
 
 use crate::error::{Error, Result};
@@ -200,6 +202,18 @@ impl CodecSpec {
             Method::Zstd => Box::new(zstd::Zstd::new(self.level)),
             Method::Lzma2 => Box::new(lzma::Lzma2::new(self.level as u32)),
         })
+    }
+
+    /// Like [`CodecSpec::build`], with a pre-filter for LZMA2 (other methods ignore it).
+    pub fn build_filtered(&self, filter: Filter) -> Result<Box<dyn BlockCodec>> {
+        if self.method != Method::Lzma2 || filter == Filter::None {
+            return self.build();
+        }
+        self.validate()?;
+        Ok(Box::new(lzma::Lzma2::with_filter(
+            self.level as u32,
+            filter,
+        )))
     }
 }
 

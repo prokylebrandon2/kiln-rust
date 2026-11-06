@@ -217,7 +217,7 @@ method per entry), `info` (class totals, index size, chunk methods). Library: `P
   4.25 GiB file on the v1 format), cold-cache and many-core benchmarks, HDD/SSD comparison.
 * The final d2 ext4 benchmark was interrupted (see §5).
 * LZ4/LZMA2 chunks have no golden archive.
-* The Android project (icon from the original app added in `android/`) has **never been built**.
+* The Android project: not built when this phase was written; it is built on every commit now (see the README).
 * Phase 4 has not been started.
 
 ## 8. Reproducing

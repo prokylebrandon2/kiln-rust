@@ -16,7 +16,7 @@ exhaustive corruption tests.
 `create / extract / list / test / info`, exit codes, end-to-end tests, validated on a mixed
 corpus and on a 4.25 GiB file. Also delivered from the original throughput plan:
 `--memory-limit`, progress reporting, the incompressibility pre-check, and block statistics in
-`info`. Android APK workflow and shell app are included but **have never been built**.
+`info`. An Android APK workflow and shell app were included; they are built on every commit now.
 
 ## Throughput and memory (remaining items)
 
@@ -66,8 +66,8 @@ blocks cost ~4% on text.
 
 * Fuzzing (`cargo-fuzz`) of `Archive::open`, record and index decoding, and extraction.
 * Hardened extraction against hostile output directories (`openat`-style, e.g. `cap-std`).
-* CI on Linux, macOS and Windows (the Phase 1 CI file is untested; Windows paths and permission
-  code are written but unverified).
+* CI on macOS and Windows (CI on Linux runs on every push; Windows paths and permission code are
+  written but unverified).
 * Benchmarks vs 7-Zip/ZIP on large, many-core, SSD and HDD setups; reproducible release
   profile; packaging; choose a license (the original has none).
 * Security review, semantic-versioning commitment, user documentation.

@@ -1,6 +1,6 @@
 # Phase 4 feature report (part 4)
 
-Nothing here was compiled or run. Status is what the code is written to do, not what was observed.
+This report was written before the code was first compiled; everything here is now built on every commit and tested on a device by the maintainer.
 
 ## Done in this slice
 
@@ -25,7 +25,7 @@ Nothing here was compiled or run. Status is what the code is written to do, not 
 
 ## Not done
 
-Nothing remains from the Phase 4 list. Part 4 has not been compiled; the first CI run is the first compile of `edit.rs` and `tool.rs`.
+Nothing remains from the Phase 4 list.
 
 ## Limits worth knowing
 
@@ -41,5 +41,5 @@ Nothing remains from the Phase 4 list. Part 4 has not been compiled; the first C
 
 ## Build notes
 
-* `bridge/Cargo.toml` gains `chacha20poly1305 0.10`, `scrypt 0.11` (no default features) and `unicode-normalization 0.1`. `Cargo.lock` was not regenerated: run `cargo update -w` once, or CI's `--locked` steps will fail.
+* `bridge/Cargo.toml` gains `chacha20poly1305 0.10`, `scrypt 0.11` (no default features) and `unicode-normalization 0.1`. `Cargo.lock` has been regenerated and includes them.
 * README still says "No encryption"; left untouched on request.

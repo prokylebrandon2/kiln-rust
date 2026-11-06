@@ -440,3 +440,75 @@ fn detail(label: &str, value: &str, stack: bool) -> DetailRow {
         stack,
     }
 }
+
+impl App {
+    /// `decryptInPlace`: the confirm sheet. Decrypt runs `run_decrypt`.
+    // TODO(task 24): remove the allow when the archive menu calls this.
+    #[allow(dead_code)]
+    pub(crate) fn decrypt_dialog(&self) {
+        let name = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            a.file_name()
+        };
+        let mut spec = Spec::new("Decrypt in place?");
+        spec.body = format!(
+            "\"{name}\" becomes an ordinary folder: the encryption and the random file names are removed."
+        );
+        spec.buttons.push(Btn {
+            label: "Cancel".to_string(),
+            kind: BtnKind::Text,
+            click: None,
+        });
+        let click: Click = Rc::new(|app: &App, _text: &str| -> bool {
+            app.run_decrypt();
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Decrypt".to_string(),
+            kind: BtnKind::Filled,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+    }
+
+    /// The engine's `decrypt_in_place` behind the progress sheet.
+    fn run_decrypt(&self) {
+        let (file, password, count, parent) = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            (
+                a.file.to_string_lossy().into_owned(),
+                a.password.clone(),
+                a.ents.len(),
+                a.file.parent().map(PathBuf::from),
+            )
+        };
+        let args = json!([file, password, count]);
+        self.run_op(
+            "Decrypting...",
+            true,
+            move |job| kiln_bridge::call_job("decrypt_in_place", &args, 0, job),
+            move |app, result| app.decrypt_done(parent, result),
+        );
+    }
+
+    /// The end of `decryptInPlace`: "Decrypted" and the archive is closed.
+    fn decrypt_done(&self, parent: Option<PathBuf>, result: &Value) {
+        if result["ok"].as_bool().unwrap_or(false) {
+            self.toast("Decrypted");
+            // TODO(task 20): `close_archive` replaces this.
+            self.browser.borrow_mut().arc = None;
+            self.ui.set_arc_bar_shown(false);
+            self.ui.set_arc_dirty(false);
+            if let Some(dir) = parent {
+                self.load_dir(dir, false);
+            }
+        } else if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+        } else {
+            let msg = result["message"].as_str().unwrap_or_default();
+            self.message("Couldn't decrypt", msg);
+        }
+    }
+}

@@ -272,6 +272,7 @@ impl App {
         if first {
             let dir = self.browser.borrow().cwd.clone();
             self.load_dir(dir, false);
+            self.open_incoming();
         } else {
             self.render_chrome();
         }

@@ -125,6 +125,85 @@ impl App {
         self.ui.set_dlg_secret(true);
     }
 
+    /// Open the launch ACTION_VIEW file after storage access and the engine are ready.
+    pub(crate) fn open_incoming(&self) {
+        let Some(incoming) = self.arcui.borrow().incoming.clone() else {
+            return;
+        };
+        if self.arc_dirty() {
+            self.guard_leave(Box::new(|app| app.open_incoming()));
+            return;
+        }
+        self.arcui.borrow_mut().incoming = None;
+
+        match incoming {
+            Incoming::File(file) => {
+                let home = file.parent().map(|parent| parent.to_path_buf());
+                let mut state = self.arcui.borrow_mut();
+                state.incoming_file = Some(file.clone());
+                state.incoming_home = home;
+                drop(state);
+                self.do_open(file, String::new(), None);
+            }
+            Incoming::Shared { name } => {
+                let dir = self.host.cache_dir().join("incoming");
+                let current = self
+                    .browser
+                    .borrow()
+                    .arc
+                    .as_ref()
+                    .map(|arc| arc.file.clone());
+
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if current.as_ref() == Some(&path) {
+                            continue;
+                        }
+                        if path.is_dir() {
+                            let _ = std::fs::remove_dir_all(path);
+                        } else {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
+                }
+                if let Err(error) = std::fs::create_dir_all(&dir) {
+                    self.message("Couldn't open the file", &error.to_string());
+                    return;
+                }
+
+                let out = dir.join(name);
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                self.host.copy_incoming_async(
+                    out.clone(),
+                    Box::new(move |result| {
+                        let _ = tx.send(result);
+                    }),
+                );
+                self.run_op(
+                    "Opening...",
+                    false,
+                    move |_| match rx.recv() {
+                        Ok(Ok(())) => json!({"ok": true}),
+                        Ok(Err(error)) => json!({"ok": false, "error": error}),
+                        Err(_) => json!({"ok": false, "error": "can't read that file"}),
+                    },
+                    move |app, result| {
+                        if result["ok"].as_bool().unwrap_or(false) {
+                            let mut state = app.arcui.borrow_mut();
+                            state.incoming_file = Some(out.clone());
+                            state.incoming_home = Some(app.host.storage_root());
+                            drop(state);
+                            app.do_open(out, String::new(), None);
+                        } else {
+                            let error = result["error"].as_str().unwrap_or("can't read that file");
+                            app.message("Couldn't open the file", error);
+                        }
+                    },
+                );
+            }
+        }
+    }
     /// `doOpen`: read the archive's table of contents behind the progress sheet.
     pub(crate) fn do_open(&self, file: PathBuf, pw: String, after: Option<After>) {
         let heading = if pw.is_empty() {
@@ -162,8 +241,15 @@ impl App {
             }
             return;
         }
-        // TODO(task 32): the home of a file opened from another app goes here instead of None.
-        let arc = ArcState::from_open(file, pw, None, r);
+        let home = {
+            let state = self.arcui.borrow();
+            if state.incoming_file.as_ref() == Some(&file) {
+                state.incoming_home.clone()
+            } else {
+                None
+            }
+        };
+        let arc = ArcState::from_open(file, pw, home, r);
         let offset = self.now_offset();
         self.close_session();
         {
@@ -198,6 +284,33 @@ impl App {
 
     /// `closeArchive`: leave the archive for the folder it was opened from.
     pub(crate) fn close_archive(&self) {
+        let current = self
+            .browser
+            .borrow()
+            .arc
+            .as_ref()
+            .map(|arc| arc.file.clone());
+        let incoming_dir = self.host.cache_dir().join("incoming");
+
+        let private_copy = {
+            let mut state = self.arcui.borrow_mut();
+            if current.is_some() && state.incoming_file.as_ref() == current.as_ref() {
+                let file = state.incoming_file.take();
+                state.incoming_home = None;
+                file.filter(|path| path.starts_with(&incoming_dir))
+            } else {
+                None
+            }
+        };
+
+        if let Some(file) = private_copy {
+            if file.is_dir() {
+                let _ = std::fs::remove_dir_all(file);
+            } else {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+
         // load_dir closes the session, hides the bar and clears the archive.
         let dir = self.browser.borrow().cwd.clone();
         self.load_dir(dir, false);

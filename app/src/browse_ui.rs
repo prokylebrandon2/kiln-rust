@@ -199,9 +199,9 @@ impl App {
         ui.set_left_icon(header.left_icon.into());
         ui.set_selecting(selecting);
         ui.set_searching(b.searching);
-        ui.set_marks_ok(!selecting && b.storage_ok);
+        ui.set_marks_ok(!selecting && b.arc.is_none() && b.storage_ok);
         ui.set_pull_enabled(!selecting && b.storage_ok);
-        let banner = if b.plain_set {
+        let banner = if b.plain_set && b.arc.is_none() {
             "Plain view of an encrypted set. Renaming or deleting files here can make \
              the set unreadable."
         } else {
@@ -244,7 +244,12 @@ impl App {
             };
             ui.set_paste_here_text(go.into());
         }
-        let fab_wanted = !selecting && !holding && status.engine_up && b.storage_ok && !b.searching;
+        let fab_wanted = !selecting
+            && !holding
+            && status.engine_up
+            && b.storage_ok
+            && !b.searching
+            && b.arc.is_none();
         ui.set_fab_shown(fab_wanted && !self.fab_hidden.get());
 
         // A short pulse on the mark when you arrive at home.

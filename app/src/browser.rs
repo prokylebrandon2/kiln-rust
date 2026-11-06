@@ -220,7 +220,7 @@ impl Browser {
     /// The ".." row shows when there is somewhere to go up to (`upShown`).
     pub fn up_shown(&self) -> bool {
         self.up_row_on
-            && !self.is_storage_root(&self.cwd)
+            && (self.arc.is_some() || !self.is_storage_root(&self.cwd))
             && self.storage_ok
             && !(self.searching && !self.query.is_empty())
     }
@@ -296,7 +296,7 @@ impl Browser {
         if self.searching && !self.query.is_empty() {
             return "No matches.".to_string();
         }
-        if self.show_all {
+        if self.arc.is_some() || self.show_all {
             "This folder is empty.".to_string()
         } else {
             "No Kiln archives here.\nOpen the menu to show all files.".to_string()
@@ -310,6 +310,31 @@ impl Browser {
                 sub: String::new(),
                 home: false,
                 left_icon: "close",
+            };
+        }
+        if let Some(arc) = &self.arc {
+            let mut title = arc.file_name();
+            if arc.dirty {
+                title.push_str(" *");
+            }
+            let mut sub = if arc.prefix.is_empty() {
+                let count = i64::try_from(arc.ents.len()).unwrap_or(i64::MAX);
+                let mut line = crate::fmt::plural(count, "file", "files");
+                if arc.encrypted {
+                    line.push_str(" \u{b7} encrypted");
+                }
+                line
+            } else {
+                format!("/{}", arc.prefix)
+            };
+            if arc.dirty {
+                sub.push_str(" \u{b7} unsaved changes");
+            }
+            return Header {
+                title,
+                sub,
+                home: false,
+                left_icon: "up",
             };
         }
         let at_root = self.is_storage_root(&self.cwd);

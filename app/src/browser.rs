@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::arc::ArcState;
 use crate::host::Volume;
 use crate::{fmt, icons};
 
@@ -141,6 +142,10 @@ pub struct Browser {
     pub searching: bool,
     pub query: String,
     pub plain_set: bool,
+    /// The archive that is open (`arc`); its inside is what `rows` shows.
+    pub arc: Option<ArcState>,
+    /// Seconds from UTC, for the dates inside an archive.
+    date_offset: i32,
     /// A folder is being read; `rows` are still the previous folder's.
     pub pending: bool,
     pub generation: u64,
@@ -169,6 +174,8 @@ impl Browser {
             searching: false,
             query: String::new(),
             plain_set: false,
+            arc: None,
+            date_offset: 0,
             pending: false,
             generation: 0,
             error: None,
@@ -376,6 +383,33 @@ impl Browser {
         self.query.clear();
     }
 
+    /// The offset from UTC that dates inside an archive use.
+    #[allow(dead_code)]
+    pub fn set_date_offset(&mut self, seconds: i32) {
+        self.date_offset = seconds;
+    }
+
+    /// Show the inside of `arc` (the end of `onOpened`).
+    #[allow(dead_code)]
+    pub fn open_arc(&mut self, arc: ArcState) {
+        self.arc = Some(arc);
+        self.selected.clear();
+        self.close_search_quiet();
+        self.arc_rebuild();
+    }
+
+    /// `buildArcRows`: the rows of the archive's folder that is shown.
+    #[allow(dead_code)]
+    pub fn arc_rebuild(&mut self) {
+        let Some(arc) = &self.arc else {
+            return;
+        };
+        let mut rows = arc.rows(self.date_offset);
+        sort_rows(&mut rows, self.sort_key, self.sort_asc);
+        self.source = rows;
+        self.show_source_or_hits();
+    }
+
     /// `onQueryChanged`: the words in the box changed.
     pub fn set_query(&mut self, text: &str) {
         if !self.searching {
@@ -393,12 +427,15 @@ impl Browser {
             .split_whitespace()
             .map(str::to_string)
             .collect();
-        let mut hits: Vec<Row> = self
-            .source
-            .iter()
-            .filter(|r| words.iter().all(|w| r.lower.contains(w.as_str())))
-            .cloned()
-            .collect();
+        let mut hits: Vec<Row> = match &self.arc {
+            Some(arc) => arc.search_rows(&words, self.date_offset),
+            None => self
+                .source
+                .iter()
+                .filter(|r| words.iter().all(|w| r.lower.contains(w.as_str())))
+                .cloned()
+                .collect(),
+        };
         sort_rows(&mut hits, self.sort_key, self.sort_asc);
         self.rows = hits;
     }

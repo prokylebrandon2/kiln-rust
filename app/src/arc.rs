@@ -135,7 +135,6 @@ impl ArcState {
                 kind: Kind::Dir,
                 size,
                 time,
-                enc: false,
             });
         }
         rows
@@ -274,7 +273,6 @@ fn file_row(e: &Ent, title: &str, offset: i32) -> Row {
         kind: Kind::File,
         size: e.s.max(0),
         time: e.m,
-        enc: false,
     }
 }
 

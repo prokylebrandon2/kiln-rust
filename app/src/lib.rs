@@ -10,6 +10,7 @@
 
 mod about_ui;
 pub mod arc;
+mod arc_ui;
 mod browse_ui;
 pub mod browser;
 pub mod crash;

@@ -30,6 +30,7 @@ impl App {
         ui.on_ext_res_button_clicked(|i| app_do(|app| app.extract_result_button(i)));
         ui.on_ext_res_dismissed(|| app_do(|app| app.extract_result_button(0)));
         ui.on_chk_res_dismissed(|| app_do(|app| app.ui.set_chk_res_shown(false)));
+        ui.on_inf_dismissed(|| app_do(|app| app.ui.set_inf_shown(false)));
     }
 
     /// `extractDialog`: the form for the given members (empty is all of them).
@@ -329,6 +330,98 @@ impl App {
         ui.set_chk_res_name(name.into());
         ui.set_chk_res_rows(ModelRc::new(VecModel::from(rows)));
         ui.set_chk_res_shown(true);
+    }
+}
+impl App {
+    /// `infoDialog`: the Archive info sheet.
+    // TODO(task 24): remove the allow when the archive menu calls this.
+    #[allow(dead_code)]
+    pub(crate) fn info_dialog(&self) {
+        let (file, name, is_set, encrypted, packed, count, raw, folders, offset) = {
+            let b = self.browser.borrow();
+            let Some(a) = b.arc.as_ref() else { return };
+            let (raw, folders) = a.raw_and_folders();
+            (
+                a.file.clone(),
+                a.file_name(),
+                a.is_set,
+                a.encrypted,
+                a.packed,
+                a.ents.len(),
+                raw,
+                folders,
+                b.date_offset_secs(),
+            )
+        };
+        let size = crate::fmt::size;
+        let ui = &self.ui;
+        let icon = if is_set {
+            "set"
+        } else if encrypted {
+            "lock"
+        } else {
+            "archive"
+        };
+        ui.set_inf_icon(icon.into());
+        ui.set_inf_name(name.into());
+        let lock = if encrypted {
+            "Encrypted \u{b7} AES-256-GCM"
+        } else {
+            "Not encrypted"
+        };
+        ui.set_inf_lock(lock.into());
+        ui.set_inf_n_big(count.to_string().into());
+        ui.set_inf_n_label(if count == 1 { "file" } else { "files" }.into());
+        ui.set_inf_orig(size(raw).into());
+        ui.set_inf_stored(size(packed).into());
+
+        // how much the packing saved: a bar of the stored size against the original
+        ui.set_inf_has_cmp(raw > 0);
+        if raw > 0 {
+            let rawf = raw as f64;
+            let pct = |n: i64| (100.0 * n as f64 / rawf).round() as i64;
+            let saved = (raw - packed).max(0);
+            let text = if saved > 0 {
+                format!("Saved {} ({}%)", size(saved), pct(saved))
+            } else {
+                "No saving".to_string()
+            };
+            ui.set_inf_saved(text.into());
+            // never an empty-looking bar
+            let ratio = (packed as f64 / rawf).clamp(0.008, 1.0);
+            ui.set_inf_frac(ratio as f32);
+            ui.set_inf_caption(format!("Stored size is {}% of the original", pct(packed)).into());
+        }
+
+        let meta = std::fs::metadata(&file).ok();
+        let mut rows = vec![
+            detail(
+                "Type",
+                if is_set {
+                    "Encrypted set (one archive per file)"
+                } else {
+                    "Archive"
+                },
+                false,
+            ),
+            detail("Folders", &folders.to_string(), false),
+        ];
+        let modified = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(0))
+            .filter(|secs| *secs > 0);
+        if let Some(secs) = modified {
+            rows.push(detail("Modified", &crate::fmt::date(secs, offset), false));
+        }
+        if let Some(m) = meta.as_ref().filter(|m| !is_set && m.is_file()) {
+            let len = i64::try_from(m.len()).unwrap_or(i64::MAX);
+            rows.push(detail("Size on disk", &size(len), false));
+        }
+        rows.push(detail("Location", &file.to_string_lossy(), true));
+        ui.set_inf_rows(ModelRc::new(VecModel::from(rows)));
+        ui.set_inf_shown(true);
     }
 }
 fn detail(label: &str, value: &str, stack: bool) -> DetailRow {

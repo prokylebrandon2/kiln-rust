@@ -300,6 +300,19 @@ export component MainWindow inherits Window {
     in property <string> chk-res-time;
     in property <[DetailRow]> chk-res-rows;
     in property <string> chk-res-hint;
+    in property <bool> inf-shown: false;
+    in property <string> inf-icon: "archive";
+    in property <string> inf-name;
+    in property <string> inf-lock;
+    in property <string> inf-n-big;
+    in property <string> inf-n-label;
+    in property <string> inf-orig;
+    in property <string> inf-stored;
+    in property <bool> inf-has-cmp: false;
+    in property <string> inf-saved;
+    in property <float> inf-frac: 0;
+    in property <string> inf-caption;
+    in property <[DetailRow]> inf-rows;
     /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
@@ -398,6 +411,7 @@ export component MainWindow inherits Window {
     callback ext-res-button-clicked(int);
     callback ext-res-dismissed();
     callback chk-res-dismissed();
+    callback inf-dismissed();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
@@ -1348,6 +1362,127 @@ export component MainWindow inherits Window {
                 font-size: Theme.sp(13px);
                 wrap: word-wrap;
             }
+        }
+    }
+
+    // The Archive info sheet (MainActivity.infoDialog): above the Check result sheet. An icon tile,
+    // the name and whether it is locked; three numbers; how much the packing saved; the details.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.inf-shown;
+        buttons: ["OK"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.inf-dismissed();
+        }
+        cancelled => {
+            root.inf-dismissed();
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                background: Theme.chip;
+                border-radius: 16px;
+                Icon {
+                    x: 13px;
+                    y: 13px;
+                    width: 28px;
+                    height: 28px;
+                    name: root.inf-icon;
+                    tint: Theme.accent;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: root.inf-name;
+                    color: Theme.text;
+                    font-size: Theme.sp(18px);
+                    font-weight: Theme.bold;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.inf-lock;
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            KStatTile {
+                big: root.inf-n-big;
+                small: root.inf-n-label;
+            }
+            KStatTile {
+                big: root.inf-orig;
+                small: "original";
+            }
+            KStatTile {
+                big: root.inf-stored;
+                small: "stored";
+            }
+        }
+        if root.inf-has-cmp: VerticalLayout {
+            Rectangle {
+                height: 16px;
+            }
+            HorizontalLayout {
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Compression";
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                }
+                Text {
+                    text: root.inf-saved;
+                    color: Theme.accent;
+                    font-size: Theme.sp(13px);
+                    font-weight: Theme.bold;
+                }
+            }
+            Rectangle {
+                height: 8px;
+            }
+            Rectangle {
+                height: 8px;
+                background: Theme.line;
+                border-radius: 4px;
+                Rectangle {
+                    x: 0px;
+                    width: parent.width * root.inf-frac;
+                    height: parent.height;
+                    background: Theme.accent;
+                    border-radius: 4px;
+                }
+            }
+            Rectangle {
+                height: 6px;
+            }
+            Text {
+                text: root.inf-caption;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: word-wrap;
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        KDetailCard {
+            rows: root.inf-rows;
         }
     }
 

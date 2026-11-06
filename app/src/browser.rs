@@ -334,6 +334,11 @@ impl Browser {
         }
     }
 
+    /// The zone's offset from UTC in seconds, for `fmt::date`.
+    pub fn date_offset_secs(&self) -> i32 {
+        self.date_offset
+    }
+
     pub fn clear_selection(&mut self) {
         self.selected.clear();
     }

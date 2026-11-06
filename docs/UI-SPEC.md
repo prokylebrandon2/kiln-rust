@@ -231,6 +231,9 @@ Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust:
   the search field ignores reaches it. Leaving an archive comes with the archive part.
 - **No grid view, breadcrumbs or view toggle.** The Phase B brief lists them, but `MainActivity`
   has none (its `grid` is a settings layout), so none is built.
+- **No drag-select.** `MainActivity` has none either: a long press on a row toggles that one row
+  (`setOnItemLongClickListener`, ignored while a folder is loading) and taps toggle while anything
+  is selected. No touch handler selects a range, so none is built.
 - **Not yet in this part** (the Java has them; see the Phase B list): the menus and every dialog, file operations, thumbnails, opening files, archives, the
   service notification. Tapping a file says "Not in this build yet".
 

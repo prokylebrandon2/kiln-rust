@@ -20,6 +20,7 @@ pub mod host;
 pub mod icons;
 mod marks;
 pub mod prefs;
+pub mod props;
 mod pull;
 pub mod sniff;
 // Not used until the recycle bin is wired in (B5); the allow goes with it.

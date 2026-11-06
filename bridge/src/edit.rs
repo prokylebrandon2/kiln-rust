@@ -15,6 +15,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -199,13 +200,11 @@ impl Sess {
             "dirs": self.dirs,
         });
         let tmp = self.dir.join("session.json.tmp");
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)
-            .map_err(ioe)?;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut f = opts.open(&tmp).map_err(ioe)?;
         f.write_all(v.to_string().as_bytes()).map_err(ioe)?;
         f.flush().map_err(ioe)?;
         drop(f);

@@ -221,6 +221,19 @@ fn copy_file(src: &Path, dst: &Path) -> Result<(), Fail> {
     r
 }
 
+#[cfg(unix)]
+fn make_symlink(target: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, dst)
+}
+
+#[cfg(not(unix))]
+fn make_symlink(_target: &Path, _dst: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are only copied on Unix",
+    ))
+}
+
 fn transfer_file(src: &Path, dst: &Path, mv: bool, job: &mut Job) -> Result<(), Fail> {
     if mv {
         if fs::rename(src, dst).is_err() {
@@ -230,7 +243,7 @@ fn transfer_file(src: &Path, dst: &Path, mv: bool, job: &mut Job) -> Result<(), 
     } else if is_link(src) {
         let fresh = !lexists(dst);
         let target = fs::read_link(src)?;
-        std::os::unix::fs::symlink(&target, dst)?;
+        make_symlink(&target, dst)?;
         if fresh {
             job.made.push(dst.to_path_buf());
         }

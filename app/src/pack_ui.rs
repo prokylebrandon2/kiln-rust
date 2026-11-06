@@ -50,11 +50,20 @@ impl App {
     pub(crate) fn wire_pack(&self) {
         let ui = &self.ui;
         ui.on_pack_button_clicked(|i| app_do(|app| app.pack_button(i)));
-        // The folder chooser (`pickFolder`) comes with Extract.
-        ui.on_pack_browse_clicked(|| app_do(|app| app.toast("Not in this build yet")));
+        ui.on_pack_browse_clicked(|| app_do(|app| app.pack_browse()));
         ui.on_pack_options_changed(|| app_do(|app| app.pack_options_changed()));
         ui.on_pack_cancelled(|| app_do(|app| app.close_pack()));
         ui.on_pack_res_dismissed(|| app_do(|app| app.close_pack_result()));
+    }
+
+    /// Browse: the chooser starts at the folder in the field and writes the pick back into it.
+    fn pack_browse(&self) {
+        let start = PathBuf::from(self.ui.get_pack_where().trim());
+        self.pick_folder(start, |app, picked| {
+            app.ui
+                .set_pack_where(picked.to_string_lossy().into_owned().into());
+            app.ui.set_pack_where_error(SharedString::new());
+        });
     }
 
     /// `packDialog`: the form for the selected items.

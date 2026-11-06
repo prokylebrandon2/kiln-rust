@@ -24,8 +24,7 @@ impl App {
     pub(crate) fn wire_extract(&self) {
         let ui = &self.ui;
         ui.on_ext_button_clicked(|i| app_do(|app| app.extract_button(i)));
-        // The folder chooser (`pickFolder`) is a later task.
-        ui.on_ext_browse_clicked(|| app_do(|app| app.toast("Not in this build yet")));
+        ui.on_ext_browse_clicked(|| app_do(|app| app.extract_browse()));
         ui.on_ext_cancelled(|| app_do(|app| app.close_extract()));
         ui.on_ext_res_button_clicked(|i| app_do(|app| app.extract_result_button(i)));
         ui.on_ext_res_dismissed(|| app_do(|app| app.extract_result_button(0)));
@@ -95,6 +94,16 @@ impl App {
         let keys = std::mem::take(&mut self.extract.borrow_mut().keys);
         ui.set_ext_shown(false);
         self.run_extract(keys, dest, overwrite);
+    }
+
+    /// Browse: the chooser starts at the folder in the field and writes the pick back into it.
+    fn extract_browse(&self) {
+        let start = PathBuf::from(self.ui.get_ext_where().to_string());
+        self.pick_folder(start, |app, picked| {
+            app.ui
+                .set_ext_where(picked.to_string_lossy().into_owned().into());
+            app.ui.set_ext_where_error(SharedString::new());
+        });
     }
 
     fn close_extract(&self) {

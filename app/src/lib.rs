@@ -19,6 +19,7 @@ mod dialog;
 pub mod engine;
 mod extract_ui;
 pub mod fmt;
+mod folder_ui;
 pub mod host;
 pub mod icons;
 mod marks;
@@ -91,6 +92,7 @@ struct App {
     props: RefCell<props_ui::Open>,
     pack: RefCell<pack_ui::Open>,
     extract: RefCell<extract_ui::Open>,
+    chooser: RefCell<folder_ui::Chooser>,
 }
 
 thread_local! {
@@ -141,6 +143,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         props: RefCell::default(),
         pack: RefCell::default(),
         extract: RefCell::default(),
+        chooser: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -224,6 +227,7 @@ impl App {
         self.wire_props();
         self.wire_pack();
         self.wire_extract();
+        self.wire_folder();
         self.wire_about();
     }
 

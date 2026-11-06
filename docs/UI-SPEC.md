@@ -349,7 +349,7 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 ## Main screen, Phase B part 4: the selection bar and Delete (`MainActivity.deleteSelected`, `deleteForGood`)
 
 - **Bar.** While rows are selected: Copy, Move, Delete (danger tint) and Pack tiles. Only Delete is
-  built; Copy and Move toast "Not in this build yet" until B6, Pack until B21. The Java shows a
+  built; Copy and Move are built too (B6), and Pack toasts "Not in this build yet" until B21. The Java shows a
   single Copy tile in a protected (read-only) folder; that rule comes with Root and Shizuku
   (Phase C), and the archive bars come with the archive part.
 - **Delete.** A dialog "Delete <what>?" (what is the quoted name for one item, "N items" for more),
@@ -410,6 +410,43 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
   the "Copying..." or "Moving..." progress sheet (see **Progress sheet** above).
 - **Field errors.** The Java shows `EditText.setError` (red icon and a popup). The Slint dialog shows
   the text as a red line under the field (`dlg-error`).
+
+## Main screen, Phase B part 5: the folder icon picker (`MainActivity.iconPicker`, `refreshDirIcons`, `dirIcon`)
+
+- **Where it opens.** "Icon and color..." in the selection menu, for one selected folder: the
+  selection is cleared, then the sheet opens with the colour swatches. Also a bookmark's icon
+  tile, or a long press on a bookmark line in the drop-down: the drop-down closes, the sheet has
+  no swatches, and the drop-down opens again after an icon or "Use default" was chosen.
+- **Sheet.** Title "Icon and color for <name>" (with swatches) or "Icon for <name>". Buttons
+  "Use default" (outline; clears the icon, and the colour when the swatches are shown) and
+  "Cancel" (text). Cancel, Back and a tap outside the card close it and change nothing.
+- **Swatches** (`KSwatch`). 11 cells, 6 to a row, the last row padded: "default" first (drawn in
+  the accent, saves 0), then 0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0,
+  0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3, 0xFFC45BA3, 0xFF8D99AE. A cell is 42 dp tall, a 34 dp circle
+  centred; the current one has a 3 dp outline in k_text and a white tick (16 sp bold), the others
+  1 dp in k_line. A tap saves the colour, moves the tick, re-tints the icons below and updates the
+  list behind; the sheet stays open. A saved colour that is not in the list ticks nothing.
+- **Icons** (`KPickCell`). 4 to a row, 18 in `Icons.FOLDER_KEYS` order (Folder, Download, Camera,
+  Pictures, Movies, Music, Documents, Android, Sounds, Archives, Favourite, Heart, Private, Code,
+  Home, Phone storage, SD card, USB drive), the last row padded. A cell has 2 dp around it, radius
+  12, padding 2 / 8 / 2 / 6, a 40 dp icon in the picked colour (else the accent) over the label
+  (11 sp, one line, cut at the end). The current icon has a k_chip fill, an accent outline and a
+  bold label in k_text; the others use k_text2. A tap saves the key and closes the sheet.
+- **Rows.** A folder row on screen (not an encrypted set) shows the picked icon and colour; the
+  bookmark lines show the picked icon. The list is drawn again after every change.
+- **Storage.** `folder_icons` (path to key) and `folder_colors` (path to ARGB as a signed 32-bit
+  number, like a Java `int`; 0 removes the entry), both JSON text with "\/" for "/". Renaming or
+  moving a folder moves both for it and its subfolders.
+
+### Differences from the Java in this part
+
+- The outline of the current icon cell is 1 dp (`Theme.hair`) and there is no gap between the
+  icon and its label; neither was read from the Java.
+- The swatch and icon cells use the standard `PressArea`; the exact ripple of `Ui.pressable` on
+  them was not compared. The swatch press shape is a 21 dp circle.
+- The icon grid always has 5 rows, which is what 18 icons need at 4 to a row.
+- The picker's Slint (nested `for` loops, a `\u{2713}` tick) was written without a build; check it
+  in CI before anything else in this part.
 
 ## Known differences from the Java
 

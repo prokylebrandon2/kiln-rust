@@ -63,8 +63,8 @@ fn soon(icon: &'static str, label: &str) -> Opt {
 fn policy_opt(label: &str, srcs: &[String], dest: &str, mv: bool, policy: &'static str) -> Opt {
     let srcs = srcs.to_vec();
     let dest = dest.to_string();
-    opt("", label, move |_app| {
-        App::run_transfer(srcs.clone(), dest.clone(), mv, policy);
+    opt("", label, move |app| {
+        app.run_transfer(srcs.clone(), dest.clone(), mv, policy);
     })
 }
 
@@ -440,6 +440,10 @@ impl App {
     /// `onBackPressed`.
     pub(crate) fn on_back(&self) {
         // A dialog is a window of its own in the Java: Back closes it first.
+        // The progress sheet is modal: Back does nothing while it is up.
+        if self.ui.get_prog_shown() {
+            return;
+        }
         if self.dialog_back() {
             return;
         }
@@ -684,7 +688,7 @@ impl App {
             .map(Vec::as_slice)
             .unwrap_or_default();
         if clashes.is_empty() {
-            Self::run_transfer(srcs, dest, mv, "replace");
+            self.run_transfer(srcs, dest, mv, "replace");
             return;
         }
         let mut lines: Vec<String> = clashes
@@ -712,15 +716,18 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `runTransfer`: copy or move on a worker thread under the chosen policy, then report.
-    fn run_transfer(srcs: Vec<String>, dest: String, mv: bool, policy: &'static str) {
-        std::thread::spawn(move || {
-            let args = json!([srcs, dest, mv, policy]);
-            let result = kiln_bridge::call("fs_transfer", &args, 0);
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.transfer_done(mv, &result));
-            });
-        });
+    /// `runTransfer`: copy or move under the chosen policy, with a progress sheet and Cancel.
+    fn run_transfer(&self, srcs: Vec<String>, dest: String, mv: bool, policy: &'static str) {
+        let heading = if mv { "Moving..." } else { "Copying..." };
+        self.run_op(
+            heading,
+            true,
+            move |job| {
+                let args = json!([srcs, dest, mv, policy]);
+                kiln_bridge::call_job("fs_transfer", &args, 0, job)
+            },
+            move |app, result| app.transfer_done(mv, result),
+        );
     }
 
     /// The end of `runTransfer`: say what happened, let go of the items, read the folder again.

@@ -386,8 +386,12 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
   hidden. Paste here asks the engine for a plan (`fs_plan`); if it fails: "Can't copy" or "Can't
   move" with the reason. If nothing is in the way it runs `fs_transfer` on a worker, toasts the
   engine's message ("Cancelled", or a "Not everything was copied/moved" sheet on failure), lets go
-  of the items and reads the folder again. Differences: when something is in the way ("Replace",
-  "Skip existing", "Keep both") it toasts "Not in this build yet" and touches nothing (B7); no
+  of the items and reads the folder again. When names already exist in the folder (`paste`), a
+  sheet titled "1 item already exists" or "N items already exist" lists the first five as
+  "\u2022 name" lines and "and N more", with the rows Replace, Skip existing and Keep both (no
+  icon tile; each runs `fs_transfer` with policy replace, skip or keep) and Cancel (text; the
+  items stay held). Differences: the rows without an icon have not been compared pixel by pixel
+  with the Java; no
   "Copying..." or "Moving..." sheet and no Cancel (B8); the read-only rule ("Can't paste here")
   comes with Phase C.
 - **Field errors.** The Java shows `EditText.setError` (red icon and a popup). The Slint dialog shows

@@ -5,7 +5,7 @@
 // in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { KButton, KFab, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar } from "components.slint";
+import { KButton, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
@@ -83,6 +83,18 @@ export component MainWindow inherits Window {
     in property <bool> dlg-cancelable: true;
     /// Option rows between the text and the field.
     in property <[DlgOption]> dlg-options;
+    /// The progress sheet (MainActivity.ProgressUi): a title, the file line, the percent and a bar.
+    /// The percent is empty and the bar indeterminate until the first report; Cancel is left out
+    /// when `prog-cancellable` is false and greys out when `prog-cancel-enabled` is false.
+    in property <bool> prog-shown: false;
+    in property <string> prog-title;
+    in property <string> prog-line;
+    in property <string> prog-pct;
+    in property <float> prog-frac: 0;
+    in property <bool> prog-indeterminate: true;
+    in property <bool> prog-cancellable: true;
+    in property <bool> prog-cancel-enabled: true;
+    property <[string]> prog-no-buttons: [];
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -135,6 +147,8 @@ export component MainWindow inherits Window {
     callback dlg-button-clicked(int);
     callback dlg-cancelled();
     callback dlg-option-clicked(int);
+    /// The progress sheet's Cancel was tapped.
+    callback prog-cancel-clicked();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -610,6 +624,54 @@ export component MainWindow inherits Window {
             color: Theme.danger;
             font-size: Theme.sp(12px);
             wrap: word-wrap;
+        }
+    }
+
+    // The progress sheet (MainActivity.ProgressUi): above the dialog sheet, below the toast. Back
+    // and a tap outside do nothing; only Cancel acts, when there is one.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.prog-shown;
+        title: root.prog-title;
+        buttons: root.prog-cancellable ? ["Cancel"] : root.prog-no-buttons;
+        kinds: [1];
+        buttons-enabled: root.prog-cancel-enabled;
+        cancelable: false;
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.prog-cancel-clicked();
+        }
+        // the file line (14 sp, muted) and the percent (16 sp bold), 12 dp apart
+        HorizontalLayout {
+            spacing: 12px;
+            min-height: Theme.sp(19px);
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text {
+                    text: root.prog-line;
+                    color: Theme.text2;
+                    font-size: Theme.sp(14px);
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+            Text {
+                text: root.prog-pct;
+                color: Theme.text;
+                font-size: Theme.sp(16px);
+                font-weight: Theme.bold;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: 12px;
+        }
+        KProgressBar {
+            value: root.prog-frac;
+            indeterminate: root.prog-indeterminate;
         }
     }
 

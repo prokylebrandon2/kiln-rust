@@ -3,9 +3,12 @@
 //! does is a closure that the caller hands in.
 
 use std::rc::Rc;
+use std::time::Duration;
 
+use kiln_bridge::Job;
 use kiln_ui::DlgOption;
-use slint::{ModelRc, SharedString, VecModel};
+use serde_json::Value;
+use slint::{ModelRc, SharedString, Timer, VecModel};
 
 use crate::{App, app_do};
 
@@ -109,6 +112,118 @@ pub(crate) struct Dialog {
     serial: u64,
 }
 
+/// A running operation (`MainActivity.runOp`): the way to stop it, and what to do when it ends.
+pub(crate) struct Running {
+    id: u64,
+    job: Job,
+    cancelling: bool,
+    done: Box<dyn FnOnce(&App, &Value)>,
+}
+
+/// An operation that ends within this long never shows its sheet (`ProgressUi.SHOW_AFTER_MS`).
+const SHOW_AFTER_MS: u64 = 250;
+
+impl App {
+    /// `runOp`: run `work` on a worker thread with a [`Job`] that reports its progress to the
+    /// sheet and is cancelled from it; the sheet shows only if the work lasts. `done` then runs
+    /// on the UI thread with the result. An operation started while another runs is ignored.
+    pub(crate) fn run_op(
+        &self,
+        heading: &str,
+        cancellable: bool,
+        work: impl FnOnce(&Job) -> Value + Send + 'static,
+        done: impl FnOnce(&App, &Value) + 'static,
+    ) {
+        if self.op.borrow().is_some() {
+            return;
+        }
+        let id = self.op_gen.get() + 1;
+        self.op_gen.set(id);
+        let ui = &self.ui;
+        ui.set_prog_title(heading.into());
+        ui.set_prog_line(SharedString::new());
+        ui.set_prog_pct(SharedString::new());
+        ui.set_prog_frac(0.0);
+        ui.set_prog_indeterminate(true);
+        ui.set_prog_cancellable(cancellable);
+        ui.set_prog_cancel_enabled(true);
+        let job = Job::with_progress(move |event| {
+            let event = event.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.op_progress(id, &event));
+            });
+        });
+        *self.op.borrow_mut() = Some(Running {
+            id,
+            job: job.clone(),
+            cancelling: false,
+            done: Box::new(done),
+        });
+        Timer::single_shot(Duration::from_millis(SHOW_AFTER_MS), move || {
+            app_do(|app| app.op_show(id));
+        });
+        std::thread::spawn(move || {
+            let result = work(&job);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|app| app.op_done(&result));
+            });
+        });
+    }
+
+    /// The 250 ms are over: show the sheet if that operation is still running.
+    fn op_show(&self, id: u64) {
+        if self.op.borrow().as_ref().is_some_and(|op| op.id == id) {
+            self.ui.set_prog_shown(true);
+        }
+    }
+
+    /// A progress event, `{"frac": 0..1 or -1, "file": name}`: the file line, the percent and the
+    /// bar. The Java eases the bar between reports; here it jumps to each one.
+    fn op_progress(&self, id: u64, event: &Value) {
+        let cancelling = match self.op.borrow().as_ref() {
+            Some(op) if op.id == id => op.cancelling,
+            _ => return,
+        };
+        let ui = &self.ui;
+        let file = event["file"].as_str().unwrap_or_default();
+        if !cancelling && !file.is_empty() {
+            ui.set_prog_line(file.into());
+        }
+        let frac = event["frac"].as_f64().unwrap_or(-1.0);
+        if frac < 0.0 {
+            ui.set_prog_indeterminate(true);
+            ui.set_prog_pct(SharedString::new());
+        } else {
+            let frac = frac.min(1.0);
+            let percent = (frac * 100.0).floor() as u32;
+            ui.set_prog_indeterminate(false);
+            ui.set_prog_frac(frac as f32);
+            ui.set_prog_pct(format!("{percent}%").into());
+        }
+    }
+
+    /// The sheet's Cancel: stop the job, say so, and keep the sheet up until the job ends.
+    fn op_cancel(&self) {
+        let mut slot = self.op.borrow_mut();
+        let Some(op) = slot.as_mut() else {
+            return;
+        };
+        op.job.cancel();
+        op.cancelling = true;
+        self.ui.set_prog_line("Cancelling...".into());
+        self.ui.set_prog_cancel_enabled(false);
+    }
+
+    /// The work ended: close the sheet, then hand the result on.
+    fn op_done(&self, result: &Value) {
+        let Some(running) = self.op.borrow_mut().take() else {
+            return;
+        };
+        self.ui.set_prog_shown(false);
+        (running.done)(self, result);
+    }
+}
+
 impl App {
     /// Connect the dialog sheet's callbacks.
     pub(crate) fn wire_dialog(&self) {
@@ -116,6 +231,7 @@ impl App {
         ui.on_dlg_button_clicked(|i| app_do(|app| app.dialog_button(i)));
         ui.on_dlg_cancelled(|| app_do(|app| app.cancel_dialog()));
         ui.on_dlg_option_clicked(|i| app_do(|app| app.dialog_option(i)));
+        ui.on_prog_cancel_clicked(|| app_do(|app| app.op_cancel()));
     }
 
     /// Show a dialog (`new Sheet(..)...show()`). One that is already up is replaced.

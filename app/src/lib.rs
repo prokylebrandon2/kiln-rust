@@ -78,6 +78,10 @@ struct App {
     pull_stop: RefCell<Arc<AtomicBool>>,
     /// What the buttons of the dialog sheet that is up do (see dialog.rs).
     dialog: RefCell<dialog::Dialog>,
+    /// The operation whose progress sheet is up, or about to be (see dialog.rs), and a counter
+    /// that tells one from the next.
+    op: RefCell<Option<dialog::Running>>,
+    op_gen: Cell<u64>,
 }
 
 thread_local! {
@@ -123,6 +127,8 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         volumes_at: Cell::new(None),
         pull_stop: RefCell::new(Arc::new(AtomicBool::new(true))),
         dialog: RefCell::default(),
+        op: RefCell::default(),
+        op_gen: Cell::new(0),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 

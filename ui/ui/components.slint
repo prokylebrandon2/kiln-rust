@@ -480,6 +480,34 @@ export component KMeter inherits Rectangle {
     }
 }
 
+/// The stock horizontal `ProgressBar` of the progress sheet: a 4 dp bar in a 16 dp box (the size
+/// is the Material default, not read from the repo), accent on the line colour. Indeterminate: a
+/// segment 40% wide slides across the track and starts again.
+export component KProgressBar inherits Rectangle {
+    in property <float> value: 0;
+    in property <bool> indeterminate: false;
+    property <float> phase: Math.mod(animation-tick() / 1ms, 1400) / 1400;
+    height: 16px;
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.line;
+        clip: true;
+        if !root.indeterminate: Rectangle {
+            x: 0px;
+            width: parent.width * Math.max(0.0, Math.min(root.value, 1.0));
+            background: Theme.accent;
+        }
+        if root.indeterminate: Rectangle {
+            width: parent.width * 0.4;
+            x: parent.width * 1.4 * root.phase - parent.width * 0.4;
+            background: Theme.accent;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Top bar (MainActivity.buildUi)
 // ---------------------------------------------------------------------------------------------
@@ -977,6 +1005,8 @@ export component KSheet inherits Rectangle {
     in property <string> title;
     in property <[string]> buttons;
     in property <[int]> kinds;
+    /// False greys all buttons out (the progress sheet's Cancel after it was tapped).
+    in property <bool> buttons-enabled: true;
     in property <bool> cancelable: true;
     in property <length> inset-top: 0px;
     in property <length> inset-bottom: 0px;
@@ -1071,6 +1101,7 @@ export component KSheet inherits Rectangle {
                 for label[i] in root.buttons: KButton {
                     text: label;
                     kind: root.kinds[i];
+                    enabled: root.buttons-enabled;
                     clicked => {
                         root.button-clicked(i);
                     }
@@ -1081,6 +1112,7 @@ export component KSheet inherits Rectangle {
                 for label[i] in root.buttons: KButton {
                     text: root.n == 2 ? root.buttons[1 - i] : label;
                     kind: root.n == 2 ? root.kinds[1 - i] : root.kinds[i];
+                    enabled: root.buttons-enabled;
                     clicked => {
                         root.button-clicked(root.n == 2 ? 1 - i : i);
                     }

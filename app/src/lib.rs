@@ -24,6 +24,7 @@ mod folder_ui;
 pub mod host;
 pub mod icons;
 mod marks;
+mod open_ui;
 mod pack_ui;
 pub mod prefs;
 pub mod props;
@@ -46,7 +47,7 @@ use kiln_ui::{MainWindow, MarkRow, RowData, Theme};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::browser::{Browser, SortKey};
-pub use crate::host::{Event, Host, Look, Volume};
+pub use crate::host::{Event, Host, Look, OpenApp, OpenWith, Volume};
 use crate::prefs::Prefs;
 
 /// `Defaults.ANIM_SCALE`: Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
@@ -237,8 +238,12 @@ impl App {
 
     fn on_event(&self, event: Event) {
         match event {
-            // The user may just have granted access in Settings.
-            Event::Resumed => self.refresh_permission(),
+            // The user may just have granted access in Settings, or an editor may have changed
+            // a file taken out of an archive.
+            Event::Resumed => {
+                self.refresh_permission();
+                self.check_edited_file();
+            }
             Event::ConfigChanged => {
                 self.apply_look();
                 self.render_rows();

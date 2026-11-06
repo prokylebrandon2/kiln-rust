@@ -7,7 +7,7 @@ use std::rc::Rc;
 use jni::errors::Result as JniResult;
 use jni::objects::{GlobalRef, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
-use kiln_app::{Event, Host, Look, Volume};
+use kiln_app::{Event, Host, Look, OpenApp, OpenWith, Volume};
 use ndk::configuration::UiModeNight;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
@@ -439,6 +439,329 @@ fn put_clipboard(env: &mut JNIEnv<'_>, activity: &GlobalRef, text: &str) -> JniR
     Ok(())
 }
 
+/// Forget a Java exception a failed call left pending, so that the next JNI call is allowed.
+fn clear_pending(env: &mut JNIEnv<'_>) {
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+}
+
+/// The `_id` of the `MediaStore.Files` row whose `_data` is `path`, or `None` when the media
+/// scanner does not know the file:
+/// `contentResolver.query(base, ["_id"], "_data=?", [path], null)`.
+fn media_id(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    base: &JObject<'_>,
+    path: &str,
+) -> JniResult<Option<i64>> {
+    let resolver = env
+        .call_method(
+            activity,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )?
+        .l()?;
+    let columns = env.new_object_array(1, "java/lang/String", JObject::null())?;
+    let column = env.new_string("_id")?;
+    env.set_object_array_element(&columns, 0, &column)?;
+    let args = env.new_object_array(1, "java/lang/String", JObject::null())?;
+    let value = env.new_string(path)?;
+    env.set_object_array_element(&args, 0, &value)?;
+    let selection = env.new_string("_data=?")?;
+    let cursor = env
+        .call_method(
+            &resolver,
+            "query",
+            "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+            &[
+                JValue::Object(base),
+                JValue::Object(&columns),
+                JValue::Object(&selection),
+                JValue::Object(&args),
+                JValue::Object(&JObject::null()),
+            ],
+        )?
+        .l()?;
+    if cursor.is_null() {
+        return Ok(None);
+    }
+    let found = env
+        .call_method(&cursor, "moveToFirst", "()Z", &[])
+        .and_then(|v| v.z());
+    let id = match found {
+        Ok(true) => env
+            .call_method(&cursor, "getLong", "(I)J", &[JValue::Int(0)])
+            .and_then(|v| v.j())
+            .map(Some),
+        Ok(false) => Ok(None),
+        Err(e) => Err(e),
+    };
+    // The cursor is closed whatever happened above.
+    let _ = env.call_method(&cursor, "close", "()V", &[]);
+    clear_pending(env);
+    id
+}
+
+/// Stop Android from refusing to hand out `file://` URIs: an empty `StrictMode.VmPolicy`
+/// (`FileUriExposedException` is only thrown when the policy asks for it).
+fn relax_file_uri_policy(env: &mut JNIEnv<'_>) -> JniResult<()> {
+    let builder = env.new_object("android/os/StrictMode$VmPolicy$Builder", "()V", &[])?;
+    let policy = env
+        .call_method(&builder, "build", "()Landroid/os/StrictMode$VmPolicy;", &[])?
+        .l()?;
+    env.call_static_method(
+        "android/os/StrictMode",
+        "setVmPolicy",
+        "(Landroid/os/StrictMode$VmPolicy;)V",
+        &[JValue::Object(&policy)],
+    )?;
+    Ok(())
+}
+
+/// A URI for the file that other apps can read: `content://media/external/file/<id>` from
+/// `MediaStore.Files`, found by `_data`. When the media scanner has no row for it (or the query
+/// fails) it is `file://` instead, after relaxing StrictMode; some receiving apps cannot read that.
+/// The result is a local reference: use it inside the same `with_env` call.
+
+fn file_uri<'a>(env: &mut JNIEnv<'a>, activity: &GlobalRef, path: &str) -> JniResult<JObject<'a>> {
+    let volume = env.new_string("external")?;
+    let base = env
+        .call_static_method(
+            "android/provider/MediaStore$Files",
+            "getContentUri",
+            "(Ljava/lang/String;)Landroid/net/Uri;",
+            &[JValue::Object(&volume)],
+        )?
+        .l()?;
+    let id = media_id(env, activity, &base, path).unwrap_or_else(|_| {
+        clear_pending(env);
+        None
+    });
+    if let Some(id) = id {
+        return env
+            .call_static_method(
+                "android/content/ContentUris",
+                "withAppendedId",
+                "(Landroid/net/Uri;J)Landroid/net/Uri;",
+                &[JValue::Object(&base), JValue::Long(id)],
+            )?
+            .l();
+    }
+    relax_file_uri_policy(env)?;
+    let name = env.new_string(path)?;
+    let file = env.new_object(
+        "java/io/File",
+        "(Ljava/lang/String;)V",
+        &[JValue::Object(&name)],
+    )?;
+    env.call_static_method(
+        "android/net/Uri",
+        "fromFile",
+        "(Ljava/io/File;)Landroid/net/Uri;",
+        &[JValue::Object(&file)],
+    )?
+    .l()
+}
+
+/// A Java `CharSequence` (or `String`) as a Rust string, through `toString()`.
+fn char_seq(env: &mut JNIEnv<'_>, object: &JObject<'_>) -> JniResult<String> {
+    let text = env
+        .call_method(object, "toString", "()Ljava/lang/String;", &[])?
+        .l()?;
+    let text = JString::from(text);
+    Ok(env.get_string(&text)?.into())
+}
+
+/// `MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)`; `None` when Android has no type.
+fn mime_of(env: &mut JNIEnv<'_>, ext: &str) -> JniResult<Option<String>> {
+    let map = env
+        .call_static_method(
+            "android/webkit/MimeTypeMap",
+            "getSingleton",
+            "()Landroid/webkit/MimeTypeMap;",
+            &[],
+        )?
+        .l()?;
+    let ext = env.new_string(ext)?;
+    let mime = env
+        .call_method(
+            &map,
+            "getMimeTypeFromExtension",
+            "(Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&ext)],
+        )?
+        .l()?;
+    if mime.is_null() {
+        return Ok(None);
+    }
+    char_seq(env, &mime).map(Some)
+}
+
+/// `viewIntent`: `ACTION_VIEW` (or `ACTION_EDIT`) for the file's URI and type, with the read grant
+/// (and the write grant for edit) also given through the `ClipData`.
+fn view_intent<'a>(
+    env: &mut JNIEnv<'a>,
+    activity: &GlobalRef,
+    path: &str,
+    mime: &str,
+    edit: bool,
+) -> JniResult<JObject<'a>> {
+    let uri = file_uri(env, activity, path)?;
+    let action = env.new_string(if edit {
+        "android.intent.action.EDIT"
+    } else {
+        "android.intent.action.VIEW"
+    })?;
+    let intent = env.new_object(
+        "android/content/Intent",
+        "(Ljava/lang/String;)V",
+        &[JValue::Object(&action)],
+    )?;
+    let mime = env.new_string(mime)?;
+    env.call_method(
+        &intent,
+        "setDataAndType",
+        "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&uri), JValue::Object(&mime)],
+    )?;
+    let label = env.new_string("")?;
+    let clip = env
+        .call_static_method(
+            "android/content/ClipData",
+            "newRawUri",
+            "(Ljava/lang/CharSequence;Landroid/net/Uri;)Landroid/content/ClipData;",
+            &[JValue::Object(&label), JValue::Object(&uri)],
+        )?
+        .l()?;
+    env.call_method(
+        &intent,
+        "setClipData",
+        "(Landroid/content/ClipData;)V",
+        &[JValue::Object(&clip)],
+    )?;
+    // FLAG_GRANT_READ_URI_PERMISSION = 1, FLAG_GRANT_WRITE_URI_PERMISSION = 2
+    let flags = if edit { 1 | 2 } else { 1 };
+    env.call_method(
+        &intent,
+        "addFlags",
+        "(I)Landroid/content/Intent;",
+        &[JValue::Int(flags)],
+    )?;
+    Ok(intent)
+}
+
+/// `pm.queryIntentActivities(viewIntent, MATCH_DEFAULT_ONLY)`, without Kiln itself and without
+/// repeated packages (the loop of `appChooser`).
+fn apps_for(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    path: &str,
+    mime: &str,
+    edit: bool,
+) -> JniResult<Vec<OpenApp>> {
+    let intent = view_intent(env, activity, path, mime, edit)?;
+    let pm = env
+        .call_method(
+            activity,
+            "getPackageManager",
+            "()Landroid/content/pm/PackageManager;",
+            &[],
+        )?
+        .l()?;
+    let list = env
+        .call_method(
+            &pm,
+            "queryIntentActivities",
+            "(Landroid/content/Intent;I)Ljava/util/List;",
+            &[JValue::Object(&intent), JValue::Int(0x10000)],
+        )?
+        .l()?;
+    let own = package_name(env, activity)?;
+    let count = env.call_method(&list, "size", "()I", &[])?.i()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut apps = Vec::new();
+    for i in 0..count {
+        let item = env.with_local_frame(16, |env| -> JniResult<OpenApp> {
+            let info = env
+                .call_method(&list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(i)])?
+                .l()?;
+            let activity_info = env
+                .get_field(&info, "activityInfo", "Landroid/content/pm/ActivityInfo;")?
+                .l()?;
+            let package = env
+                .get_field(&activity_info, "packageName", "Ljava/lang/String;")?
+                .l()?;
+            let package = char_seq(env, &package)?;
+            let label = env
+                .call_method(
+                    &info,
+                    "loadLabel",
+                    "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;",
+                    &[JValue::Object(&pm)],
+                )?
+                .l()?;
+            let label = char_seq(env, &label)?;
+            Ok(OpenApp { package, label })
+        });
+        let app = match item {
+            Ok(app) => app,
+            Err(_) => {
+                clear_pending(env);
+                continue;
+            }
+        };
+        if app.package == own || !seen.insert(app.package.clone()) {
+            continue;
+        }
+        apps.push(app);
+    }
+    Ok(apps)
+}
+
+/// `launch` (one app, `setPackage`) or the "More options..." row (`Intent.createChooser`).
+/// An `ActivityNotFoundException` comes back as an error.
+fn launch(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    path: &str,
+    mime: &str,
+    edit: bool,
+    with: &OpenWith,
+) -> JniResult<()> {
+    let intent = view_intent(env, activity, path, mime, edit)?;
+    let intent = match with {
+        OpenWith::Package(package) => {
+            let package = env.new_string(package)?;
+            env.call_method(
+                &intent,
+                "setPackage",
+                "(Ljava/lang/String;)Landroid/content/Intent;",
+                &[JValue::Object(&package)],
+            )?;
+            intent
+        }
+        OpenWith::Chooser => {
+            let title = env.new_string(if edit { "Edit with" } else { "Open with" })?;
+            env.call_static_method(
+                "android/content/Intent",
+                "createChooser",
+                "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;",
+                &[JValue::Object(&intent), JValue::Object(&title)],
+            )?
+            .l()?
+        }
+    };
+    env.call_method(
+        activity,
+        "startActivity",
+        "(Landroid/content/Intent;)V",
+        &[JValue::Object(&intent)],
+    )?;
+    Ok(())
+}
+
 impl Host for AndroidHost {
     fn cache_dir(&self) -> PathBuf {
         self.cache.clone()
@@ -516,6 +839,22 @@ impl Host for AndroidHost {
 
     fn set_clipboard(&self, text: &str) {
         let _ = self.with_env(|env, activity| put_clipboard(env, activity, text));
+    }
+
+    fn mime_for_extension(&self, ext: &str) -> Option<String> {
+        self.with_env(|env, _| mime_of(env, ext)).ok().flatten()
+    }
+
+    fn open_apps(&self, path: &Path, mime: &str, edit: bool) -> Vec<OpenApp> {
+        let text = path.to_string_lossy().into_owned();
+        self.with_env(|env, activity| apps_for(env, activity, &text, mime, edit))
+            .unwrap_or_default()
+    }
+
+    fn open_file(&self, path: &Path, mime: &str, edit: bool, with: &OpenWith) -> bool {
+        let text = path.to_string_lossy().into_owned();
+        self.with_env(|env, activity| launch(env, activity, &text, mime, edit, with))
+            .is_ok()
     }
 
     fn finish(&self) {

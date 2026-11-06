@@ -227,11 +227,13 @@ impl Browser {
 
     /// Start reading `dir`. Returns the number the result must carry to still be wanted.
     pub fn begin_load(&mut self, dir: PathBuf, keep_selection: bool) -> u64 {
-        let moved = dir != self.cwd;
+        // Leaving an archive counts as a move even when the folder is the same one.
+        let moved = self.arc.is_some() || dir != self.cwd;
         if self.searching && moved {
             self.close_search_quiet();
         }
         self.cwd = dir;
+        self.arc = None;
         self.generation += 1;
         self.pending = true;
         if !keep_selection {

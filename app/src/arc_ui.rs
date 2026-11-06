@@ -2,8 +2,6 @@
 //! `saveArchive`, `discardArchive`, `withSession`, `arcTransfer`, `arcRename`, the archive menu and
 //! bottom bar). The state is in [`crate::arc`]; Extract, Check and Info are in `extract_ui.rs`.
 //!
-//! TODO(task 25): remove the `allow` below when every piece of this module is in use.
-#![allow(dead_code)]
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -196,15 +194,8 @@ impl App {
 
     /// `closeArchive`: leave the archive for the folder it was opened from.
     pub(crate) fn close_archive(&self) {
-        self.close_session();
-        let dir = {
-            let mut b = self.browser.borrow_mut();
-            b.arc = None;
-            b.selected.clear();
-            b.cwd.clone()
-        };
-        self.ui.set_arc_bar_shown(false);
-        self.ui.set_arc_dirty(false);
+        // load_dir closes the session, hides the bar and clears the archive.
+        let dir = self.browser.borrow().cwd.clone();
         self.load_dir(dir, false);
     }
 }
@@ -219,8 +210,7 @@ impl App {
         if matches!(kind, Some(Kind::Dir)) {
             self.arc_enter(key);
         } else {
-            // TODO(task 25): `arcFileSheet` (open options) comes with the Open part.
-            self.toast("Not in this build yet");
+            self.arc_file_sheet(key);
         }
         true
     }

@@ -283,6 +283,13 @@ impl App {
 
     /// `loadDir`: show `dir`. The engine lists it on a worker thread.
     pub(crate) fn load_dir(&self, dir: PathBuf, keep_selection: bool) {
+        // Leaving an archive by any route closes its editing session (Java loadDir).
+        let in_archive = self.browser.borrow().arc.is_some();
+        if in_archive {
+            self.close_session();
+            self.ui.set_arc_bar_shown(false);
+            self.ui.set_arc_dirty(false);
+        }
         let (generation, path, all, hidden) = {
             let mut b = self.browser.borrow_mut();
             let generation = b.begin_load(dir, keep_selection);
@@ -368,8 +375,8 @@ impl App {
                 let dir = self.browser.borrow().cwd.join(&key);
                 self.load_dir(dir, false);
             }
-            // Opening archives and files comes with the next part of Phase B.
-            _ => self.toast("Not in this build yet"),
+            Some(Kind::Archive | Kind::Set) => self.open_row(&key),
+            _ => self.open_file_row(&key),
         }
     }
 

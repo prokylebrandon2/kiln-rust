@@ -41,6 +41,24 @@ pub enum Event {
     LowMemory,
 }
 
+/// An app that can open a file (`ResolveInfo` of `PackageManager.queryIntentActivities`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenApp {
+    /// The package name, e.g. `com.example.viewer`.
+    pub package: String,
+    /// What the phone calls it (`ResolveInfo.loadLabel`).
+    pub label: String,
+}
+
+/// Where [`Host::open_file`] sends a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenWith {
+    /// Straight to one app (`Intent.setPackage`).
+    Package(String),
+    /// The system's own "Open with" list (`Intent.createChooser`, the "More options..." row).
+    Chooser,
+}
+
 /// The phone, as far as the app is concerned.
 pub trait Host {
     /// The app's cache folder (`Context.getCacheDir()`).
@@ -75,4 +93,22 @@ pub trait Host {
     fn finish(&self);
     /// Replace the handler that is told about [`Event`]s. It runs on the UI thread.
     fn set_event_handler(&self, handler: Box<dyn Fn(Event)>);
+
+    // ---- opening files in other apps (the defaults are the non-Android stub) ----------------
+
+    /// The MIME type Android knows for a file extension, without the dot
+    /// (`MimeTypeMap.getMimeTypeFromExtension`), or `None` when it does not know one.
+    fn mime_for_extension(&self, _ext: &str) -> Option<String> {
+        None
+    }
+    /// The apps that can open (or, with `edit`, edit) this file as `mime`, in the phone's order.
+    /// Kiln itself and repeated packages are left out. Empty when the phone cannot say.
+    fn open_apps(&self, _path: &Path, _mime: &str, _edit: bool) -> Vec<OpenApp> {
+        Vec::new()
+    }
+    /// Hand the file to another app: `ACTION_VIEW`, or `ACTION_EDIT` with `edit`. False when no
+    /// app could take it.
+    fn open_file(&self, _path: &Path, _mime: &str, _edit: bool, _with: &OpenWith) -> bool {
+        false
+    }
 }

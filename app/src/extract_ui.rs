@@ -142,8 +142,9 @@ impl App {
     ) {
         let msg = result["message"].as_str().unwrap_or_default();
         if result["ok"].as_bool().unwrap_or(false) {
-            // The redraw of the archive list comes with the archive screens.
             self.browser.borrow_mut().selected.clear();
+            self.render_rows();
+            self.render_chrome();
             self.show_extract_result(name, &dest, msg, overwrite);
         } else if result["cancelled"].as_bool().unwrap_or(false) {
             self.toast("Cancelled");

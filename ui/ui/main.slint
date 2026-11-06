@@ -5,10 +5,18 @@
 // in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { Icon, KButton, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar, PressArea } from "components.slint";
+import { Icon, KButton, KCheck, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar, PressArea } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
+
+/// One line of the Properties sheet (Props.Box): `kind` 0 is the name line, 1 a heading (`label`
+/// only), 2 a "label  value" row.
+export struct PropRow {
+    label: string,
+    value: string,
+    kind: int,
+}
 
 /// One icon of the folder icon picker: its icon name, its label, and whether it is the current one.
 export struct PickIcon {
@@ -210,6 +218,12 @@ export component MainWindow inherits Window {
     in property <int> pick-color-index: -1;
     in property <[PickIcon]> pick-icons;
     property <color> pick-tint: root.pick-color-index > 0 ? root.pick-colors[root.pick-color-index - 1] : Theme.accent;
+    /// The Properties sheet (Props.show): the lines, and for a folder the "Disable media scanning"
+    /// check box under them. Rust puts the box back if the file could not be changed.
+    in property <bool> props-shown: false;
+    in property <[PropRow]> props-rows;
+    in property <bool> props-has-nomedia: false;
+    in-out property <bool> props-nomedia: false;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -270,6 +284,11 @@ export component MainWindow inherits Window {
     callback pick-icon-clicked(int);
     callback pick-button-clicked(int);
     callback pick-cancelled();
+    /// The Properties sheet: a button (0 = Copy, 1 = OK), the check box turned on or off, and a tap
+    /// outside the card.
+    callback props-button-clicked(int);
+    callback props-nomedia-toggled(bool);
+    callback props-cancelled();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -745,6 +764,75 @@ export component MainWindow inherits Window {
             color: Theme.danger;
             font-size: Theme.sp(12px);
             wrap: word-wrap;
+        }
+    }
+
+    // The Properties sheet (Props.show): above the dialog sheet. The name, headings and "label
+    // value" rows (label 128 dp, bold, muted), then the check box, then Copy and OK.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.props-shown;
+        title: "Properties";
+        buttons: ["Copy", "OK"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.props-button-clicked(i);
+        }
+        cancelled => {
+            root.props-cancelled();
+        }
+        for row in root.props-rows: VerticalLayout {
+            padding-top: row.kind == 1 ? 10px : row.kind == 2 ? 3px : 0px;
+            padding-bottom: row.kind == 2 ? 3px : 2px;
+            if row.kind == 0: Text {
+                text: row.label;
+                color: Theme.text;
+                font-size: Theme.sp(18px);
+                font-weight: Theme.bold;
+                wrap: word-wrap;
+            }
+            if row.kind == 1: Text {
+                text: row.label;
+                color: Theme.accent;
+                font-size: Theme.sp(15px);
+                font-weight: Theme.bold;
+                wrap: word-wrap;
+            }
+            if row.kind == 2: HorizontalLayout {
+                Text {
+                    min-width: 128px;
+                    max-width: 128px;
+                    horizontal-stretch: 0;
+                    text: row.label;
+                    color: Theme.text2;
+                    font-size: Theme.sp(14px);
+                    font-weight: Theme.bold;
+                    wrap: word-wrap;
+                    vertical-alignment: top;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: row.value;
+                    color: Theme.text;
+                    font-size: Theme.sp(14px);
+                    wrap: word-wrap;
+                    vertical-alignment: top;
+                }
+            }
+        }
+        if root.props-has-nomedia: HorizontalLayout {
+            alignment: start;
+            padding-top: 6px;
+            KCheck {
+                text: "Disable media scanning";
+                checked <=> root.props-nomedia;
+                toggled(on) => {
+                    root.props-nomedia-toggled(on);
+                }
+            }
         }
     }
 

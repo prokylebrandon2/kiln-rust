@@ -276,6 +276,11 @@ export component MainWindow inherits Window {
     in-out property <bool> pack-each: false;
     in-out property <bool> pack-wipe: false;
     in property <string> pack-note;
+    in property <bool> ext-shown: false;
+    in property <string> ext-text;
+    in-out property <string> ext-where;
+    in-out property <string> ext-where-error;
+    in-out property <bool> ext-replace: false;
     /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
@@ -368,6 +373,9 @@ export component MainWindow inherits Window {
     callback pack-cancelled();
     /// The Pack result sheet: OK, or a tap outside the card.
     callback pack-res-dismissed();
+    callback ext-button-clicked(int);
+    callback ext-browse-clicked();
+    callback ext-cancelled();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
@@ -508,7 +516,7 @@ export component MainWindow inherits Window {
                     rows: root.rows;
                     up-row: root.up-row;
                     has-where: root.has-where;
-                    bottom-pad: root.bar-shown ? bar.height + 24px : 10px;
+                    bottom-pad: root.arc-bar-shown ? arc-bar.height + 24px : root.bar-shown ? bar.height + 24px : 10px;
                     row-clicked(i) => {
                         root.row-clicked(i);
                     }
@@ -676,6 +684,98 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // The archive bottom bar (renderBars inside an archive): an "Unsaved changes" row while
+                // there are edits, then the tiles. Same card as the file bar. A tile with an empty label
+                // is an empty slot (Add in a locked archive): it keeps its width and draws nothing.
+                arc-bar := Rectangle {
+                    property <length> save-h: root.arc-dirty ? save-row.preferred-height : 0px;
+
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height - self.height - 12px + (root.arc-bar-shown ? 0px : 70px);
+                    width: parent.width - 24px;
+                    height: self.save-h + arc-probe.preferred-height + 12px;
+                    background: Theme.surface;
+                    border-radius: 20px;
+                    border-width: Theme.hair;
+                    border-color: Theme.line;
+                    drop-shadow-color: #00000040;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-offset-y: 4px;
+                    opacity: root.arc-bar-shown ? 1 : 0;
+                    visible: self.opacity > 0.01;
+                    animate opacity {
+                        duration: root.arc-bar-shown ? Theme.dur(240ms) : Theme.dur(160ms);
+                        easing: ease-out;
+                    }
+                    animate y {
+                        duration: root.arc-bar-shown ? Theme.dur(240ms) : Theme.dur(160ms);
+                        easing: ease-out;
+                    }
+
+                    arc-probe := KTile {
+                        visible: false;
+                        icon: "copy";
+                        label: "Copy";
+                    }
+
+                    // saveRow: "Unsaved changes" 14 sp bold, Discard (text button), Save (filled), padding 12/4/4/0 dp
+                    save-row := HorizontalLayout {
+                        x: 6px;
+                        y: 6px;
+                        width: parent.width - 12px;
+                        height: arc-bar.save-h;
+                        visible: root.arc-dirty;
+                        padding-left: 12px;
+                        padding-top: 4px;
+                        padding-right: 4px;
+                        padding-bottom: 0px;
+                        spacing: 6px;
+                        Text {
+                            text: "Unsaved changes";
+                            color: Theme.text;
+                            font-size: Theme.sp(14px);
+                            font-weight: Theme.bold;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            KButton {
+                                text: "Discard";
+                                kind: 2;
+                                clicked => {
+                                    root.arc-discard-clicked();
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            KButton {
+                                text: "Save";
+                                kind: 0;
+                                clicked => {
+                                    root.arc-save-clicked();
+                                }
+                            }
+                        }
+                    }
+
+                    for tile[i] in root.arc-tiles: KTile {
+                        x: 6px + i * ((parent.width - 12px) / root.arc-tiles.length);
+                        y: 6px + arc-bar.save-h;
+                        width: (parent.width - 12px) / root.arc-tiles.length;
+                        visible: tile.label != "";
+                        icon: tile.icon;
+                        label: tile.label;
+                        tint: tile.kind == 0 ? Theme.accent : tile.kind == 2 ? Theme.danger : Theme.text;
+                        clicked => {
+                            root.arc-tile-clicked(i);
                         }
                     }
                 }
@@ -1010,6 +1110,50 @@ export component MainWindow inherits Window {
             color: Theme.text2;
             font-size: Theme.sp(12px);
             wrap: word-wrap;
+        }
+    }
+
+    // The Extract sheet (MainActivity.extractDialog): above the Pack sheet. A line of text, the
+    // folder with Browse, and the box "Replace files that already exist".
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.ext-shown;
+        title: "Extract";
+        buttons: ["Cancel", "Extract"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.ext-button-clicked(i);
+        }
+        cancelled => {
+            root.ext-cancelled();
+        }
+        KSheetText {
+            text: root.ext-text;
+        }
+        KFormField {
+            placeholder: "Folder";
+            text <=> root.ext-where;
+            error <=> root.ext-where-error;
+        }
+        Rectangle {
+            height: 8px;
+        }
+        KButton {
+            text: "Browse";
+            kind: 1;
+            clicked => {
+                root.ext-browse-clicked();
+            }
+        }
+        Rectangle {
+            height: 4px;
+        }
+        KCheck {
+            text: "Replace files that already exist";
+            checked <=> root.ext-replace;
         }
     }
 

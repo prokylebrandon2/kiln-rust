@@ -17,6 +17,7 @@ pub mod crash;
 #[allow(dead_code)]
 mod dialog;
 pub mod engine;
+mod extract_ui;
 pub mod fmt;
 pub mod host;
 pub mod icons;
@@ -89,6 +90,7 @@ struct App {
     op_gen: Cell<u64>,
     props: RefCell<props_ui::Open>,
     pack: RefCell<pack_ui::Open>,
+    extract: RefCell<extract_ui::Open>,
 }
 
 thread_local! {
@@ -138,6 +140,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         op_gen: Cell::new(0),
         props: RefCell::default(),
         pack: RefCell::default(),
+        extract: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -220,6 +223,7 @@ impl App {
         self.wire_dialog();
         self.wire_props();
         self.wire_pack();
+        self.wire_extract();
         self.wire_about();
     }
 

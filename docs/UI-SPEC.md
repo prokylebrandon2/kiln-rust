@@ -351,7 +351,7 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 ## Main screen, Phase B part 4: the selection bar and Delete (`MainActivity.deleteSelected`, `deleteForGood`)
 
 - **Bar.** While rows are selected: Copy, Move, Delete (danger tint) and Pack tiles. Only Delete is
-  built; Copy and Move are built too (B6), and Pack toasts "Not in this build yet" until B21. The Java shows a
+  built; Copy and Move are built too (B6), and Pack opens the Pack form (see part 7 below). The Java shows a
   single Copy tile in a protected (read-only) folder; that rule comes with Root and Shizuku
   (Phase C), and the archive bars come with the archive part.
 - **Delete.** A dialog "Delete <what>?" (what is the quoted name for one item, "N items" for more),
@@ -478,6 +478,57 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - In the Java a set is a folder, so its "Archive properties" block never runs. It is ported as is.
 - The sheet and `props_ui.rs` were written without a full build of the app crate; check them in CI
   before anything else in this part.
+
+## Main screen, Phase B part 7: the Pack sheets (`MainActivity.packDialog`, `runPack`, `packResult`)
+
+- **Where it opens.** The Pack tile of the selection bar, for any selection. The sheet is titled
+  `Pack "name"` for one item and `Pack N items` for more. Back closes the form, and the result sheet too.
+- **Fields.** Name (the first item's name without its extension plus ".kiln"; for several items
+  "archive" in the storage root, otherwise the name of the current folder), Save in (the current
+  folder) with a Browse button, then the check boxes. "Encrypt with a password" is on; only while it
+  is on, Password (8+ characters), Repeat password, "Show passwords" and "Don't compress (faster for
+  photos, music, video)" show under it. Then "Separate archive for each file" and "Delete original
+  files after packing" (it starts from the saved default, off when none is saved). Buttons: Cancel
+  (text) and Create (filled).
+- **Name and note.** Ticking "Encrypt" or "Separate archive" runs the Java's `sync`. With Separate on,
+  the ending ".kiln" is cut off; with it off, the ending is put back (unless the name is empty). A
+  note under the boxes says what Separate does: "Creates a folder. File names are replaced by random
+  names; open the folder in Kiln to see the real ones." with encryption, "Creates a folder with one
+  archive per file." without.
+- **Create.** The fields are checked in this order, and the first failure keeps the sheet open with
+  a red line under its field: a name that is empty or has a slash ("Enter a name (no slashes)"), a
+  folder that is not there ("That folder doesn't exist"), and, with Encrypt on, a password shorter
+  than 8 ("At least 8 characters") or a repeat that differs ("Passwords don't match"). If the target
+  already exists, a dialog `Replace "name"?` comes first, with "It already exists.", Cancel (text)
+  and Replace (danger).
+- **Run.** The progress sheet "Packing..." (cancellable) runs the engine's `pack` on a worker thread
+  with the items, the target, the options, the password and the thread count 0. When it ends:
+  ok clears the selection, reads the folder again and opens the result sheet; a cancelled run toasts
+  "Cancelled"; anything else opens the message sheet "Couldn't create the archive" with the engine's
+  message.
+- **Result sheet.** A head with an accent-tinted icon (set for separate archives, lock when
+  encrypted, archive otherwise), the heading "Archive created" or "Archives created" and the name of
+  the target. When the engine's closing line can be read, three tiles follow (the count, with
+  "archive(s)" or "file(s) packed"; the stored size; the time in seconds) and a Compression card:
+  "Saved N%" or "No saving", a meter and "<original> became <stored>". When it cannot be read, a
+  "Result" row shows the line ("Done" if it is empty). The detail rows are Location, Layout, Encryption,
+  Parallel (the first bracket of the line that mentions cores or threads), Compression ("Stored
+  only", when set) and Originals ("N files deleted", plus ", M couldn't be deleted"; only when
+  "Delete original files" was ticked). OK closes the sheet.
+
+### Differences from the Java in this part
+
+- Browse (`pickFolder`) toasts "Not in this build yet"; the chooser comes with Extract.
+- There is no `Priv.involves` check ("Can't pack here yet"); it comes with Root and Shizuku (Phase C).
+- The thread count is always Automatic (jobs = 0); Settings is Phase C.
+- No autofocus on the Name field. A long name in the result sheet is cut at the end, not in the middle.
+- Each form field has its own red error line (the Java uses `EditText.setError`). The tint of the
+  result sheet's icon tile is 0.15 (the Java's 0x26).
+- Ticking "Separate archive" turns "x.kiln" into "x." (the Java cuts four characters). It is ported as is.
+- The password length counts characters, not UTF-16 units.
+- The engine's closing line is read from its start; the Java's regex finds it anywhere in the message.
+- The form, the result sheet and `pack_ui.rs` were written without being seen on screen; check them
+  on a device. The line reader has unit tests.
 
 ## Known differences from the Java
 

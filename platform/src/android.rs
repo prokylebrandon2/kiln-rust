@@ -7,8 +7,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use jni::errors::Result as JniResult;
-use jni::objects::{GlobalRef, JObject, JString, JValue};
+use jni::objects::{GlobalRef, JByteArray, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
+use kiln_app::thumbs::{Pixels, ThumbDecoder, ThumbKind, sample_size};
 use kiln_app::{Event, Host, Incoming, Look, OpenApp, OpenWith, Volume};
 use ndk::configuration::UiModeNight;
 use slint::android::AndroidApp;
@@ -1124,7 +1125,223 @@ impl Host for AndroidHost {
         });
     }
 
+    fn thumb_decoder(&self) -> Option<Arc<dyn ThumbDecoder>> {
+        Some(Arc::new(AndroidThumbs {
+            vm: self.vm.clone(),
+        }))
+    }
+
     fn set_event_handler(&self, handler: Box<dyn Fn(Event)>) {
         *self.handler.borrow_mut() = Some(handler);
     }
+}
+
+// ---- thumbnails (`Thumbs.load`) ----------------------------------------------------------------
+
+const FILE_SIG: &str =
+    "(Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;";
+const BYTES_SIG: &str = "([BIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;";
+/// More pixels than any preview needs: a bitmap this big is not turned into pixels.
+const MAX_BITMAP_PIXELS: usize = 4_000_000;
+
+/// Pictures, cover art and video frames, decoded small by the framework. It holds only the VM, so
+/// the worker threads can share it; every call attaches its thread for the length of the call.
+struct AndroidThumbs {
+    vm: Arc<JavaVM>,
+}
+
+impl ThumbDecoder for AndroidThumbs {
+    fn decode(&self, path: &Path, kind: ThumbKind, px: u32) -> Option<Pixels> {
+        let text = path.to_string_lossy().into_owned();
+        let px = i32::try_from(px).unwrap_or(i32::MAX);
+        let mut env = self.vm.attach_current_thread().ok()?;
+        let out = env.with_local_frame(64, |env| thumb_pixels(env, &text, kind, px));
+        if out.is_err() {
+            clear_pending(&mut env);
+        }
+        out.ok().flatten()
+    }
+}
+
+fn thumb_pixels(
+    env: &mut JNIEnv<'_>,
+    path: &str,
+    kind: ThumbKind,
+    px: i32,
+) -> JniResult<Option<Pixels>> {
+    match kind {
+        ThumbKind::Image => {
+            let file = env.new_string(path)?;
+            // Only the size is read here: with `inJustDecodeBounds` the call answers null.
+            let bounds = bitmap_options(env, true, 1)?;
+            env.call_static_method(
+                "android/graphics/BitmapFactory",
+                "decodeFile",
+                FILE_SIG,
+                &[JValue::Object(&file), JValue::Object(&bounds)],
+            )?;
+            let sample = sample_for(env, &bounds, px)?;
+            let options = bitmap_options(env, false, sample)?;
+            let bitmap = env
+                .call_static_method(
+                    "android/graphics/BitmapFactory",
+                    "decodeFile",
+                    FILE_SIG,
+                    &[JValue::Object(&file), JValue::Object(&options)],
+                )?
+                .l()?;
+            bitmap_pixels(env, bitmap)
+        }
+        ThumbKind::Audio | ThumbKind::Video => retriever_pixels(env, path, kind, px),
+    }
+}
+
+/// `new BitmapFactory.Options()` with `inJustDecodeBounds`, or with `inSampleSize`.
+fn bitmap_options<'a>(
+    env: &mut JNIEnv<'a>,
+    bounds_only: bool,
+    sample: i32,
+) -> JniResult<JObject<'a>> {
+    let options = env.new_object("android/graphics/BitmapFactory$Options", "()V", &[])?;
+    if bounds_only {
+        env.set_field(&options, "inJustDecodeBounds", "Z", JValue::Bool(1))?;
+    } else {
+        env.set_field(&options, "inSampleSize", "I", JValue::Int(sample))?;
+    }
+    Ok(options)
+}
+
+/// The sample size for the size a bounds-only decode left in `bounds`.
+fn sample_for(env: &mut JNIEnv<'_>, bounds: &JObject<'_>, px: i32) -> JniResult<i32> {
+    let width = env.get_field(bounds, "outWidth", "I")?.i()?;
+    let height = env.get_field(bounds, "outHeight", "I")?.i()?;
+    Ok(sample_size(width, height, px))
+}
+
+/// `MediaMetadataRetriever`: the cover art of a song, or a frame one second into a video. The
+/// retriever is always released, as the Java does in `finally`.
+fn retriever_pixels(
+    env: &mut JNIEnv<'_>,
+    path: &str,
+    kind: ThumbKind,
+    px: i32,
+) -> JniResult<Option<Pixels>> {
+    let retriever = env.new_object("android/media/MediaMetadataRetriever", "()V", &[])?;
+    let result = (|| -> JniResult<Option<Pixels>> {
+        let file = env.new_string(path)?;
+        env.call_method(
+            &retriever,
+            "setDataSource",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&file)],
+        )?;
+        if kind == ThumbKind::Audio {
+            return cover_art(env, &retriever, px);
+        }
+        // OPTION_CLOSEST_SYNC is 2.
+        let frame = env
+            .call_method(
+                &retriever,
+                "getScaledFrameAtTime",
+                "(JIII)Landroid/graphics/Bitmap;",
+                &[
+                    JValue::Long(1_000_000),
+                    JValue::Int(2),
+                    JValue::Int(px),
+                    JValue::Int(px),
+                ],
+            )?
+            .l()?;
+        bitmap_pixels(env, frame)
+    })();
+    clear_pending(env);
+    let _ = env.call_method(&retriever, "release", "()V", &[]);
+    clear_pending(env);
+    result
+}
+
+/// `getEmbeddedPicture()`, decoded small. `None` when the file has no picture.
+fn cover_art(env: &mut JNIEnv<'_>, retriever: &JObject<'_>, px: i32) -> JniResult<Option<Pixels>> {
+    let art = env
+        .call_method(retriever, "getEmbeddedPicture", "()[B", &[])?
+        .l()?;
+    if art.is_null() {
+        return Ok(None);
+    }
+    let art = JByteArray::from(art);
+    let length = env.get_array_length(&art)?;
+    let bounds = bitmap_options(env, true, 1)?;
+    env.call_static_method(
+        "android/graphics/BitmapFactory",
+        "decodeByteArray",
+        BYTES_SIG,
+        &[
+            JValue::Object(&art),
+            JValue::Int(0),
+            JValue::Int(length),
+            JValue::Object(&bounds),
+        ],
+    )?;
+    let sample = sample_for(env, &bounds, px)?;
+    let options = bitmap_options(env, false, sample)?;
+    let bitmap = env
+        .call_static_method(
+            "android/graphics/BitmapFactory",
+            "decodeByteArray",
+            BYTES_SIG,
+            &[
+                JValue::Object(&art),
+                JValue::Int(0),
+                JValue::Int(length),
+                JValue::Object(&options),
+            ],
+        )?
+        .l()?;
+    bitmap_pixels(env, bitmap)
+}
+
+/// A bitmap's pixels as R, G, B, A bytes (`Bitmap.getPixels` gives ARGB ints). The bitmap is
+/// recycled. `None` for null (a picture that could not be decoded) and for an absurd size.
+fn bitmap_pixels(env: &mut JNIEnv<'_>, bitmap: JObject<'_>) -> JniResult<Option<Pixels>> {
+    if bitmap.is_null() {
+        return Ok(None);
+    }
+    let width = env.call_method(&bitmap, "getWidth", "()I", &[])?.i()?;
+    let height = env.call_method(&bitmap, "getHeight", "()I", &[])?.i()?;
+    let count = usize::try_from(width)
+        .ok()
+        .zip(usize::try_from(height).ok())
+        .and_then(|(w, h)| w.checked_mul(h))
+        .filter(|n| *n > 0 && *n <= MAX_BITMAP_PIXELS);
+    let Some(count) = count else {
+        let _ = env.call_method(&bitmap, "recycle", "()V", &[]);
+        return Ok(None);
+    };
+    let array = env.new_int_array(i32::try_from(count).unwrap_or(i32::MAX))?;
+    env.call_method(
+        &bitmap,
+        "getPixels",
+        "([IIIIIII)V",
+        &[
+            JValue::Object(&array),
+            JValue::Int(0),
+            JValue::Int(width),
+            JValue::Int(0),
+            JValue::Int(0),
+            JValue::Int(width),
+            JValue::Int(height),
+        ],
+    )?;
+    let mut argb = vec![0_i32; count];
+    env.get_int_array_region(&array, 0, &mut argb)?;
+    let _ = env.call_method(&bitmap, "recycle", "()V", &[]);
+    let mut rgba = Vec::with_capacity(count * 4);
+    for p in argb {
+        rgba.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
+    }
+    Ok(Some(Pixels {
+        width: width as u32,
+        height: height as u32,
+        rgba,
+    }))
 }

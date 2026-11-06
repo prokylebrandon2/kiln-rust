@@ -31,6 +31,8 @@ pub mod props;
 mod props_ui;
 mod pull;
 pub mod sniff;
+pub mod thumbs;
+mod thumbs_ui;
 // Not used until the recycle bin is wired in (B5); the allow goes with it.
 #[allow(dead_code)]
 mod trash;
@@ -96,6 +98,7 @@ struct App {
     extract: RefCell<extract_ui::Open>,
     chooser: RefCell<folder_ui::Chooser>,
     arcui: RefCell<arc_ui::ArcUi>,
+    thumbs: RefCell<thumbs_ui::ThumbUi>,
 }
 
 thread_local! {
@@ -147,6 +150,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         pack: RefCell::default(),
         extract: RefCell::default(),
         chooser: RefCell::default(),
+        thumbs: RefCell::default(),
         arcui: RefCell::new(arc_ui::ArcUi {
             incoming: host.incoming(),
             ..Default::default()
@@ -237,6 +241,7 @@ impl App {
         self.wire_arc();
         self.wire_folder();
         self.wire_about();
+        self.wire_thumbs();
     }
 
     fn on_event(&self, event: Event) {
@@ -249,9 +254,11 @@ impl App {
             }
             Event::ConfigChanged => {
                 self.apply_look();
+                self.thumb_look();
                 self.render_rows();
             }
-            Event::Paused | Event::LowMemory => {}
+            Event::LowMemory => self.thumb_trim(),
+            Event::Paused => {}
         }
     }
 

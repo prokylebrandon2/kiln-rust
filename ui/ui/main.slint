@@ -370,6 +370,7 @@ export component MainWindow inherits Window {
     callback row-clicked(int);
     callback row-long-pressed(int);
     callback list-scrolled(length);
+    callback list-visible(int, int);
     callback query-edited(string);
     callback bar-clicked(int);
     callback paste-new-folder();
@@ -568,6 +569,9 @@ export component MainWindow inherits Window {
                     }
                     row-long-pressed(i) => {
                         root.row-long-pressed(i);
+                    }
+                    visible-changed(first, shown) => {
+                        root.list-visible(first, shown);
                     }
                     scrolled(y) => {
                         root.list-scrolled(y);

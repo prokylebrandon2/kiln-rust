@@ -19,6 +19,9 @@ export struct RowData {
     where-line: string,
     size-text: string,
     selected: bool,
+    /// A thumbnail of the file, drawn instead of the icon while `has-preview` (and the row is not selected).
+    preview: image,
+    has-preview: bool,
 }
 
 export component KFileList inherits Rectangle {
@@ -40,6 +43,9 @@ export component KFileList inherits Rectangle {
     callback pull-started();
     /// The pull ended; `refresh` is true when it was long enough to reload the folder.
     callback pull-ended(bool);
+    /// The slots that are built changed: the index of the first one and how many there are (the
+    /// ".." row is a slot). Thumbnails are only asked for the rows in view.
+    callback visible-changed(int, int);
     out property <length> scroll-pos: Math.max(0px, -flick.content-y - root.slack);
     /// How far the finger has pulled the list down from the top (1:1).
     out property <length> over: Math.max(0px, flick.content-y + root.slack);
@@ -71,6 +77,14 @@ export component KFileList inherits Rectangle {
 
     init => {
         flick.content-y = -root.slack;
+    }
+
+    changed first => {
+        root.visible-changed(root.first, root.shown);
+    }
+
+    changed shown => {
+        root.visible-changed(root.first, root.shown);
     }
 
     /// Scroll to the very top (a new folder always starts there).
@@ -158,6 +172,8 @@ export component KFileList inherits Rectangle {
                 where-line: self.is-up ? "" : self.d.where-line;
                 size-text: self.is-up ? "" : self.d.size-text;
                 selected: !self.is-up && self.d.selected;
+                preview: self.d.preview;
+                has-preview: !self.is-up && self.d.has-preview;
                 clicked => {
                     root.row-clicked(self.is-up ? -1 : self.idx);
                 }

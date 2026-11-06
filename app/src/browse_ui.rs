@@ -71,7 +71,7 @@ fn color_index(color: u32) -> i32 {
 }
 
 /// One row of the list as the Slint list wants it.
-fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
+fn row_data(row: &Row, selected: bool, where_line: &str, preview: Option<slint::Image>) -> RowData {
     let (tint_kind, tint) = match row.tint {
         Tint::Accent => (0, Color::default()),
         Tint::Text2 => (1, Color::default()),
@@ -88,6 +88,8 @@ fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
         detail: row.sub.as_str().into(),
         where_line: where_line.into(),
         size_text: row.right.as_str().into(),
+        has_preview: preview.is_some(),
+        preview: preview.unwrap_or_default(),
         selected,
     }
 }
@@ -163,13 +165,14 @@ impl App {
         // A folder's picked icon and colour (`dirIcon`, and `Defaults.folderColor` in the row).
         let picked_icons = self.prefs.folder_icon_map();
         let picked_colors = self.prefs.folder_color_map();
+        let thumb_px = self.thumb_px(&b);
         let rows: Vec<RowData> = b
             .rows
             .iter()
             .map(|r| {
                 let selected = b.selected.contains(&r.key);
                 if r.kind != Kind::Dir {
-                    return row_data(r, selected, where_line);
+                    return row_data(r, selected, where_line, self.thumb_cached(&b, r, thumb_px));
                 }
                 let path = b.cwd.join(&r.key).to_string_lossy().into_owned();
                 let mut r = r.clone();
@@ -179,10 +182,11 @@ impl App {
                 if let Some(color) = picked_colors.get(&path).and_then(Value::as_i64) {
                     r.tint = Tint::Rgb(color as u32 & 0x00FF_FFFF);
                 }
-                row_data(&r, selected, where_line)
+                row_data(&r, selected, where_line, None)
             })
             .collect();
         self.model.set_vec(rows);
+        self.thumb_request();
     }
 
     /// Everything around the list: the top bar, the banner, the empty line, the bars and buttons.

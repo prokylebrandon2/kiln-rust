@@ -7,6 +7,9 @@
 //! All methods are called on the UI thread (the one running the Slint event loop).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::thumbs::ThumbDecoder;
 
 /// What the system tells the UI about how to look: the colour scheme and the two user scales.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,5 +141,14 @@ pub trait Host {
     /// app could take it.
     fn open_file(&self, _path: &Path, _mime: &str, _edit: bool, _with: &OpenWith) -> bool {
         false
+    }
+
+    // ---- thumbnails (the default is the non-Android stub: no previews) ----------------------
+
+    /// What worker threads call to decode the small previews of pictures, cover art and video
+    /// frames, or `None` when the phone cannot decode them (no previews are shown then). It is
+    /// called off the UI thread, so it must not touch anything the UI owns.
+    fn thumb_decoder(&self) -> Option<Arc<dyn ThumbDecoder>> {
+        None
     }
 }

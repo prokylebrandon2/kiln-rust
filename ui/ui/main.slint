@@ -5,10 +5,113 @@
 // in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { KButton, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar } from "components.slint";
+import { Icon, KButton, KFab, KProgressBar, KSheet, KSheetOption, KSheetText, KTextField, KTile, KToast, KTopBar, PressArea } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
+
+/// One icon of the folder icon picker: its icon name, its label, and whether it is the current one.
+export struct PickIcon {
+    icon: string,
+    label: string,
+    current: bool,
+}
+
+/// One colour of the picker's swatch row (iconPicker): a 42 dp tall cell with a 34 dp circle,
+/// 3 dp in the text colour and a white tick when it is the current one, else 1 dp in k_line.
+component KSwatch inherits Rectangle {
+    in property <color> dot;
+    in property <bool> current: false;
+    callback clicked();
+    preferred-height: 42px;
+    preferred-width: 0px;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 4px;
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        background: root.dot;
+        border-width: root.current ? 3px : Theme.hair;
+        border-color: root.current ? Theme.text : Theme.line;
+        if root.current: Text {
+            width: parent.width;
+            height: parent.height;
+            text: "\u{2713}";
+            color: #ffffff;
+            font-size: Theme.sp(16px);
+            font-weight: Theme.bold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 21px;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// One icon cell of the picker grid: 2 dp margin, radius 12, padding 2 / 8 / 2 / 6, a 40 dp icon
+/// over the label (11 sp, one line). The current one has a k_chip fill and an accent outline and
+/// a bold label in the normal text colour.
+component KPickCell inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> current: false;
+    in property <color> tint: Theme.accent;
+    callback clicked();
+    preferred-width: 0px;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    VerticalLayout {
+        padding: 2px;
+        Rectangle {
+            border-radius: 12px;
+            background: root.current ? Theme.chip : transparent;
+            border-width: root.current ? Theme.hair : 0px;
+            border-color: Theme.accent;
+            VerticalLayout {
+                padding-left: 2px;
+                padding-top: 8px;
+                padding-right: 2px;
+                padding-bottom: 6px;
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Icon {
+                        width: 40px;
+                        height: 40px;
+                        name: root.icon;
+                        tint: root.tint;
+                    }
+                }
+                Text {
+                    text: root.label;
+                    color: root.current ? Theme.text : Theme.text2;
+                    font-size: Theme.sp(11px);
+                    font-weight: root.current ? Theme.bold : 400;
+                    horizontal-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+            PressArea {
+                width: 100%;
+                height: 100%;
+                radius: 12px;
+                clicked => {
+                    root.clicked();
+                }
+            }
+        }
+    }
+}
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
 export { MarkRow, RowData, Theme }
@@ -95,6 +198,18 @@ export component MainWindow inherits Window {
     in property <bool> prog-cancellable: true;
     in property <bool> prog-cancel-enabled: true;
     property <[string]> prog-no-buttons: [];
+    /// The folder icon picker (MainActivity.iconPicker): a title, an optional row of colour swatches
+    /// (folders in the list, not bookmarks), then the icons, 4 to a row.
+    in property <bool> pick-shown: false;
+    in property <string> pick-title;
+    in property <bool> pick-has-colors: false;
+    /// The colours after the first swatch; the first ("default") is drawn in the accent colour.
+    in property <[color]> pick-colors;
+    /// The swatch with the ring and the tick: 0 is "default", 1.. follow `pick-colors`, -1 none.
+    /// The icons below are tinted with it (accent for 0 and -1).
+    in property <int> pick-color-index: -1;
+    in property <[PickIcon]> pick-icons;
+    property <color> pick-tint: root.pick-color-index > 0 ? root.pick-colors[root.pick-color-index - 1] : Theme.accent;
     /// Pulses the Kiln mark (glowMark): flip to false, then back to true.
     in-out property <bool> glow-run: true;
     /// The info strip behind the list (pullPanel): its lines, and how full the storage is (0..1).
@@ -149,6 +264,12 @@ export component MainWindow inherits Window {
     callback dlg-option-clicked(int);
     /// The progress sheet's Cancel was tapped.
     callback prog-cancel-clicked();
+    /// The folder icon picker: a swatch (0 = default), an icon, a button (0 = Use default, 1 = Cancel),
+    /// and a tap outside the card.
+    callback pick-swatch-clicked(int);
+    callback pick-icon-clicked(int);
+    callback pick-button-clicked(int);
+    callback pick-cancelled();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -624,6 +745,58 @@ export component MainWindow inherits Window {
             color: Theme.danger;
             font-size: Theme.sp(12px);
             wrap: word-wrap;
+        }
+    }
+
+    // The folder icon picker (iconPicker): above the dialog sheet. A swatch keeps the sheet open
+    // (Rust saves the colour and moves the tick); an icon or a button is for Rust to act on.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.pick-shown;
+        title: root.pick-title;
+        buttons: ["Use default", "Cancel"];
+        kinds: [1, 2];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.pick-button-clicked(i);
+        }
+        cancelled => {
+            root.pick-cancelled();
+        }
+        // 11 cells (default + 10 colours), 6 to a row; the last row is padded with empty cells
+        if root.pick-has-colors: VerticalLayout {
+            for r in [0, 1]: HorizontalLayout {
+                for c in 6: KSwatch {
+                    property <int> at: r * 6 + c;
+                    visible: self.at < 1 + root.pick-colors.length;
+                    dot: self.at == 0 ? Theme.accent : root.pick-colors[self.at - 1];
+                    current: root.pick-color-index == self.at;
+                    clicked => {
+                        root.pick-swatch-clicked(self.at);
+                    }
+                }
+            }
+        }
+        if root.pick-has-colors: Rectangle {
+            height: 10px;
+        }
+        // 4 columns; 5 rows hold the 18 icons, the last row is padded with empty cells
+        VerticalLayout {
+            for r in [0, 1, 2, 3, 4]: HorizontalLayout {
+                for c in 4: KPickCell {
+                    property <int> at: r * 4 + c;
+                    visible: self.at < root.pick-icons.length;
+                    icon: root.pick-icons[self.at].icon;
+                    label: root.pick-icons[self.at].label;
+                    current: root.pick-icons[self.at].current;
+                    tint: root.pick-tint;
+                    clicked => {
+                        root.pick-icon-clicked(self.at);
+                    }
+                }
+            }
         }
     }
 

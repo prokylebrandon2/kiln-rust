@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use kiln_ui::RowData;
+use kiln_ui::{PickIcon, RowData};
 use serde_json::{Value, json};
-use slint::{Color, Timer};
+use slint::{Color, ModelRc, Timer, VecModel};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
 use crate::dialog::{Btn, BtnKind, Click, Opt, Spec};
@@ -20,6 +20,55 @@ const TOAST_MS: u64 = 2000;
 const LOADING_MS: u64 = 700;
 /// The "+ New" button hides while the list moves this far down, and shows when it moves up.
 const SCROLL_STEP_DP: f32 = 6.0;
+
+/// The colours a folder can be given (`MainActivity.FOLDER_COLORS`). The picker's first swatch,
+/// "default", is the accent colour and saves 0.
+const FOLDER_COLORS: [u32; 10] = [
+    0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0, 0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3,
+    0xFFC45BA3, 0xFF8D99AE,
+];
+
+/// The icons the picker offers, in `Icons.FOLDER_KEYS` order: the key and its label.
+const PICK_ICONS: [(&str, &str); 18] = [
+    ("folder", "Folder"),
+    ("download", "Download"),
+    ("camera", "Camera"),
+    ("pictures", "Pictures"),
+    ("movies", "Movies"),
+    ("music", "Music"),
+    ("documents", "Documents"),
+    ("android", "Android"),
+    ("bell", "Sounds"),
+    ("zip", "Archives"),
+    ("star", "Favourite"),
+    ("heart", "Heart"),
+    ("lock", "Private"),
+    ("code", "Code"),
+    ("home", "Home"),
+    ("phone", "Phone storage"),
+    ("sd", "SD card"),
+    ("usb", "USB drive"),
+];
+
+/// What runs after the picker changed something (`done` in `iconPicker`).
+type Done = Rc<dyn Fn(&App)>;
+
+/// A colour saved as an ARGB number.
+fn argb(color: u32) -> Color {
+    let [a, r, g, b] = color.to_be_bytes();
+    Color::from_argb_u8(a, r, g, b)
+}
+
+/// Which swatch shows the tick for a saved colour: 0 is "default", -1 is none of them.
+fn color_index(color: u32) -> i32 {
+    if color == 0 {
+        return 0;
+    }
+    match FOLDER_COLORS.iter().position(|&c| c == color) {
+        Some(i) => i as i32 + 1,
+        None => -1,
+    }
+}
 
 /// One row of the list as the Slint list wants it.
 fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
@@ -347,7 +396,7 @@ impl App {
                 out.push(opt("edit", "Rename", App::rename_selected));
             }
             if one == Some(Kind::Dir) {
-                out.push(soon("folder", "Icon and color..."));
+                out.push(opt("folder", "Icon and color...", App::pick_selected_icon));
             }
             if one == Some(Kind::File) {
                 out.push(soon("open", "Open options..."));
@@ -442,6 +491,11 @@ impl App {
         // A dialog is a window of its own in the Java: Back closes it first.
         // The progress sheet is modal: Back does nothing while it is up.
         if self.ui.get_prog_shown() {
+            return;
+        }
+        // The icon picker is a sheet of its own: Back closes it.
+        if self.ui.get_pick_shown() {
+            self.close_picker();
             return;
         }
         if self.dialog_back() {
@@ -616,6 +670,120 @@ impl App {
             app.reload_here();
             None
         });
+    }
+
+    /// `M_ICON`: pick the icon and colour of the one selected folder. The selection is cleared
+    /// first, as in the Java.
+    fn pick_selected_icon(&self) {
+        let (path, name) = {
+            let b = self.browser.borrow();
+            match b.only_selected() {
+                Some(row) if row.kind == Kind::Dir => (b.cwd.join(&row.key), row.key.clone()),
+                _ => return,
+            }
+        };
+        self.browser.borrow_mut().clear_selection();
+        self.render_rows();
+        self.render_chrome();
+        let path = path.to_string_lossy().into_owned();
+        self.icon_picker(&path, &name, true, App::render_rows);
+    }
+
+    /// `MainActivity.iconPicker`: open the folder icon sheet for `path`. With `colors` a row of
+    /// colour swatches comes first (folders in the list, not bookmarks). `done` runs after a
+    /// change, so the list behind the sheet can follow.
+    pub(crate) fn icon_picker(
+        &self,
+        path: &str,
+        name: &str,
+        colors: bool,
+        done: impl Fn(&App) + 'static,
+    ) {
+        let done: Done = Rc::new(done);
+        let ui = &self.ui;
+        let current = self.prefs.folder_icon(path);
+        let cells: Vec<PickIcon> = PICK_ICONS
+            .iter()
+            .map(|(key, label)| PickIcon {
+                icon: crate::icons::by_key(key).into(),
+                label: (*label).into(),
+                current: current.as_deref() == Some(*key),
+            })
+            .collect();
+        let swatches: Vec<Color> = FOLDER_COLORS.iter().map(|&c| argb(c)).collect();
+        let heading = if colors {
+            "Icon and color for "
+        } else {
+            "Icon for "
+        };
+        let index = if colors {
+            color_index(self.prefs.folder_color(path))
+        } else {
+            -1
+        };
+        ui.set_pick_title(format!("{heading}{name}").into());
+        ui.set_pick_has_colors(colors);
+        ui.set_pick_colors(ModelRc::new(VecModel::from(swatches)));
+        ui.set_pick_color_index(index);
+        ui.set_pick_icons(ModelRc::new(VecModel::from(cells)));
+        let (p, d) = (path.to_string(), done.clone());
+        ui.on_pick_swatch_clicked(move |i| app_do(|app| app.pick_swatch(&p, i, &d)));
+        let (p, d) = (path.to_string(), done.clone());
+        ui.on_pick_icon_clicked(move |i| app_do(|app| app.pick_icon(&p, i, &d)));
+        let (p, d) = (path.to_string(), done);
+        ui.on_pick_button_clicked(move |i| app_do(|app| app.pick_button(&p, i, colors, &d)));
+        ui.on_pick_cancelled(|| app_do(|app| app.close_picker()));
+        ui.set_pick_shown(true);
+    }
+
+    /// A swatch was tapped: save the colour (0 = default), move the tick, update the list behind.
+    /// The sheet stays open.
+    fn pick_swatch(&self, path: &str, index: i32, done: &Done) {
+        let Ok(i) = usize::try_from(index) else {
+            return;
+        };
+        let color = if i == 0 {
+            Some(0)
+        } else {
+            FOLDER_COLORS.get(i - 1).copied()
+        };
+        let Some(color) = color else {
+            return;
+        };
+        self.prefs.set_folder_color(path, color);
+        self.ui.set_pick_color_index(index);
+        done(self);
+    }
+
+    /// An icon cell was tapped: save its key, close the sheet, update the list.
+    fn pick_icon(&self, path: &str, index: i32, done: &Done) {
+        let key = usize::try_from(index)
+            .ok()
+            .and_then(|i| PICK_ICONS.get(i))
+            .map(|(key, _)| *key);
+        let Some(key) = key else {
+            return;
+        };
+        self.prefs.set_folder_icon(path, key);
+        self.close_picker();
+        done(self);
+    }
+
+    /// The sheet's buttons: 0 "Use default" (clears the icon, and the colour when the swatches are
+    /// shown), 1 "Cancel".
+    fn pick_button(&self, path: &str, index: i32, colors: bool, done: &Done) {
+        if index == 0 {
+            self.prefs.set_folder_icon(path, "");
+            if colors {
+                self.prefs.set_folder_color(path, 0);
+            }
+            done(self);
+        }
+        self.close_picker();
+    }
+
+    fn close_picker(&self) {
+        self.ui.set_pick_shown(false);
     }
 
     /// The selection bar (`MainActivity.buildUi`): 0 Copy, 1 Move, 2 Delete, 3 Pack.

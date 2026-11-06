@@ -159,6 +159,37 @@ impl Prefs {
             .collect()
     }
 
+    /// The saved folder colours (path to ARGB as a signed number), without entries that are 0.
+    pub fn folder_color_map(&self) -> Map<String, Value> {
+        let text = self.string("folder_colors", "{}");
+        let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
+            return Map::new();
+        };
+        map.into_iter()
+            .filter(|(_, v)| v.as_i64().is_some_and(|c| c != 0))
+            .collect()
+    }
+
+    /// `Defaults.folderColor`: the ARGB colour picked for a folder's icon, or 0 for none.
+    pub fn folder_color(&self, path: &str) -> u32 {
+        let colors = self.folder_color_map();
+        let value = colors.get(path).and_then(Value::as_i64);
+        value.map_or(0, |c| c as u32)
+    }
+
+    /// `Defaults.setFolderColor`: remember a colour for a folder; 0 goes back to the accent. The
+    /// number is written as the Java `int` it was (ARGB, so negative), with "\/" for "/".
+    pub fn set_folder_color(&self, path: &str, color: u32) {
+        let mut colors = self.folder_color_map();
+        if color == 0 {
+            colors.remove(path);
+        } else {
+            colors.insert(path.to_string(), Value::from(color as i32));
+        }
+        let text = Value::Object(colors).to_string();
+        self.set_string("folder_colors", &text.replace('/', "\\/"));
+    }
+
     /// `Defaults.moveFolderIcons`: a folder was renamed or moved, so its icon and colour (and
     /// those of its subfolders) follow it.
     pub fn move_folder_icons(&self, from: &str, to: &str) {

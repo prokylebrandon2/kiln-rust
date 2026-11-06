@@ -389,13 +389,11 @@ impl Browser {
     }
 
     /// The offset from UTC that dates inside an archive use.
-    #[allow(dead_code)]
     pub fn set_date_offset(&mut self, seconds: i32) {
         self.date_offset = seconds;
     }
 
     /// Show the inside of `arc` (the end of `onOpened`).
-    #[allow(dead_code)]
     pub fn open_arc(&mut self, arc: ArcState) {
         self.arc = Some(arc);
         self.selected.clear();
@@ -404,7 +402,6 @@ impl Browser {
     }
 
     /// `buildArcRows`: the rows of the archive's folder that is shown.
-    #[allow(dead_code)]
     pub fn arc_rebuild(&mut self) {
         let Some(arc) = &self.arc else {
             return;

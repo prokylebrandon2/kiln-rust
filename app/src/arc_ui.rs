@@ -5,12 +5,17 @@
 //! TODO(task 25): remove the `allow` below when every piece of this module is in use.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::App;
-use crate::dialog::{Btn, BtnKind};
+use crate::arc::ArcState;
+use crate::browser::Kind;
+use crate::dialog::{Btn, BtnKind, Click, Field, Spec};
 
 /// What runs once something has been done (`Runnable`).
 pub(crate) type After = Box<dyn FnOnce(&App)>;
@@ -57,5 +62,147 @@ pub(crate) fn cancel_button() -> Btn {
         label: "Cancel".to_string(),
         kind: BtnKind::Text,
         click: None,
+    }
+}
+
+impl App {
+    /// The offset of the phone's time zone now; the archive's dates use it.
+    fn now_offset(&self) -> i32 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        self.offset_at(now)
+    }
+
+    /// `openItem`: ask for the password of a set or an encrypted archive, then open it.
+    pub(crate) fn open_row(&self, key: &str) {
+        let (file, locked) = {
+            let b = self.browser.borrow();
+            let Some(row) = b.rows.iter().find(|r| r.key == key) else {
+                return;
+            };
+            (b.cwd.join(key), row.kind == Kind::Set || row.icon == "lock")
+        };
+        if locked {
+            let name = file_name(&file);
+            self.ask_password(&name, move |app, pw| app.do_open(file, pw, None));
+        } else {
+            self.do_open(file, String::new(), None);
+        }
+    }
+
+    /// `askPassword`: a sheet with the password field and "Show password".
+    pub(crate) fn ask_password(&self, name: &str, done: impl FnOnce(&App, String) + 'static) {
+        let done = Rc::new(RefCell::new(Some(done)));
+        let mut spec = Spec::new(&format!("Unlock {name}"));
+        spec.field = Some(Field {
+            placeholder: "Password".to_string(),
+            text: String::new(),
+        });
+        spec.buttons.push(cancel_button());
+        let click: Click = Rc::new(move |app: &App, text: &str| -> bool {
+            if text.is_empty() {
+                app.ui.set_dlg_error("Enter the password".into());
+                return false;
+            }
+            let run = done.borrow_mut().take();
+            if let Some(run) = run {
+                run(app, text.to_string());
+            }
+            true
+        });
+        spec.buttons.push(Btn {
+            label: "Unlock".to_string(),
+            kind: BtnKind::Filled,
+            click: Some(click),
+        });
+        self.show_dialog(spec);
+        self.ui.set_dlg_secret(true);
+    }
+
+    /// `doOpen`: read the archive's table of contents behind the progress sheet.
+    pub(crate) fn do_open(&self, file: PathBuf, pw: String, after: Option<After>) {
+        let heading = if pw.is_empty() {
+            "Opening..."
+        } else {
+            "Unlocking..."
+        };
+        let args = json!([file.to_string_lossy(), pw]);
+        self.run_op(
+            heading,
+            false,
+            move |_| kiln_bridge::call("open_archive", &args, 0),
+            move |app, r| app.on_opened(file, pw, r, after),
+        );
+    }
+
+    /// `onOpened`.
+    fn on_opened(&self, file: PathBuf, pw: String, r: &Value, after: Option<After>) {
+        if !r["ok"].as_bool().unwrap_or(false) {
+            let name = file_name(&file);
+            let bad = r["bad_password"].as_bool().unwrap_or(false);
+            if bad || r["need_password"].as_bool().unwrap_or(false) {
+                if bad {
+                    self.toast("Incorrect password");
+                }
+                self.ask_password(&name, move |app, p| app.do_open(file, p, after));
+            } else {
+                let msg = why(r);
+                let msg = if msg.is_empty() {
+                    "Unknown error"
+                } else {
+                    &msg
+                };
+                self.message(&format!("Couldn't open {name}"), msg);
+            }
+            return;
+        }
+        // TODO(task 32): the home of a file opened from another app goes here instead of None.
+        let arc = ArcState::from_open(file, pw, None, r);
+        let offset = self.now_offset();
+        self.close_session();
+        {
+            let mut b = self.browser.borrow_mut();
+            b.set_date_offset(offset);
+            b.open_arc(arc);
+        }
+        self.render_rows();
+        self.render_chrome();
+        // TODO(task 24): `render_arc_bar` shows the bottom bar here.
+        self.ui.invoke_scroll_list_top();
+        if let Some(after) = after {
+            after(self);
+        }
+    }
+
+    /// `closeSession`: forget the editing session of the open archive.
+    pub(crate) fn close_session(&self) {
+        let sid = {
+            let mut b = self.browser.borrow_mut();
+            let Some(arc) = b.arc.as_mut() else {
+                return;
+            };
+            arc.dirty = false;
+            arc.sid.take()
+        };
+        if let Some(sid) = sid {
+            std::thread::spawn(move || {
+                let _ = kiln_bridge::call("close", &json!([sid]), 0);
+            });
+        }
+    }
+
+    /// `closeArchive`: leave the archive for the folder it was opened from.
+    pub(crate) fn close_archive(&self) {
+        self.close_session();
+        let dir = {
+            let mut b = self.browser.borrow_mut();
+            b.arc = None;
+            b.selected.clear();
+            b.cwd.clone()
+        };
+        self.ui.set_arc_bar_shown(false);
+        self.ui.set_arc_dirty(false);
+        self.load_dir(dir, false);
     }
 }

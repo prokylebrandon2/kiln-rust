@@ -474,14 +474,13 @@ impl App {
 
     /// The engine's `decrypt_in_place` behind the progress sheet.
     fn run_decrypt(&self) {
-        let (file, password, count, parent) = {
+        let (file, password, count) = {
             let b = self.browser.borrow();
             let Some(a) = b.arc.as_ref() else { return };
             (
                 a.file.to_string_lossy().into_owned(),
                 a.password.clone(),
                 a.ents.len(),
-                a.file.parent().map(PathBuf::from),
             )
         };
         let args = json!([file, password, count]);
@@ -489,21 +488,15 @@ impl App {
             "Decrypting...",
             true,
             move |job| kiln_bridge::call_job("decrypt_in_place", &args, 0, job),
-            move |app, result| app.decrypt_done(parent, result),
+            move |app, result| app.decrypt_done(result),
         );
     }
 
     /// The end of `decryptInPlace`: "Decrypted" and the archive is closed.
-    fn decrypt_done(&self, parent: Option<PathBuf>, result: &Value) {
+    fn decrypt_done(&self, result: &Value) {
         if result["ok"].as_bool().unwrap_or(false) {
             self.toast("Decrypted");
-            // TODO(task 20): `close_archive` replaces this.
-            self.browser.borrow_mut().arc = None;
-            self.ui.set_arc_bar_shown(false);
-            self.ui.set_arc_dirty(false);
-            if let Some(dir) = parent {
-                self.load_dir(dir, false);
-            }
+            self.close_archive();
         } else if result["cancelled"].as_bool().unwrap_or(false) {
             self.toast("Cancelled");
         } else {

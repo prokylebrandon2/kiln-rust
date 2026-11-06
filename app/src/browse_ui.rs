@@ -143,7 +143,7 @@ impl App {
     }
 
     /// The phone's time zone offset for a time, asked once per day.
-    fn offset_at(&self, epoch_seconds: i64) -> i32 {
+    pub(crate) fn offset_at(&self, epoch_seconds: i64) -> i32 {
         let day = epoch_seconds.div_euclid(86_400);
         if let Some(offset) = self.offsets.borrow().get(&day) {
             return *offset;

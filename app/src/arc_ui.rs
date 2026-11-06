@@ -453,11 +453,7 @@ impl App {
 
 impl App {
     fn arc_dirty(&self) -> bool {
-        self.browser
-            .borrow()
-            .arc
-            .as_ref()
-            .is_some_and(|a| a.dirty)
+        self.browser.borrow().arc.as_ref().is_some_and(|a| a.dirty)
     }
 
     /// The open archive's file and editing session.
@@ -654,7 +650,11 @@ impl App {
             out.push(opt("folder", "Browse as plain folder", |app| {
                 app.guard_leave(Box::new(|app| app.arc_plain()));
             }));
-            out.push(opt("lock", "Decrypt folder in place...", App::decrypt_dialog));
+            out.push(opt(
+                "lock",
+                "Decrypt folder in place...",
+                App::decrypt_dialog,
+            ));
         }
         out
     }

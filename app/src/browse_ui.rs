@@ -562,7 +562,7 @@ impl App {
             }
             BackAction::Up(dir) => self.load_dir(dir, false),
             BackAction::ArcUp(prefix) => self.arc_back_to(&prefix),
-$1BackAction::ArcLeave => self.guard_leave(Box::new(|app| app.close_archive())),
+            BackAction::ArcLeave => self.guard_leave(Box::new(|app| app.close_archive())),
             BackAction::ExitHint => self.toast("Tap Back again to exit"),
             BackAction::Exit => self.host.finish(),
         }

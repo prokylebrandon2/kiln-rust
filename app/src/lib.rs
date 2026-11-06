@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod about_ui;
+pub mod arc;
 mod browse_ui;
 pub mod browser;
 pub mod crash;

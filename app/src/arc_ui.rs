@@ -16,6 +16,7 @@ use crate::arc::ArcState;
 use crate::browse_ui::opt;
 use crate::browser::{Browser, Kind};
 use crate::dialog::{Btn, BtnKind, Click, Field, Opt, Spec};
+use crate::host::Incoming;
 use crate::{App, app_do, fmt};
 
 /// What runs once something has been done (`Runnable`).
@@ -39,6 +40,9 @@ pub(crate) enum Tile {
 #[derive(Default)]
 pub(crate) struct ArcUi {
     pub(crate) tiles: Vec<Tile>,
+    pub(crate) incoming: Option<Incoming>,
+    pub(crate) incoming_file: Option<PathBuf>,
+    pub(crate) incoming_home: Option<PathBuf>,
 }
 
 pub(crate) fn file_name(path: &Path) -> String {

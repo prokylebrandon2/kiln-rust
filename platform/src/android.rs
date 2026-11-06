@@ -1,13 +1,14 @@
 //! The real phone: JNI calls on the `NativeActivity`, the NDK's configuration, and the entry point.
 
 use std::cell::RefCell;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use jni::errors::Result as JniResult;
 use jni::objects::{GlobalRef, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
-use kiln_app::{Event, Host, Look, OpenApp, OpenWith, Volume};
+use kiln_app::{Event, Host, Incoming, Look, OpenApp, OpenWith, Volume};
 use ndk::configuration::UiModeNight;
 use slint::android::AndroidApp;
 use slint::android::android_activity::{MainEvent, PollEvent};
@@ -762,6 +763,101 @@ fn launch(
     Ok(())
 }
 
+// The launch ACTION_VIEW intent. NativeActivity does not report later onNewIntent calls.
+fn view_uri<'a>(env: &mut JNIEnv<'a>, activity: &GlobalRef) -> JniResult<Option<JObject<'a>>> {
+    let intent = env
+        .call_method(activity, "getIntent", "()Landroid/content/Intent;", &[])?
+        .l()?;
+    if intent.is_null() {
+        return Ok(None);
+    }
+    let action = env
+        .call_method(&intent, "getAction", "()Ljava/lang/String;", &[])?
+        .l()?;
+    if text_of(env, action)?.as_deref() != Some("android.intent.action.VIEW") {
+        return Ok(None);
+    }
+    let uri = env
+        .call_method(&intent, "getData", "()Landroid/net/Uri;", &[])?
+        .l()?;
+    Ok((!uri.is_null()).then_some(uri))
+}
+
+fn text_of(env: &mut JNIEnv<'_>, value: JObject<'_>) -> JniResult<Option<String>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = JString::from(value);
+    Ok(Some(env.get_string(&value)?.to_string_lossy().into_owned()))
+}
+
+// OpenableColumns.DISPLAY_NAME, when the provider supplies it.
+fn incoming_display_name(
+    env: &mut JNIEnv<'_>,
+    activity: &GlobalRef,
+    uri: &JObject<'_>,
+) -> Option<String> {
+    let result = (|| -> JniResult<Option<String>> {
+        let resolver = env
+            .call_method(
+                activity,
+                "getContentResolver",
+                "()Landroid/content/ContentResolver;",
+                &[],
+            )?
+            .l()?;
+        let columns = env.new_object_array(1, "java/lang/String", JObject::null())?;
+        let column = env.new_string("display_name")?;
+        env.set_object_array_element(&columns, 0, &column)?;
+        let cursor = env.call_method(
+            &resolver,
+            "query",
+            "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+            &[
+                JValue::Object(uri),
+                JValue::Object(&columns),
+                JValue::Object(&JObject::null()),
+                JValue::Object(&JObject::null()),
+                JValue::Object(&JObject::null()),
+            ],
+        )?.l()?;
+        if cursor.is_null() {
+            return Ok(None);
+        }
+        let name = if env.call_method(&cursor, "moveToFirst", "()Z", &[])?.z()? {
+            let index = env
+                .call_method(
+                    &cursor,
+                    "getColumnIndex",
+                    "(Ljava/lang/String;)I",
+                    &[JValue::Object(&column)],
+                )?
+                .i()?;
+            if index >= 0 {
+                let value = env
+                    .call_method(
+                        &cursor,
+                        "getString",
+                        "(I)Ljava/lang/String;",
+                        &[JValue::Int(index)],
+                    )?
+                    .l()?;
+                text_of(env, value)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let _ = env.call_method(&cursor, "close", "()V", &[]);
+        Ok(name)
+    })();
+    if result.is_err() || env.exception_check().unwrap_or(false) {
+        clear_pending(env);
+    }
+    result.ok().flatten()
+}
+
 impl Host for AndroidHost {
     fn cache_dir(&self) -> PathBuf {
         self.cache.clone()
@@ -855,6 +951,134 @@ impl Host for AndroidHost {
         let text = path.to_string_lossy().into_owned();
         self.with_env(|env, activity| launch(env, activity, &text, mime, edit, with))
             .is_ok()
+    }
+
+    fn incoming(&self) -> Option<Incoming> {
+        self.with_env(|env, activity| {
+            let Some(uri) = view_uri(env, activity)? else {
+                return Ok(None);
+            };
+            let scheme_obj = env
+                .call_method(&uri, "getScheme", "()Ljava/lang/String;", &[])?
+                .l()?;
+            let Some(scheme) = text_of(env, scheme_obj)? else {
+                return Ok(None);
+            };
+
+            if scheme == "file" {
+                let path_obj = env
+                    .call_method(&uri, "getPath", "()Ljava/lang/String;", &[])?
+                    .l()?;
+                let Some(path) = text_of(env, path_obj)? else {
+                    return Ok(None);
+                };
+                let path = PathBuf::from(path);
+                return Ok(path.exists().then_some(Incoming::File(path)));
+            }
+
+            if scheme != "content" {
+                return Ok(None);
+            }
+
+            let name = incoming_display_name(env, activity, &uri)
+                .or_else(|| {
+                    let segment = env
+                        .call_method(&uri, "getLastPathSegment", "()Ljava/lang/String;", &[])
+                        .ok()?
+                        .l()
+                        .ok()?;
+                    text_of(env, segment).ok().flatten()
+                })
+                .unwrap_or_else(|| "archive.kiln".to_string());
+
+            Ok(Some(Incoming::Shared {
+                name: name.replace('/', "_"),
+            }))
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn copy_incoming(&self, dest: &Path) -> Result<(), String> {
+        let mut output = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+        let mut io_error = None;
+
+        let result = self.with_env(|env, activity| {
+            let Some(uri) = view_uri(env, activity)? else {
+                return Ok(false);
+            };
+            let scheme_obj = env
+                .call_method(&uri, "getScheme", "()Ljava/lang/String;", &[])?
+                .l()?;
+            if text_of(env, scheme_obj)?.as_deref() != Some("content") {
+                return Ok(false);
+            }
+
+            let buffer = env.new_byte_array(8192)?;
+            let resolver = env
+                .call_method(
+                    activity,
+                    "getContentResolver",
+                    "()Landroid/content/ContentResolver;",
+                    &[],
+                )?
+                .l()?;
+            let input = env
+                .call_method(
+                    &resolver,
+                    "openInputStream",
+                    "(Landroid/net/Uri;)Ljava/io/InputStream;",
+                    &[JValue::Object(&uri)],
+                )?
+                .l()?;
+            if input.is_null() {
+                return Ok(false);
+            }
+
+            let copied = (|| -> JniResult<()> {
+                loop {
+                    let count = env
+                        .call_method(&input, "read", "([B)I", &[JValue::Object(&buffer)])?
+                        .i()?;
+                    if count < 0 {
+                        break;
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    let mut chunk = vec![0_i8; count as usize];
+                    env.get_byte_array_region(&buffer, 0, &mut chunk)?;
+                    let bytes = chunk.into_iter().map(|byte| byte as u8).collect::<Vec<_>>();
+                    if let Err(error) = output.write_all(&bytes) {
+                        io_error = Some(error.to_string());
+                        break;
+                    }
+                }
+                Ok(())
+            })();
+            let closed = env.call_method(&input, "close", "()V", &[]).map(|_| ());
+            copied?;
+            closed?;
+            Ok(true)
+        });
+
+        match result {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = std::fs::remove_file(dest);
+                return Err("can't read that file".to_string());
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(dest);
+                return Err(error.to_string());
+            }
+        }
+
+        if let Some(error) = io_error {
+            let _ = std::fs::remove_file(dest);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn finish(&self) {

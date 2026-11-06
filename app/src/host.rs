@@ -50,6 +50,17 @@ pub struct OpenApp {
     pub label: String,
 }
 
+/// What another app asked Kiln to open (the data of an `ACTION_VIEW` intent).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Incoming {
+    /// A `file://` URI of a file that exists: it is opened where it is.
+    File(PathBuf),
+    /// A `content://` URI. `name` is its display name (`OpenableColumns.DISPLAY_NAME`, else the
+    /// last path segment, else `archive.kiln`, with `/` replaced by `_`); [`Host::copy_incoming`]
+    /// reads the content.
+    Shared { name: String },
+}
+
 /// Where [`Host::open_file`] sends a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenWith {
@@ -93,6 +104,23 @@ pub trait Host {
     fn finish(&self);
     /// Replace the handler that is told about [`Event`]s. It runs on the UI thread.
     fn set_event_handler(&self, handler: Box<dyn Fn(Event)>);
+
+    // ---- files other apps send to Kiln (the defaults are the non-Android stub) --------------
+
+    /// The file another app asked Kiln to open when it started it (`ACTION_VIEW` with a `file:`
+    /// or `content:` URI), or `None`. Only the launch intent is seen: a later one is not.
+    fn incoming(&self) -> Option<Incoming> {
+        None
+    }
+    /// Copy the content of an [`Incoming::Shared`] into `dest`. The error is shown to the person.
+    fn copy_incoming(&self, _dest: &Path) -> Result<(), String> {
+        Err("can't read that file".to_string())
+    }
+    /// Copy an incoming file without blocking the UI thread. Android overrides this to use a
+    /// thread-attached JNI environment; other hosts use the synchronous fallback.
+    fn copy_incoming_async(&self, dest: PathBuf, done: Box<dyn FnOnce(Result<(), String>) + Send>) {
+        done(self.copy_incoming(&dest));
+    }
 
     // ---- opening files in other apps (the defaults are the non-Android stub) ----------------
 

@@ -47,7 +47,7 @@ use kiln_ui::{MainWindow, MarkRow, RowData, Theme};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::browser::{Browser, SortKey};
-pub use crate::host::{Event, Host, Look, OpenApp, OpenWith, Volume};
+pub use crate::host::{Event, Host, Incoming, Look, OpenApp, OpenWith, Volume};
 use crate::prefs::Prefs;
 
 /// `Defaults.ANIM_SCALE`: Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
@@ -147,7 +147,10 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         pack: RefCell::default(),
         extract: RefCell::default(),
         chooser: RefCell::default(),
-        arcui: RefCell::default(),
+        arcui: RefCell::new(arc_ui::ArcUi {
+            incoming: host.incoming(),
+            ..Default::default()
+        }),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 

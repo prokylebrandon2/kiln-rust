@@ -510,6 +510,15 @@ impl App {
         if self.ui.get_prog_shown() {
             return;
         }
+        // The Pack sheets are sheets of their own: Back closes them.
+        if self.ui.get_pack_res_shown() {
+            self.close_pack_result();
+            return;
+        }
+        if self.ui.get_pack_shown() {
+            self.close_pack();
+            return;
+        }
         // The properties sheet is a sheet of its own: Back closes it.
         if self.ui.get_props_shown() {
             self.close_props();
@@ -814,8 +823,7 @@ impl App {
             0 => self.set_clip(false),
             1 => self.set_clip(true),
             2 => self.delete_selected(),
-            // Pack comes with B21.
-            _ => self.toast("Not in this build yet"),
+            _ => self.pack_selected(),
         }
     }
 
@@ -1110,14 +1118,14 @@ impl App {
     }
 
     /// `message`: a sheet with the text and an "OK" button.
-    fn message(&self, heading: &str, body: &str) {
+    pub(crate) fn message(&self, heading: &str, body: &str) {
         self.ui.set_sheet_title(heading.into());
         self.ui.set_sheet_body(body.into());
         self.ui.set_sheet_shown(true);
     }
 
     /// `loadDir(cwd)`: read the folder again after a change.
-    fn reload_here(&self) {
+    pub(crate) fn reload_here(&self) {
         let cwd = self.browser.borrow().cwd.clone();
         self.load_dir(cwd, false);
     }

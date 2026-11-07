@@ -311,8 +311,7 @@ mod tests {
 
         super::set_dir_mtime(&path, expected_secs, 0).unwrap();
 
-        let expected = std::time::UNIX_EPOCH
-            + std::time::Duration::from_secs(expected_secs as u64);
+        let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(expected_secs as u64);
         let actual = std::fs::metadata(&path).unwrap().modified().unwrap();
 
         assert_eq!(actual, expected);

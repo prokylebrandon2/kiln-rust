@@ -1717,6 +1717,7 @@ dependencies = [
  "crossbeam-channel",
  "liblzma",
  "lz4_flex",
+ "rustix",
  "tempfile",
  "thiserror 2.0.21",
  "walkdir",

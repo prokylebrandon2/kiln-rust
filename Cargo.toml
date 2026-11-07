@@ -9,6 +9,8 @@ publish = false
 
 [workspace]
 members = ["bridge", "platform", "ui", "app"]
+# The fuzz crate (cargo-fuzz) is built on its own, with a nightly toolchain.
+exclude = ["fuzz"]
 
 [workspace.dependencies]
 # The UI toolkit for the Android app (see ui/). Pinned exactly: `slint`, `slint-build` and Slint's
@@ -48,8 +50,11 @@ thiserror = "2"
 walkdir = "2"
 zstd = "0.14"
 
-# Extended attributes (Unix only). A safe wrapper, so this crate stays `forbid(unsafe_code)`.
+# Extended attributes and descriptor-relative file operations (Unix only). Both are safe wrappers,
+# so this crate stays `forbid(unsafe_code)`. `rustix` is already in Cargo.lock (tempfile and
+# xattr use it); `fs` is the only feature this crate needs (see src/secure.rs).
 [target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 xattr = "1"
 
 [profile.release]

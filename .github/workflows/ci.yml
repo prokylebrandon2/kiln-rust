@@ -30,3 +30,14 @@ jobs:
           toolchain: 1.85.0
 
       - run: cargo check --locked --all-targets
+
+  # src/secure.rs and tests/hardening.rs are Unix code; macOS exercises the non-Linux branches
+  # (no /proc/self/fd). Windows keeps the path-based fallback and is not covered here yet.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo test --locked

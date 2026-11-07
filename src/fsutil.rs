@@ -301,6 +301,20 @@ pub fn set_xattr(_path: &Path, _name: &[u8], _value: &[u8]) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
+/// Set one extended attribute on an open file or directory. Unlike [`set_xattr`] this cannot be
+/// redirected by a link swapped in after the file was opened.
+#[cfg(unix)]
+pub fn set_xattr_file(file: &File, name: &[u8], value: &[u8]) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    xattr::FileExt::set_xattr(file, std::ffi::OsStr::from_bytes(name), value)
+}
+
+/// Extended attributes cannot be set on this platform.
+#[cfg(not(unix))]
+pub fn set_xattr_file(_file: &File, _name: &[u8], _value: &[u8]) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
 /// Change the owner and group of an open file.
 #[cfg(unix)]
 pub fn set_owner(file: &File, uid: u32, gid: u32) -> io::Result<()> {

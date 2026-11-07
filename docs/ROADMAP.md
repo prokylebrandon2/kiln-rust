@@ -24,9 +24,11 @@ corpus and on a 4.25 GiB file. Also delivered from the original throughput plan:
 zero-fill); scaling is only measured up to 2 threads.
 
 * Measure scaling on a multicore machine (1/2/4/8/16 threads) for lz4, zstd:3, zstd:19, lzma:6.
+  **Harness written** (`tools/bench/scaling.py`, `docs/SCALING.md`); **not yet run**.
 * Move per-file hashing off the producer (hash on workers, combine in order), avoid zero-filling
   blocks, add a buffer pool, read-ahead and parallel file opening for many small files.
-* Test archives larger than 4 GiB and a genuinely full disk.
+* Test archives larger than 4 GiB and a genuinely full disk. >4 GiB on v2: **tests written**
+  (`tests/large.rs`, `.github/workflows/large.yml`), not yet run; full disk: still open.
 * **Exit:** documented speedup curve; at least 90% of the `store` ceiling for lz4 on all cores;
   memory model validated at more than 2 threads.
 
@@ -64,7 +66,11 @@ blocks cost ~4% on text.
 ## Phase 5 - Hardening and release
 
 * Fuzzing (`cargo-fuzz`) of `Archive::open`, record and index decoding, and extraction.
+  **Targets, dictionary, seeds and a nightly workflow written** (`fuzz/`,
+  `.github/workflows/fuzz.yml`); never run, so no findings yet.
 * Hardened extraction against hostile output directories (`openat`-style, e.g. `cap-std`).
+  **Done on Unix** with `rustix` (`src/secure.rs`, `docs/HARDENING.md`); written without a compiler,
+  not yet built. Windows keeps the path-based check.
 * CI on macOS and Windows (CI on Linux runs on every push; Windows paths and permission code are
   written but unverified).
 * Benchmarks vs 7-Zip/ZIP on large, many-core, SSD and HDD setups; reproducible release

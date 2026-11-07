@@ -1,0 +1,50 @@
+# Fuzz targets for kiln (cargo-fuzz / libFuzzer). Build with a nightly toolchain:
+#
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run open  -- -dict=fuzz/kiln.dict -max_len=65536
+#
+# See docs/HARDENING.md ("Fuzzing"). This crate is deliberately not part of the main workspace.
+[package]
+name = "kiln-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+crc32fast = "1"
+kiln = { path = ".." }
+
+# Its own (empty) workspace, so the main workspace does not try to build it.
+[workspace]
+
+[[bin]]
+name = "open"
+path = "fuzz_targets/open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index"
+path = "fuzz_targets/index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "record"
+path = "fuzz_targets/record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false

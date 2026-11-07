@@ -1071,6 +1071,33 @@ mod tests {
     }
 
     #[test]
+    fn archives_beyond_4_gib_keep_exact_offsets() {
+        // 40 stored chunks of 128 MiB: 5 GiB of data, so every chunk offset from the 33rd on is
+        // beyond u32::MAX. No data is read or written; this checks the index arithmetic only (the
+        // end-to-end version is `tests/large.rs`, run with `--ignored`).
+        const BLOCK: u64 = 128 << 20;
+        let chunks: Vec<ChunkInfo> = (0..40)
+            .map(|_| chunk(BLOCK as u32, BLOCK as u32, Method::Store))
+            .collect();
+        let total = 40 * BLOCK;
+        let idx = Index::build(
+            vec![file("big", total / 2), file("big2", total - total / 2)],
+            chunks,
+            vec![],
+        )
+        .unwrap();
+        assert!(idx.data_end > u64::from(u32::MAX));
+        let back = Index::decode(&idx.encode(), BLOCK, idx.data_end).unwrap();
+        assert_eq!(back, idx);
+        assert_eq!(back.total_raw, total);
+        assert!(back.chunk_offsets[39] > u64::from(u32::MAX));
+        assert_eq!(back.entry_starts[1], total / 2);
+        assert_eq!(back.chunk_containing(total - 1), 39);
+        assert_eq!(back.chunk_containing(u64::from(u32::MAX)), 31);
+        assert_eq!(back.chunk_containing(u64::from(u32::MAX) + 1), 32);
+    }
+
+    #[test]
     fn every_truncation_is_an_error_not_a_panic() {
         let idx = sample();
         let bytes = idx.encode();

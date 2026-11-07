@@ -21,9 +21,14 @@
 //! *through* a link made by the archive (the index refuses entries below a symbolic link, and
 //! directories are checked for links before anything is created in them).
 //!
+//! Every create, link, rename and metadata call goes through [`crate::secure`]: on Unix the
+//! destination is opened once and everything below it is resolved relative to directory
+//! descriptors without following links, so a directory swapped for a link while extraction runs
+//! cannot redirect a write (see `docs/HARDENING.md`).
+//!
 //! `verify` is the same pipeline with the writing switched off.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufReader, Seek, SeekFrom, Write};
@@ -42,12 +47,13 @@ use crate::error::{Error, IoContext, Result};
 use crate::format::index::{ChunkInfo, Entry, EntryKind, Index, Link};
 use crate::format::record::{RecordHeader, decode_payload, read_record};
 use crate::fsutil::{
-    LinkOutcome, TempOutput, create_hard_link, create_symlink, read_full, set_dir_mtime,
-    set_file_mode, set_file_mtime, set_mode, set_owner, set_owner_path, set_xattr,
+    LinkOutcome, read_full, set_file_mode, set_file_mtime, set_owner, set_owner_path, set_xattr,
+    set_xattr_file,
 };
 use crate::integrity::{FileHasher, empty_hash, to_hex};
 use crate::parallel::{MemoryModel, Source, resolve_threads, run_ordered};
-use crate::path::{normalize_selector, safe_join, selector_matches};
+use crate::path::{normalize_selector, selector_matches};
+use crate::secure::{DirHandle, Lane, Pending, Root};
 
 /// Files up to this size are assembled in memory and written by the writer pool; larger files
 /// are streamed by the sink thread (their per-file overhead is already amortised).
@@ -251,20 +257,32 @@ struct Restore<'a> {
 }
 
 impl Restore<'_> {
-    /// Ownership and attributes of entry `entry`, which is the open file `file` currently at
-    /// `path`. Returns how many could not be applied.
-    fn file(&self, entry: usize, file: &File, path: &Path) -> u64 {
+    /// Ownership and attributes of entry `entry`, which is the open file `file`. Everything goes
+    /// through the descriptor, so nothing can be redirected by a link swapped in afterwards.
+    /// Returns how many could not be applied.
+    fn file(&self, entry: usize, file: &File) -> u64 {
         let mut errors = 0;
         if self.owner
             && let Some((uid, gid)) = self.index.owner(entry)
         {
             errors += u64::from(set_owner(file, uid, gid).is_err());
         }
-        errors + self.attributes(entry, path)
+        errors + self.attributes(entry, |name, value| set_xattr_file(file, name, value))
     }
 
-    /// The same for something reached by name that must not be followed (a directory or a
-    /// symbolic link).
+    /// The same for an extracted directory, through its open descriptor.
+    fn dir(&self, entry: usize, dir: &DirHandle) -> u64 {
+        let mut errors = 0;
+        if self.owner
+            && let Some((uid, gid)) = self.index.owner(entry)
+        {
+            errors += u64::from(dir.set_owner(uid, gid).is_err());
+        }
+        errors + self.attributes(entry, |name, value| dir.set_xattr(name, value))
+    }
+
+    /// The same for something reached by name that must not be followed (a symbolic link, or a
+    /// hard link written as a copy). `path` comes from `Lane::stable_path`.
     fn path(&self, entry: usize, path: &Path) -> u64 {
         let mut errors = 0;
         if self.owner
@@ -272,10 +290,14 @@ impl Restore<'_> {
         {
             errors += u64::from(set_owner_path(path, uid, gid).is_err());
         }
-        errors + self.attributes(entry, path)
+        errors + self.attributes(entry, |name, value| set_xattr(path, name, value))
     }
 
-    fn attributes(&self, entry: usize, path: &Path) -> u64 {
+    fn attributes(
+        &self,
+        entry: usize,
+        mut set: impl FnMut(&[u8], &[u8]) -> std::io::Result<()>,
+    ) -> u64 {
         let mut errors = 0;
         for a in self.index.xattrs_of(entry) {
             let wanted = match self.xattrs {
@@ -283,105 +305,11 @@ impl Restore<'_> {
                 XattrMode::User => a.name.starts_with(b"user."),
                 XattrMode::All => true,
             };
-            if wanted && set_xattr(path, &a.name, &a.value).is_err() {
+            if wanted && set(&a.name, &a.value).is_err() {
                 errors += 1;
             }
         }
         errors
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Directory handling
-// ---------------------------------------------------------------------------------------------
-
-/// Creates output directories and remembers which ones it has already checked.
-///
-/// Compared with calling `create_dir_all` per file this saves a syscall or two per file, and it
-/// adds a safety property: **an existing symbolic link inside the destination tree is refused**
-/// instead of followed, so a link planted beforehand cannot redirect extraction elsewhere. (The
-/// destination root itself may be a link; the caller chose it.)
-struct DirCache {
-    root: PathBuf,
-    known: HashSet<PathBuf>,
-}
-
-impl DirCache {
-    fn new(root: &Path) -> Self {
-        Self {
-            root: root.to_path_buf(),
-            known: HashSet::new(),
-        }
-    }
-
-    /// Make sure `dir` (inside the root) exists as a real directory, creating missing parents.
-    fn ensure(&mut self, dir: &Path) -> Result<()> {
-        if dir == self.root || self.known.contains(dir) {
-            return Ok(());
-        }
-        let mut missing: Vec<&Path> = Vec::new();
-        let mut cur = dir;
-        loop {
-            if cur == self.root || self.known.contains(cur) {
-                break;
-            }
-            match fs::symlink_metadata(cur) {
-                Ok(m) if m.is_dir() => {
-                    self.known.insert(cur.to_path_buf());
-                    break;
-                }
-                Ok(m) if m.file_type().is_symlink() => {
-                    return Err(Error::UnsafePath(format!(
-                        "{} is a symbolic link inside the destination; refusing to follow it",
-                        cur.display()
-                    )));
-                }
-                Ok(_) => {
-                    return Err(Error::Invalid(format!(
-                        "{} exists and is not a directory",
-                        cur.display()
-                    )));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    missing.push(cur);
-                    cur = cur.parent().ok_or_else(|| {
-                        Error::Internal("directory outside the destination".into())
-                    })?;
-                }
-                Err(e) => {
-                    return Err(Error::Io {
-                        path: cur.to_path_buf(),
-                        source: e,
-                    });
-                }
-            }
-        }
-        for d in missing.into_iter().rev() {
-            match fs::create_dir(d) {
-                Ok(()) => {}
-                // Another writer thread may have created it a moment ago; make sure that it is
-                // a real directory and not something planted in between.
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if !fs::symlink_metadata(d).is_ok_and(|m| m.is_dir()) {
-                        return Err(Error::UnsafePath(format!(
-                            "{} is not a plain directory",
-                            d.display()
-                        )));
-                    }
-                }
-                Err(e) => {
-                    return Err(Error::Io {
-                        path: d.to_path_buf(),
-                        source: e,
-                    });
-                }
-            }
-            self.known.insert(d.to_path_buf());
-        }
-        if self.known.len() > 200_000 {
-            self.known.clear(); // bound the cache; correctness never depends on it
-        }
-        Ok(())
     }
 }
 
@@ -510,11 +438,11 @@ fn writer_loop(
     rx: &Receiver<Vec<Job>>,
     shared: &Shared,
     entries: &[Entry],
-    dest: &Path,
+    root: &Root,
     overwrite: bool,
     restore: Restore<'_>,
 ) {
-    let mut dirs = DirCache::new(dest);
+    let mut lane = root.lane();
     for job in rx.iter().flatten() {
         let size = job.data.len() as u64;
         let charge = size.max(MIN_JOB_CHARGE);
@@ -524,9 +452,8 @@ fn writer_loop(
                     &entries[job.entry],
                     job.entry,
                     &job.data,
-                    dest,
+                    &mut lane,
                     overwrite,
-                    &mut dirs,
                     restore,
                 )
             }));
@@ -552,58 +479,30 @@ fn write_small(
     e: &Entry,
     entry: usize,
     data: &[u8],
-    dest: &Path,
+    lane: &mut Lane<'_>,
     overwrite: bool,
-    dirs: &mut DirCache,
     restore: Restore<'_>,
 ) -> Result<u64> {
     let mut hasher = FileHasher::new();
     hasher.update(data);
     check_hash(e, hasher.finalize())?;
-    let path = safe_join(dest, &e.path)?;
-    if let Some(parent) = path.parent() {
-        dirs.ensure(parent)?;
-    }
-    if overwrite && fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
-        return Err(Error::Invalid(format!(
-            "cannot replace directory {} with a file",
-            path.display()
-        )));
-    }
     if overwrite {
         // Replacing an existing file must be atomic, so go through a temporary name.
-        let (temp, mut file) = TempOutput::create(&path, true)?;
-        file.write_all(data).at(temp.temp_path())?;
-        let errors = apply_file_metadata(&file, temp.temp_path(), e, entry, &restore);
-        temp.commit_fast(file)?;
+        let (pending, mut file) = lane.create(&e.path, true, true)?;
+        file.write_all(data).at(pending.temp_path())?;
+        let errors = apply_file_metadata(&file, e, entry, &restore);
+        pending.commit(file)?;
         return Ok(errors);
     }
     // The content is already verified and in memory, so create the final name directly and
-    // exclusively (`create_new` fails if anything - including a symlink - is there). This is
-    // two directory operations cheaper per file than temp + link + unlink. If writing fails the
-    // half-written file is removed; only a crash in the middle of a write can leave one behind.
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                Error::Exists(path.clone())
-            } else {
-                Error::Io {
-                    path: path.clone(),
-                    source: err,
-                }
-            }
-        })?;
-    if let Err(err) = file.write_all(data) {
-        drop(file);
-        let _ = fs::remove_file(&path);
-        return Err(Error::Io { path, source: err });
-    }
-    let mut errors = restore.file(entry, &file, &path);
-    errors += u64::from(set_file_mtime(&file, e.mtime_secs, e.mtime_nanos).is_err());
-    errors += u64::from(set_file_mode(&file, e.mode).is_err());
+    // exclusively (`O_EXCL | O_NOFOLLOW`: it fails if anything - including a symlink - is there).
+    // This is two directory operations cheaper per file than temp + link + unlink. If writing
+    // fails the half-written file is removed when `pending` is dropped; only a crash in the
+    // middle of a write can leave one behind.
+    let (pending, mut file) = lane.create(&e.path, false, false)?;
+    file.write_all(data).at(pending.temp_path())?;
+    let errors = apply_file_metadata(&file, e, entry, &restore);
+    pending.commit(file)?;
     Ok(errors)
 }
 
@@ -789,6 +688,8 @@ fn run(
         0
     };
     let shared = Shared::new(budget);
+    // Opened once, before any thread starts: every write below is relative to this directory.
+    let root = output.as_ref().map(|o| Root::open(o.dest)).transpose()?;
 
     thread::scope(|scope| -> Result<ExtractStats> {
         let mut senders = Vec::new();
@@ -801,11 +702,12 @@ fn run(
                 let (tx, rx) = unbounded::<Vec<Job>>();
                 senders.push(tx);
                 let (shared, entries) = (&shared, &index.entries[..]);
-                let (dest, overwrite) = (out.dest, out.overwrite);
+                let overwrite = out.overwrite;
+                let root = root.as_ref().expect("an output implies a root");
                 let restore = restore.expect("an output implies a restore plan");
                 handles
                     .push(scope.spawn(move || {
-                        writer_loop(&rx, shared, entries, dest, overwrite, restore)
+                        writer_loop(&rx, shared, entries, root, overwrite, restore)
                     }));
             }
         }
@@ -818,7 +720,7 @@ fn run(
             next: 0,
             open: None,
             chunk_starts: &index.chunk_starts,
-            dirs: output.as_ref().map(|o| DirCache::new(o.dest)),
+            lane: root.as_ref().map(Root::lane),
             output,
             dispatcher,
             restore,
@@ -867,7 +769,7 @@ fn run(
             output,
             selected,
             entries,
-            dirs,
+            lane,
             dispatcher,
             ..
         } = demux;
@@ -884,16 +786,16 @@ fn run(
         stats.bytes += shared.bytes.load(Ordering::Relaxed);
         stats.metadata_errors += shared.metadata_errors.load(Ordering::Relaxed);
         stats.symlinks += verified_symlinks;
-        if let (Some(out), Some(mut dirs), Some(restore)) = (&output, dirs, &restore) {
+        if let (Some(out), Some(mut lane), Some(restore)) = (&output, lane, &restore) {
             // Links first: creating them must not disturb the directory timestamps set below.
-            let made = finish_links(&hard_links, &symlinks, out, &mut dirs, restore)?;
+            let made = finish_links(&hard_links, &symlinks, out, &mut lane, restore)?;
             stats.files += made.hard_links;
             stats.bytes = stats.bytes.saturating_add(made.bytes);
             stats.hard_links += made.hard_links;
             stats.hard_link_copies += made.copies;
             stats.symlinks += made.symlinks;
             stats.metadata_errors += made.errors;
-            stats.metadata_errors += finish_dirs(entries, selected, out, &mut dirs, restore)?;
+            stats.metadata_errors += finish_dirs(entries, selected, &mut lane, restore)?;
         }
         Ok(stats)
     })
@@ -909,40 +811,17 @@ struct LinkStats {
     errors: u64,
 }
 
-/// Refuse to replace a directory with a file or link.
-fn check_not_a_directory(path: &Path, overwrite: bool) -> Result<()> {
-    if overwrite && fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
-        return Err(Error::Invalid(format!(
-            "cannot replace directory {} with a file or link",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-/// Map a failure to create `path` onto the crate's errors.
-fn link_error(path: &Path, e: std::io::Error) -> Error {
-    if e.kind() == std::io::ErrorKind::AlreadyExists {
-        Error::Exists(path.to_path_buf())
-    } else {
-        Error::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }
-    }
-}
-
 /// Create the hard links, then the symbolic links, once all file data is on disk.
 ///
-/// Every hard link's source was extracted by this run (that is how it got here), and the
-/// parent directories go through the same checks as files: a symbolic link planted in the
+/// Every hard link's source was extracted by this run (that is how it got here), and every path
+/// is resolved relative to the destination's directory descriptors: a link planted in the
 /// destination is refused, never followed. Symbolic link targets are stored as they were and are
 /// not interpreted; nothing is ever written through them.
 fn finish_links(
     hard_links: &[usize],
     symlinks: &[usize],
     out: &Output<'_>,
-    dirs: &mut DirCache,
+    lane: &mut Lane<'_>,
     restore: &Restore<'_>,
 ) -> Result<LinkStats> {
     let index = restore.index;
@@ -950,17 +829,12 @@ fn finish_links(
     let mut made = LinkStats::default();
     for &i in hard_links {
         let source = index.hard_link_source(i).expect("selected as a hard link");
-        let from = safe_join(out.dest, &entries[source].path)?;
-        let path = safe_join(out.dest, &entries[i].path)?;
-        if let Some(parent) = path.parent() {
-            dirs.ensure(parent)?;
-        }
-        check_not_a_directory(&path, out.overwrite)?;
-        match create_hard_link(&from, &path, out.overwrite).map_err(|e| link_error(&path, e))? {
+        match lane.hard_link(&entries[source].path, &entries[i].path, out.overwrite)? {
             LinkOutcome::Linked => {}
             LinkOutcome::Copied => {
                 // A copy is a new file: it needs the attributes the shared inode would have had.
                 made.copies += 1;
+                let path = lane.stable_path(&entries[i].path)?;
                 made.errors += restore.path(i, &path);
             }
         }
@@ -971,25 +845,21 @@ fn finish_links(
         let target = index
             .symlink_target(i)
             .expect("selected as a symbolic link");
-        let path = safe_join(out.dest, &entries[i].path)?;
-        if let Some(parent) = path.parent() {
-            dirs.ensure(parent)?;
-        }
-        check_not_a_directory(&path, out.overwrite)?;
-        create_symlink(target, &path, out.overwrite).map_err(|e| link_error(&path, e))?;
+        lane.symlink(&entries[i].path, target, out.overwrite)?;
         made.symlinks += 1;
+        let path = lane.stable_path(&entries[i].path)?;
         made.errors += restore.path(i, &path);
     }
     Ok(made)
 }
 
 /// Create explicitly archived directories (so empty ones exist) and apply their metadata,
-/// children first so that creating a child cannot disturb a parent's timestamp.
+/// children first so that creating a child cannot disturb a parent's timestamp. Metadata goes
+/// through each directory's open descriptor.
 fn finish_dirs(
     entries: &[Entry],
     selected: &[usize],
-    out: &Output<'_>,
-    dirs: &mut DirCache,
+    lane: &mut Lane<'_>,
     restore: &Restore<'_>,
 ) -> Result<u64> {
     let mut list: Vec<usize> = selected
@@ -1001,11 +871,10 @@ fn finish_dirs(
     let mut errors = 0;
     for i in list {
         let d = &entries[i];
-        let path = safe_join(out.dest, &d.path)?;
-        dirs.ensure(&path)?;
-        errors += restore.path(i, &path);
-        errors += set_dir_mtime(&path, d.mtime_secs, d.mtime_nanos).is_err() as u64;
-        errors += set_mode(&path, d.mode).is_err() as u64;
+        let dir = lane.open_dir(&d.path)?;
+        errors += restore.dir(i, &dir);
+        errors += dir.set_mtime(d.mtime_secs, d.mtime_nanos).is_err() as u64;
+        errors += dir.set_mode(d.mode).is_err() as u64;
     }
     Ok(errors)
 }
@@ -1090,7 +959,7 @@ enum OpenTarget {
     /// so a failed run never leaves a truncated or unverified file under a real name (dropping
     /// this value removes the temporary file).
     Stream {
-        temp: TempOutput,
+        temp: Pending,
         file: File,
         hasher: FileHasher,
     },
@@ -1107,7 +976,7 @@ struct Demux<'a> {
     open: Option<OpenTarget>,
     chunk_starts: &'a [u64],
     output: Option<Output<'a>>,
-    dirs: Option<DirCache>,
+    lane: Option<Lane<'a>>,
     dispatcher: Option<Dispatcher<'a>>,
     restore: Option<Restore<'a>>,
     stats: ExtractStats,
@@ -1146,19 +1015,9 @@ impl Demux<'_> {
 
     fn begin(&mut self, entry: usize) -> Result<()> {
         let e = &self.entries[entry];
-        self.open = Some(match (&self.output, &mut self.dirs) {
-            (Some(out), Some(dirs)) if e.size > SMALL_FILE_MAX => {
-                let path = safe_join(out.dest, &e.path)?;
-                if let Some(parent) = path.parent() {
-                    dirs.ensure(parent)?;
-                }
-                if out.overwrite && fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
-                    return Err(Error::Invalid(format!(
-                        "cannot replace directory {} with a file",
-                        path.display()
-                    )));
-                }
-                let (temp, file) = TempOutput::create(&path, out.overwrite)?;
+        self.open = Some(match (&self.output, &mut self.lane) {
+            (Some(out), Some(lane)) if e.size > SMALL_FILE_MAX => {
+                let (temp, file) = lane.create(&e.path, out.overwrite, true)?;
                 OpenTarget::Stream {
                     temp,
                     file,
@@ -1191,10 +1050,9 @@ impl Demux<'_> {
             OpenTarget::Stream { temp, file, hasher } => {
                 check_hash(e, hasher.finalize())?;
                 if let Some(restore) = &self.restore {
-                    self.stats.metadata_errors +=
-                        apply_file_metadata(&file, temp.temp_path(), e, entry, restore);
+                    self.stats.metadata_errors += apply_file_metadata(&file, e, entry, restore);
                 }
-                temp.commit_fast(file)?;
+                temp.commit(file)?;
                 self.stats.files += 1;
                 self.stats.bytes += e.size;
                 for &copy in copies {
@@ -1209,29 +1067,19 @@ impl Demux<'_> {
     /// copy is hashed again while it is written.
     fn copy_file(&mut self, from: usize, to: usize) -> Result<()> {
         let entries = self.entries;
-        let (Some(out), Some(dirs)) = (&self.output, &mut self.dirs) else {
+        let (Some(out), Some(lane)) = (&self.output, &mut self.lane) else {
             return Ok(());
         };
-        let source = safe_join(out.dest, &entries[from].path)?;
+        let source = Path::new(&entries[from].path);
         let e = &entries[to];
-        let path = safe_join(out.dest, &e.path)?;
-        if let Some(parent) = path.parent() {
-            dirs.ensure(parent)?;
-        }
-        if out.overwrite && fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
-            return Err(Error::Invalid(format!(
-                "cannot replace directory {} with a file",
-                path.display()
-            )));
-        }
-        let (temp, mut file) = TempOutput::create(&path, out.overwrite)?;
-        let mut input = File::open(&source).at(&source)?;
+        let (temp, mut file) = lane.create(&e.path, out.overwrite, true)?;
+        let mut input = lane.open_read(&entries[from].path)?;
         // The source was verified when it was written but is read back from disk here, so the
         // copy is hashed too: a bad read can never produce a wrong file.
         let mut hasher = FileHasher::new();
         let mut buf = vec![0u8; 256 << 10];
         loop {
-            let n = read_full(&mut input, &mut buf).at(&source)?;
+            let n = read_full(&mut input, &mut buf).at(source)?;
             if n == 0 {
                 break;
             }
@@ -1240,10 +1088,9 @@ impl Demux<'_> {
         }
         check_hash(e, hasher.finalize())?;
         if let Some(restore) = &self.restore {
-            self.stats.metadata_errors +=
-                apply_file_metadata(&file, temp.temp_path(), e, to, restore);
+            self.stats.metadata_errors += apply_file_metadata(&file, e, to, restore);
         }
-        temp.commit_fast(file)?;
+        temp.commit(file)?;
         self.stats.files += 1;
         self.stats.bytes += e.size;
         Ok(())
@@ -1303,18 +1150,13 @@ impl Demux<'_> {
     }
 }
 
-/// Apply ownership, attributes, timestamp and permissions of entry `entry` (`e`) to the file
-/// `file` currently at `path`; returns how many could not be applied (non-fatal).
-fn apply_file_metadata(
-    file: &File,
-    path: &Path,
-    e: &Entry,
-    entry: usize,
-    restore: &Restore<'_>,
-) -> u64 {
-    restore.file(entry, file, path)
+/// Apply ownership, attributes, timestamp and permissions of entry `entry` (`e`) to the open file
+/// `file`; returns how many could not be applied (non-fatal). Everything goes through the
+/// descriptor.
+fn apply_file_metadata(file: &File, e: &Entry, entry: usize, restore: &Restore<'_>) -> u64 {
+    restore.file(entry, file)
         + u64::from(set_file_mtime(file, e.mtime_secs, e.mtime_nanos).is_err())
-        + u64::from(set_mode(path, e.mode).is_err())
+        + u64::from(set_file_mode(file, e.mode).is_err())
 }
 
 #[cfg(test)]

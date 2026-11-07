@@ -1,0 +1,28 @@
+# Archives larger than 4 GiB on format v2 (tests/large.rs, `#[ignore]` by default).
+#
+# NOTE: written without a toolchain or a GitHub runner; not yet run. Needs roughly 5 GiB of free
+# disk, which a standard GitHub runner has. Weekly and on demand; not on every push.
+name: large
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  large:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Free disk
+        run: df -h .
+
+      - name: Archives over 4 GiB
+        run: cargo test --release --locked --test large -- --ignored --nocapture

@@ -1,0 +1,85 @@
+# Fuzzing (cargo-fuzz / libFuzzer), see docs/HARDENING.md section 2.
+#
+# NOTE: written without a toolchain or a GitHub runner; neither this workflow nor the fuzz crate
+# has been run. Nightly on a schedule, on demand with a chosen duration, and briefly on pull
+# requests that touch the parsers. Five minutes per target only finds shallow bugs: for real
+# confidence run the targets for hours on a dedicated machine.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds to fuzz each target"
+        default: "900"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "src/format/**"
+      - "src/archive/**"
+      - "src/codec/**"
+      - "src/path.rs"
+      - "src/secure.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [open, index, record, header]
+    env:
+      # 60 s on pull requests, 300 s nightly, or what was asked for by hand.
+      SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '60' || github.event.inputs.seconds || '300' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo-fuzz
+        id: cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-v1
+
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
+
+      # The corpus grows between runs; the committed seeds are the starting point.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Build
+        run: cargo +nightly fuzz build ${{ matrix.target }}
+
+      - name: Fuzz
+        run: >
+          cargo +nightly fuzz run ${{ matrix.target }}
+          fuzz/corpus/${{ matrix.target }}
+          --
+          -dict=fuzz/kiln.dict
+          -max_len=65536
+          -max_total_time=${{ env.SECONDS_PER_TARGET }}
+          -rss_limit_mb=2048
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

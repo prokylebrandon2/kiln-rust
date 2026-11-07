@@ -38,6 +38,7 @@ pub mod integrity;
 pub mod parallel;
 pub mod path;
 pub mod profile;
+pub(crate) mod secure;
 pub mod util;
 pub mod walk;
 

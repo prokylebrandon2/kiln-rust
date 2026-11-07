@@ -30,7 +30,8 @@ system libraries are needed. The first build downloads crates from crates.io and
 
 ```sh
 cargo build --release          # binary: target/release/kiln
-cargo test --locked            # 130 tests
+cargo test --locked            # unit + integration tests (+ tests/hardening.rs on Unix)
+cargo test --release --locked --test large -- --ignored   # archives over 4 GiB (~5 GiB disk)
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 ```
 
@@ -93,14 +94,18 @@ extract(&archive, &ExtractOptions::new("restored"))?;
 ## Layout
 
 ```text
-src/            library (codec/, format/, archive/, parallel, walk, path, integrity, fsutil, bench) + CLI
-tests/          integration tests: round trips, corruption/hostile archives, CLI, write failures
+src/            library (codec/, format/, archive/, secure, parallel, walk, path, integrity, fsutil, bench) + CLI
+tests/          integration tests: round trips, corruption/hostile archives, hostile destinations
+                (hardening.rs), >4 GiB archives (large.rs, ignored), CLI, write failures
+fuzz/           cargo-fuzz targets (open, index, record, header), dictionary and seed corpus
 android/        minimal Android shell that runs the CLI as libkiln.so (see below)
 docs/           AUDIT.md  BASELINE.md  ARCHITECTURE.md  FORMAT.md (v2)  PHASE2.md  PHASE3.md  ROADMAP.md
+                HARDENING.md (hostile destinations, fuzzing, >4 GiB)  SCALING.md (multicore curve)
 bench-results/  raw benchmark JSON/logs behind PHASE3.md
-tools/bench/    benchmark harness, dataset generator, 7-Zip comparison (see PHASE3.md section 8)
+tools/bench/    benchmark harness, dataset generator, 7-Zip comparison (see PHASE3.md section 8),
+                scaling.py (1/2/4/8/16-thread curve, see docs/SCALING.md)
 tools/baseline/ scripts and raw results behind BASELINE.md (Python 3; not needed to build)
-.github/        ci.yml and android-apk.yml workflows (neither has been run on a real runner)
+.github/        ci.yml, fuzz.yml, large.yml and android-apk.yml workflows (none has been run on a real runner)
 ```
 
 Reproduce the baseline: `python3 tools/baseline/make_corpus.py corpus`, then
@@ -132,19 +137,25 @@ What it is **not** yet:
   original on the binary corpus; the missing x86 filter alone accounts for ~8.6%). Text is within
   3.2% of the original and 0.5% *better* than 7-Zip `-mx=5`. Details and plan: BASELINE, ROADMAP.
 * **Multicore speedup is not characterised** - all measurements are on 2 vCPUs, warm page cache. Correctness
-  under many threads is tested; a 4/8/16-thread speedup curve has not been measured.
+  under many threads is tested; a 4/8/16-thread speedup curve has **not been measured**. The harness
+  exists (`tools/bench/scaling.py`, method in `docs/SCALING.md`); it needs a run on a many-core machine.
 * **Format version 2** has a written compatibility policy and one golden test archive, but it is
   **not compatible with Phase 2's `.kr` (v1) or the original `.kln`**. LZ4/LZMA2 chunks and
   extensions have no golden files yet.
 * Stores regular files, directories, symbolic links and hard links; numeric ownership (`--owner`)
   and extended attributes (`--xattrs`) are opt-in. Special files (sockets, FIFOs, devices) are
   skipped with a warning. Names containing a backslash are refused.
-* No encryption, no append/update, no fuzzing, no archive repair mode yet.
+* No encryption, no append/update, no archive repair mode yet. Fuzz targets exist (`fuzz/`,
+  `docs/HARDENING.md`) but **have never been run**: no findings, and no claim of freedom from bugs.
 * Still open from the Phase 1 throughput plan: per-file hashing runs on the producer thread, no
   buffer pool, no read-ahead. See `docs/PHASE2.md`.
-* Extraction is not transactional and is not hardened against a hostile output directory;
-  extract into a directory you control.
-* Archives larger than 4 GiB: Phase 2 tested one 4.25 GiB file on format v1; not re-tested for v2.
+* Extraction is not transactional. On **Unix** it no longer follows a symbolic link below the
+  destination, even one planted while it runs (descriptor-relative, `docs/HARDENING.md`); on
+  **Windows** it keeps the older path-based check and the race is not closed. This code was written
+  without a compiler and has not been built or run: expect to fix compile errors first.
+* Archives larger than 4 GiB: Phase 2 tested one 4.25 GiB file on format v1. For v2 the 32-bit audit
+  found no narrowing of offsets or sizes, a no-I/O unit test covers the arithmetic and `tests/large.rs`
+  covers it end to end, but **those tests have not been run**. A genuinely full disk is untested.
 * Tested on Linux only. Windows/macOS code paths are written but unverified; neither CI workflow
   has been run.
 * **License: none chosen.** The original repository contains no LICENSE file, so no license is

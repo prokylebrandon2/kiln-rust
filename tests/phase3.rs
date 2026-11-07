@@ -605,10 +605,7 @@ fn dedup_stores_identical_files_once_and_every_copy_extracts() {
     let deduped = dir.path().join("deduped.kiln");
     let o = opts(Profile::Adaptive, 2);
     let before = pack(&plain, std::slice::from_ref(&src), &o).unwrap();
-    let dedup_options = PackOptions {
-        dedup: true,
-        ..o
-    };
+    let dedup_options = PackOptions { dedup: true, ..o };
     let after = pack(&deduped, std::slice::from_ref(&src), &dedup_options).unwrap();
     assert_eq!(after.raw_bytes, before.raw_bytes);
     assert!(

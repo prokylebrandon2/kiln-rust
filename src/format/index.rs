@@ -147,7 +147,9 @@ fn parse_dedup(data: &[u8], entry_count: usize) -> Result<Vec<(usize, usize)>> {
     let mut r = Reader::new(data);
     let count = r.varint()?;
     if count > (r.remaining() / 2) as u64 {
-        return Err(Error::corrupt("deduplication table is larger than its data"));
+        return Err(Error::corrupt(
+            "deduplication table is larger than its data",
+        ));
     }
     let mut pairs = Vec::with_capacity(count as usize);
     let mut previous = 0u64;

@@ -71,7 +71,8 @@ struct PackArgs {
     no_classify: bool,
     /// Store files with identical content once (reads files that share a size an extra time)
     #[arg(long)]
-    dedup: bool,    /// Worker threads (0 = all cores)
+    dedup: bool,
+    /// Worker threads (0 = all cores)
     #[arg(short = 'j', long, default_value_t = 0)]
     threads: usize,
     /// Overwrite the archive if it exists

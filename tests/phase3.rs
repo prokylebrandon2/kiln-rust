@@ -597,7 +597,7 @@ fn dedup_stores_identical_files_once_and_every_copy_extracts() {
         fs::write(src.join(d).join("small.txt"), &small).unwrap();
     }
     // Same size as small.txt, different content: must not be taken for a copy.
-    fs::write(src.join("a/other.txt"), prose(20_000, 9)).unwrap();
+    fs::write(src.join("a/other.txt"), prose(20_000, 10)).unwrap();
     fs::write(src.join("empty1"), b"").unwrap();
     fs::write(src.join("empty2"), b"").unwrap();
 

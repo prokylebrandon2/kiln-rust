@@ -179,9 +179,27 @@ pub fn set_file_mtime(file: &File, secs: i64, nanos: u32) -> io::Result<()> {
     }
 }
 
-/// Set a directory's modification time (best effort on platforms that cannot open directories).
+/// Set a directory's modification time.
 pub fn set_dir_mtime(path: &Path, secs: i64, nanos: u32) -> io::Result<()> {
-    set_file_mtime(&File::open(path)?, secs, nanos)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+        let file = OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?;
+
+        set_file_mtime(&file, secs, nanos)
+    }
+
+    #[cfg(not(windows))]
+    {
+        set_file_mtime(&File::open(path)?, secs, nanos)
+    }
 }
 
 /// Apply Unix permission bits. Only the lower nine bits are honoured: set-uid, set-gid and
@@ -280,5 +298,23 @@ mod tests {
         let (guard, file) = TempOutput::create(&dest, true).unwrap();
         guard.commit(file).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_mtime_can_be_restored() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("test_dir");
+        std::fs::create_dir(&path).unwrap();
+
+        let expected_secs = 1_700_000_000_i64;
+
+        super::set_dir_mtime(&path, expected_secs, 0).unwrap();
+
+        let expected = std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(expected_secs as u64);
+        let actual = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        assert_eq!(actual, expected);
     }
 }

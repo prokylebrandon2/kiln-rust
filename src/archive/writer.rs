@@ -527,7 +527,7 @@ fn read_sample(path: &Path, size: u64) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
     head.truncate(got);
     let mut mid = Vec::new();
     if size > 2 * SAMPLE_HEAD as u64 {
-        file.seek(SeekFrom::Start(size / 2 - SAMPLE_MID as u64 / 2))?;
+        file.seek(SeekFrom::Start(size / 2))?;
         mid = vec![0u8; SAMPLE_MID];
         let got = read_full(&mut file, &mut mid)?;
         mid.truncate(got);

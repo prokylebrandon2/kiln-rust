@@ -16,14 +16,21 @@ export component KPullPanel inherits Rectangle {
     /// How much of the storage is used, 0..1 (never below 8 / 1000 once the space is known).
     in property <float> used: 0;
     property <length> col-w: (root.width - 32px - 12px) / 2;
+    // Where the usage bar goes: under the two text lines, 10 dp below them. The lines are packed
+    // at the top of their columns (`alignment: start`), so this is where they really end.
+    property <length> lines-h: Math.max(left-col.preferred-height, right-col.preferred-height);
 
     background: Theme.surface;
     clip: true;
 
+    // The panel is as tall as the list has been pulled down, so it is taller than the two lines
+    // most of the time. Without `alignment: start` the layout spreads the lines over all of that
+    // height, and the second line ("Free: ...") slid down onto the usage bar.
     left-col := VerticalLayout {
         x: 16px;
         y: 10px;
         width: root.col-w;
+        alignment: start;
         KEllipsisText {
             text: root.type-text;
             font-size: Theme.sp(13px);
@@ -37,10 +44,11 @@ export component KPullPanel inherits Rectangle {
             cap: Theme.surface;
         }
     }
-    VerticalLayout {
+    right-col := VerticalLayout {
         x: 16px + root.col-w + 12px;
         y: 10px;
         width: root.col-w;
+        alignment: start;
         KEllipsisText {
             text: root.name-text;
             font-size: Theme.sp(13px);
@@ -57,13 +65,15 @@ export component KPullPanel inherits Rectangle {
     // the usage bar: k_line track, k_accent fill
     Rectangle {
         x: 16px;
-        y: 10px + left-col.preferred-height + 10px;
+        y: 10px + root.lines-h + 10px;
         width: root.width - 32px;
         height: 6px;
         background: Theme.line;
         Rectangle {
             x: 0px;
-            width: parent.width * Math.min(1, root.used);
+            y: 0px;
+            height: parent.height;
+            width: parent.width * Math.max(0, Math.min(1, root.used));
             background: Theme.accent;
         }
     }

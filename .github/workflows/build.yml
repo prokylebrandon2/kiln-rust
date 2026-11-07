@@ -2,6 +2,11 @@ name: Build APK
 
 on:
   workflow_dispatch:
+    inputs:
+      abis:
+        description: 'CPU types to build, comma separated (arm64-v8a is every phone; add x86_64 for emulators)'
+        required: false
+        default: 'arm64-v8a'
   push:
     branches:
       - main
@@ -10,6 +15,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # One copy of the Rust + Skia library per ABI is what makes the APK big: build only what is asked for.
+      KILN_ABIS: ${{ github.event.inputs.abis || 'arm64-v8a' }}
 
     steps:
       - name: Checkout repository
@@ -52,11 +60,13 @@ jobs:
           RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
         run: |
           cargo install cargo-ndk --locked
-          cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o app/src/main/jniLibs build --release -p kiln-platform
+          targets=()
+          for abi in ${KILN_ABIS//,/ }; do targets+=(-t "$abi"); done
+          cargo ndk "${targets[@]}" --platform 30 -o app/src/main/jniLibs build --release -p kiln-platform
           ls -l app/src/main/jniLibs/*/
 
       - name: Build APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleDebug -PkilnAbis="$KILN_ABIS" --stacktrace
 
       - name: Verify APK contents
         shell: bash
@@ -66,7 +76,9 @@ jobs:
 
           unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/libkiln_android\.so'
 
-          test "$(unzip -l "$apk" | grep -c 'libkiln_android\.so')" -eq 2
+          want="$(echo "${KILN_ABIS//,/ }" | wc -w)"
+          test "$(unzip -l "$apk" | grep -c 'libkiln_android\.so')" -eq "$want"
+          ls -l "$apk"
 
           if unzip -l "$apk" | grep -E 'classes[0-9]*\.dex'; then
             echo "note: the APK contains Dalvik code"

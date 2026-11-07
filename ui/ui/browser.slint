@@ -65,6 +65,13 @@ export component KFileList inherits Rectangle {
     property <int> total: root.rows.length + (root.up-row ? 1 : 0);
     property <int> first: Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 1);
     property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
+    // How many row views are built: enough for the rows in view and a few over, and always the same
+    // number while the list is scrolled. Row `at` is built by view `at mod slots`, so scrolling
+    // by one row hands ONE view to the row that comes into view and leaves every other view as it
+    // is. (If views were numbered from `first`, every view would get another row each time the
+    // list moved by one row, and every one of them would lay its texts out again: that was a
+    // stutter on every row boundary of a fast scroll.)
+    property <int> slots: Math.max(0, Math.min(root.total, Math.ceil(root.height / root.row-h) + 3));
 
     // transparent: the info strip shows through above the rows while the list is pulled down
     clip: true;
@@ -156,8 +163,10 @@ export component KFileList inherits Rectangle {
                 }
             }
 
-            for slot in root.shown: KListRow {
-                property <int> at: root.first + slot;
+            for slot in root.slots: KListRow {
+                // the row this view builds: the one at or after `first` whose number is `slot` mod `slots`
+                property <int> at: root.first + Math.floor(Math.mod(slot + root.slots - Math.mod(root.first, root.slots), root.slots));
+                visible: self.at < root.total;
                 property <int> idx: self.at - (root.up-row ? 1 : 0);
                 property <bool> is-up: root.up-row && self.at == 0;
                 property <RowData> d: root.rows[self.idx];

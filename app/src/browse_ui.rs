@@ -1,13 +1,14 @@
 //! The file browser on screen: what the Slint window shows of a [`Browser`](crate::browser), and
 //! what its taps do (`MainActivity.redraw`, `renderHeader`, `onRowClick`, `loadDir`, ...).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
 use kiln_ui::{PickIcon, RowData};
 use serde_json::{Value, json};
-use slint::{Color, ModelRc, Timer, VecModel};
+use slint::{Color, Model, ModelRc, Timer, VecModel};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
 use crate::dialog::{Btn, BtnKind, Click, Opt, Spec};
@@ -187,6 +188,29 @@ impl App {
             .collect();
         self.model.set_vec(rows);
         self.thumb_request();
+    }
+
+    /// Only the ticks changed (a row was selected or unselected, or the selection was cleared):
+    /// flip the `selected` flag of the rows that differ, instead of building the whole list again.
+    /// Building it again also looks up every row's preview and folder icon, which is slow in a big
+    /// folder and makes the tap feel late.
+    pub(crate) fn sync_selection(&self) {
+        let b = self.browser.borrow();
+        if self.model.row_count() != b.rows.len() {
+            drop(b);
+            self.render_rows();
+            return;
+        }
+        let selected: HashSet<&str> = b.selected.iter().map(String::as_str).collect();
+        for (i, row) in b.rows.iter().enumerate() {
+            let want = selected.contains(row.key.as_str());
+            if let Some(mut data) = self.model.row_data(i)
+                && data.selected != want
+            {
+                data.selected = want;
+                self.model.set_row_data(i, data);
+            }
+        }
     }
 
     /// Everything around the list: the top bar, the banner, the empty line, the bars and buttons.
@@ -403,7 +427,7 @@ impl App {
 
     fn toggle(&self, key: &str) {
         self.browser.borrow_mut().toggle(key);
-        self.render_rows();
+        self.sync_selection();
         self.render_chrome();
     }
 
@@ -424,7 +448,7 @@ impl App {
         }
         let select_all = opt("check", "Select all", |app| {
             app.browser.borrow_mut().select_all();
-            app.render_rows();
+            app.sync_selection();
             app.render_chrome();
         });
         let mut out = Vec::new();
@@ -449,7 +473,7 @@ impl App {
             }
             out.push(opt("close", "Clear selection", |app| {
                 app.browser.borrow_mut().clear_selection();
-                app.render_rows();
+                app.sync_selection();
                 app.render_chrome();
             }));
         } else {
@@ -516,7 +540,7 @@ impl App {
         };
         if selecting {
             self.browser.borrow_mut().clear_selection();
-            self.render_rows();
+            self.sync_selection();
             self.render_chrome();
         } else if home {
             self.was_home.set(false);

@@ -111,10 +111,12 @@ Reproduce the baseline: `python3 tools/baseline/make_corpus.py corpus`, then
 
 The Android app is in `app/` (Slint UI in `ui/`, JNI/platform glue in `platform/`, engine bridge in
 `bridge/`). `.github/workflows/build.yml` runs on every push to `main`: it cross-compiles
-`libkiln_android.so` for arm64-v8a and x86_64 with `cargo-ndk` (API 30, 16 KiB pages), builds the
-debug APK with Gradle, checks both libraries are inside it and uploads it as the `kiln-apk`
-artifact. `.github/workflows/ci.yml` runs fmt, clippy and the tests on every push. The APK is built
-on every commit and tested on a device by the maintainer. Release signing is not set up.
+`libkiln_android.so` for arm64-v8a with `cargo-ndk` (API 30, 16 KiB pages), builds the debug APK
+with Gradle, checks the library is inside it and uploads it as the `kiln-apk` artifact. Every ABI
+adds a whole copy of the Rust + Skia library to the APK, so arm64-v8a (every phone) is the default;
+start the workflow by hand with `abis` = `arm64-v8a,x86_64` (or run Gradle with
+`-PkilnAbis=arm64-v8a,x86_64`) for an emulator build. `.github/workflows/ci.yml` runs fmt, clippy
+and the tests on every push. The APK is built on every commit and tested on a device by the maintainer. Release signing is not set up.
 
 ## Status and honest limitations
 

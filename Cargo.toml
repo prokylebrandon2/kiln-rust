@@ -59,10 +59,15 @@ xattr = "1"
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+# "fat" LTO lets the linker drop everything the app never calls (clap's CLI code, unused helpers
+# of the codecs, unused parts of Slint) across all crates, not only inside each one; the library
+# is smaller and a little faster. It makes the build slower.
+lto = "fat"
 codegen-units = 1
 debug = false
-strip = "debuginfo"
+# Symbols are only for reading crash backtraces, and the symbol table of a library that links Skia
+# is several MB. (A crash report then shows addresses instead of function names.)
+strip = "symbols"
 # panic = "unwind" (the default) is deliberate: temp-file guards must run on a panic.
 
 [profile.dev]

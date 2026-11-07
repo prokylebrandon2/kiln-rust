@@ -279,8 +279,11 @@ impl Browser {
         } else {
             self.rows = self.source.clone();
         }
-        let rows = &self.rows;
-        self.selected.retain(|k| rows.iter().any(|r| &r.key == k));
+        // A hash set: with "Select all" in a big folder, scanning the rows for each selected name
+        // is a quadratic number of comparisons.
+        let keys: std::collections::HashSet<&str> =
+            self.rows.iter().map(|r| r.key.as_str()).collect();
+        self.selected.retain(|k| keys.contains(k.as_str()));
     }
 
     /// The line in the middle of the body (`empty`): empty while there are rows.

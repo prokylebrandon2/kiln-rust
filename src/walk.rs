@@ -1,23 +1,61 @@
 //! File traversal: turn the paths given on the command line into a sorted list of entries.
 //!
-//! Rules (deliberately conservative for a first version):
+//! Rules:
 //! * Each input is stored under its own base name, like `tar` and the original Kiln: packing
-//!   `/data/photos` yields names starting with `photos/`.
-//! * Regular files and directories are stored. Symbolic links and special files (sockets, FIFOs,
-//!   devices) are **skipped and reported**, never silently followed.
+//!   `/data/photos` yields names starting with `photos/`. (An input that is itself a symbolic
+//!   link is followed, like `tar` does for command-line arguments.)
+//! * Regular files and directories are always stored. Special files (sockets, FIFOs, devices)
+//!   are **skipped and reported**.
+//! * Symbolic links below an input are never followed. With [`WalkOptions::symlinks`] they are
+//!   stored as links; without it they are skipped and reported, which is what [`collect`] does.
+//! * With [`WalkOptions::hard_links`], files that share an inode are recorded as hard links of
+//!   the first of them (in name order); [`WalkOptions::owner`] and [`WalkOptions::xattrs`]
+//!   additionally record numeric ownership and extended attributes.
 //! * A hard I/O error (for example an unreadable directory) aborts the run rather than quietly
 //!   producing an incomplete archive.
 //! * Entries are sorted by name, so the archive does not depend on directory iteration order.
 
+use std::collections::HashMap;
 use std::fs::{self, Metadata};
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
 use crate::error::{Error, IoContext, Result};
-use crate::format::index::EntryKind;
-use crate::fsutil::mtime_parts;
+use crate::format::index::{
+    EntryKind, MAX_LINK_TARGET, MAX_XATTR_NAME, MAX_XATTR_VALUE, MAX_XATTRS_PER_ENTRY, Xattr,
+};
+use crate::fsutil::{mtime_parts, read_link_bytes, read_xattrs};
 use crate::path::validate_archive_path;
+
+/// What to record besides names, sizes, times and permission bits.
+///
+/// The default records nothing extra, so [`collect`] keeps its original behaviour: symbolic
+/// links are skipped and reported, hard links are ordinary files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WalkOptions {
+    /// Store symbolic links as links (instead of skipping them).
+    pub symlinks: bool,
+    /// Detect files that are hard links of each other.
+    pub hard_links: bool,
+    /// Record numeric user and group ids (Unix).
+    pub owner: bool,
+    /// Record extended attributes (Unix).
+    pub xattrs: bool,
+}
+
+/// A link found on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceLink {
+    /// A symbolic link; the target exactly as `readlink` returns it.
+    Symlink(Vec<u8>),
+    /// A hard link of an earlier entry of [`Collected::entries`] (the first file with this inode
+    /// in name order). The file contents belong to that entry.
+    HardLink {
+        /// Index of the entry that owns the data.
+        source: usize,
+    },
+}
 
 /// A file or directory found on disk, ready to be archived.
 #[derive(Clone, Debug)]
@@ -36,6 +74,17 @@ pub struct SourceEntry {
     pub mtime_nanos: u32,
     /// Unix permission bits.
     pub mode: u32,
+    /// `Some` for a symbolic link (kind [`EntryKind::File`], size 0) or a hard link (kind
+    /// [`EntryKind::File`], the source's size). Only produced by [`collect_with`] with the
+    /// matching [`WalkOptions`].
+    pub link: Option<SourceLink>,
+    /// `(uid, gid)`, when requested with [`WalkOptions::owner`] on a platform that has them.
+    pub owner: Option<(u32, u32)>,
+    /// Extended attributes, when requested with [`WalkOptions::xattrs`].
+    pub xattrs: Vec<Xattr>,
+    /// `(device, inode)` of a regular file with more than one hard link (internal bookkeeping
+    /// for [`WalkOptions::hard_links`]).
+    pub inode: Option<(u64, u64)>,
 }
 
 /// Something that was found but deliberately not archived.
@@ -59,6 +108,15 @@ pub struct Collected {
 /// Walk `inputs` and build the entry list. Paths in `exclude` (for example the archive being
 /// written) are left out.
 pub fn collect(inputs: &[PathBuf], exclude: &[PathBuf]) -> Result<Collected> {
+    collect_with(inputs, exclude, &WalkOptions::default())
+}
+
+/// [`collect`] with control over links, ownership and extended attributes.
+pub fn collect_with(
+    inputs: &[PathBuf],
+    exclude: &[PathBuf],
+    options: &WalkOptions,
+) -> Result<Collected> {
     let mut out = Collected::default();
     let exclude: Vec<PathBuf> = exclude.iter().map(|p| absolute(p)).collect();
 
@@ -66,11 +124,26 @@ pub fn collect(inputs: &[PathBuf], exclude: &[PathBuf]) -> Result<Collected> {
         let meta = fs::metadata(input).at(input)?; // follows a symlink given explicitly
         let base = base_name(input)?;
         if meta.is_dir() {
-            walk_dir(input, &base, &exclude, &mut out)?;
+            walk_dir(input, &base, &exclude, options, &mut out)?;
         } else if meta.is_file() {
             if !exclude.contains(&absolute(input)) {
-                out.entries
-                    .push(make_entry(input, base, &meta, EntryKind::File)?);
+                // The metadata is the target's, so the link's own attributes do not apply.
+                let followed =
+                    fs::symlink_metadata(input).is_ok_and(|m| m.file_type().is_symlink());
+                let options = WalkOptions {
+                    xattrs: options.xattrs && !followed,
+                    ..*options
+                };
+                let entry = make_entry(
+                    input,
+                    base,
+                    &meta,
+                    EntryKind::File,
+                    None,
+                    &options,
+                    &mut out.skipped,
+                )?;
+                out.entries.push(entry);
             }
         } else {
             out.skipped.push(Skipped {
@@ -87,10 +160,36 @@ pub fn collect(inputs: &[PathBuf], exclude: &[PathBuf]) -> Result<Collected> {
             w[0].name
         )));
     }
+    if options.hard_links {
+        link_hard_links(&mut out.entries);
+    }
     Ok(out)
 }
 
-fn walk_dir(root: &Path, base: &str, exclude: &[PathBuf], out: &mut Collected) -> Result<()> {
+/// Turn every file after the first one of its inode into a hard link of that first file.
+fn link_hard_links(entries: &mut [SourceEntry]) {
+    let mut first: HashMap<(u64, u64), usize> = HashMap::new();
+    for i in 0..entries.len() {
+        let Some(id) = entries[i].inode else { continue };
+        match first.get(&id) {
+            Some(&source) => {
+                entries[i].size = entries[source].size;
+                entries[i].link = Some(SourceLink::HardLink { source });
+            }
+            None => {
+                first.insert(id, i);
+            }
+        }
+    }
+}
+
+fn walk_dir(
+    root: &Path,
+    base: &str,
+    exclude: &[PathBuf],
+    options: &WalkOptions,
+    out: &mut Collected,
+) -> Result<()> {
     for item in WalkDir::new(root).follow_links(false) {
         let item = item.map_err(|e| {
             let path = e
@@ -106,9 +205,21 @@ fn walk_dir(root: &Path, base: &str, exclude: &[PathBuf], out: &mut Collected) -
             continue;
         }
         let file_type = item.file_type();
+        let mut link = None;
         let kind = if file_type.is_dir() {
             EntryKind::Dir
         } else if file_type.is_file() {
+            EntryKind::File
+        } else if file_type.is_symlink() && options.symlinks {
+            let target = read_link_bytes(item.path()).at(item.path())?;
+            if target.is_empty() || target.len() > MAX_LINK_TARGET || target.contains(&0) {
+                out.skipped.push(Skipped {
+                    path: item.path().to_path_buf(),
+                    reason: "symbolic link with an unsupported target",
+                });
+                continue;
+            }
+            link = Some(SourceLink::Symlink(target));
             EntryKind::File
         } else {
             let reason = if file_type.is_symlink() {
@@ -143,13 +254,53 @@ fn walk_dir(root: &Path, base: &str, exclude: &[PathBuf], out: &mut Collected) -
                 None => Error::Invalid(format!("{}: cannot read metadata", path.display())),
             }
         })?;
-        out.entries
-            .push(make_entry(item.path(), name, &meta, kind)?);
+        let entry = make_entry(
+            item.path(),
+            name,
+            &meta,
+            kind,
+            link,
+            options,
+            &mut out.skipped,
+        )?;
+        out.entries.push(entry);
     }
     Ok(())
 }
 
-fn make_entry(path: &Path, name: String, meta: &Metadata, kind: EntryKind) -> Result<SourceEntry> {
+/// The attributes worth storing: those the format can represent. Anything else is reported.
+fn storable_xattrs(path: &Path, skipped: &mut Vec<Skipped>) -> Vec<Xattr> {
+    let mut attrs = match read_xattrs(path) {
+        Ok(attrs) => attrs,
+        Err(_) => {
+            skipped.push(Skipped {
+                path: path.to_path_buf(),
+                reason: "could not read extended attributes",
+            });
+            return Vec::new();
+        }
+    };
+    let before = attrs.len();
+    attrs.retain(|a| a.name.len() <= MAX_XATTR_NAME && a.value.len() <= MAX_XATTR_VALUE);
+    attrs.truncate(MAX_XATTRS_PER_ENTRY);
+    if attrs.len() != before {
+        skipped.push(Skipped {
+            path: path.to_path_buf(),
+            reason: "extended attributes too large to store were left out",
+        });
+    }
+    attrs
+}
+
+fn make_entry(
+    path: &Path,
+    name: String,
+    meta: &Metadata,
+    kind: EntryKind,
+    link: Option<SourceLink>,
+    options: &WalkOptions,
+    skipped: &mut Vec<Skipped>,
+) -> Result<SourceEntry> {
     validate_archive_path(&name).map_err(|_| {
         Error::Invalid(format!(
             "{}: names containing a backslash, NUL or empty/dot components are not supported",
@@ -157,11 +308,12 @@ fn make_entry(path: &Path, name: String, meta: &Metadata, kind: EntryKind) -> Re
         ))
     })?;
     let (mtime_secs, mtime_nanos) = meta.modified().map(mtime_parts).unwrap_or((0, 0));
+    let is_symlink = matches!(link, Some(SourceLink::Symlink(_)));
     Ok(SourceEntry {
         fs_path: path.to_path_buf(),
         name,
         kind,
-        size: if kind == EntryKind::File {
+        size: if kind == EntryKind::File && !is_symlink {
             meta.len()
         } else {
             0
@@ -169,7 +321,43 @@ fn make_entry(path: &Path, name: String, meta: &Metadata, kind: EntryKind) -> Re
         mtime_secs,
         mtime_nanos,
         mode: mode_of(meta, kind),
+        link,
+        owner: if options.owner { owner_of(meta) } else { None },
+        xattrs: if options.xattrs {
+            storable_xattrs(path, skipped)
+        } else {
+            Vec::new()
+        },
+        inode: if options.hard_links && kind == EntryKind::File && !is_symlink {
+            inode_of(meta)
+        } else {
+            None
+        },
     })
+}
+
+/// `(uid, gid)` of the file.
+#[cfg(unix)]
+fn owner_of(meta: &Metadata) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((meta.uid(), meta.gid()))
+}
+
+#[cfg(not(unix))]
+fn owner_of(_meta: &Metadata) -> Option<(u32, u32)> {
+    None
+}
+
+/// `(device, inode)` of a file with more than one name.
+#[cfg(unix)]
+fn inode_of(meta: &Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    (meta.nlink() > 1).then(|| (meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn inode_of(_meta: &Metadata) -> Option<(u64, u64)> {
+    None
 }
 
 #[cfg(unix)]

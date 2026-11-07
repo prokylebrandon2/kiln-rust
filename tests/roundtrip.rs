@@ -374,7 +374,11 @@ fn symlinks_are_reported_not_followed() {
     std::os::unix::fs::symlink("/etc", src.path().join("proj/etc_link")).unwrap();
     let work = tempfile::tempdir().unwrap();
     let arc = work.path().join("a.kiln");
-    let stats = pack(&arc, &proj(src.path()), &opts("lz4", 16, 1)).unwrap();
+    let o = PackOptions {
+        symlinks: false,
+        ..opts("lz4", 16, 1)
+    };
+    let stats = pack(&arc, &proj(src.path()), &o).unwrap();
     assert_eq!(stats.skipped.len(), 1);
     assert_eq!(stats.skipped[0].reason, "symbolic link");
     let archive = Archive::open(&arc).unwrap();

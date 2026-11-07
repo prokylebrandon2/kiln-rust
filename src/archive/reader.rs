@@ -119,14 +119,15 @@ impl Archive {
     }
 
     /// File counts and bytes per content class (all [`Class::Unknown`] for profiles that do not
-    /// classify).
+    /// classify). Symbolic links are not files and are not counted.
     pub fn class_totals(&self) -> Vec<(Class, ClassTotals)> {
         let mut totals = [ClassTotals::default(); 6];
-        for e in self
+        for (_, e) in self
             .index
             .entries
             .iter()
-            .filter(|e| e.kind == EntryKind::File)
+            .enumerate()
+            .filter(|(i, e)| e.kind == EntryKind::File && !self.index.is_symlink(*i))
         {
             let t = &mut totals[e.class.id() as usize];
             t.files += 1;

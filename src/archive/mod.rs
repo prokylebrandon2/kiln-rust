@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::parallel::{Config, MemoryModel};
 
 pub use extract::{
-    ExtractOptions, ExtractStats, extract, extract_with_progress, verify, verify_with,
+    ExtractOptions, ExtractStats, XattrMode, extract, extract_with_progress, verify, verify_with,
     verify_with_progress,
 };
 pub use reader::{Archive, BlockStats, ClassTotals};

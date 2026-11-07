@@ -32,7 +32,7 @@ use super::{HEADER_LEN, MAX_ENTRIES};
 use crate::classify::Class;
 use crate::codec::Method;
 use crate::error::{Error, Result};
-use crate::integrity::{FileHash, HASH_LEN};
+use crate::integrity::{FileHash, HASH_LEN, empty_hash};
 use crate::path::{MAX_PATH_LEN, validate_archive_path};
 
 /// Version of the index layout above (independent of the container version).
@@ -42,11 +42,30 @@ pub const TAG_CREATOR: u16 = 0x0001;
 /// Extension tag: whole-file deduplication table (`docs/FORMAT.md`). Critical: without it the
 /// entry sizes do not add up to the data stream, so a reader that lacks it must refuse.
 pub const TAG_DEDUP: u16 = 0x8001;
+/// Extension tag: owner table (`docs/FORMAT.md`): numeric user and group id of every entry.
+/// Non-critical: a reader that ignores it just does not restore ownership.
+pub const TAG_OWNER: u16 = 0x0002;
+/// Extension tag: extended attributes of some entries. Non-critical.
+pub const TAG_XATTR: u16 = 0x0003;
+/// Extension tag: symbolic links and hard links. Critical: without it a symlink would read as
+/// an empty file and a hard link's size would not add up to the data stream.
+pub const TAG_LINKS: u16 = 0x8002;
 /// Extension tags with this bit set are *critical*: a reader that does not know one must refuse
 /// the archive. Tags without it may be skipped.
 pub const TAG_CRITICAL: u16 = 0x8000;
 /// Longest creator string accepted.
 const MAX_CREATOR_LEN: usize = 256;
+/// Longest symbolic-link target accepted, in bytes (Linux `PATH_MAX`).
+pub const MAX_LINK_TARGET: usize = 4096;
+/// Longest extended-attribute name accepted, in bytes.
+pub const MAX_XATTR_NAME: usize = 255;
+/// Longest extended-attribute value accepted, in bytes (the Linux limit).
+pub const MAX_XATTR_VALUE: usize = 64 * 1024;
+/// Most extended attributes accepted on one entry.
+pub const MAX_XATTRS_PER_ENTRY: usize = 1024;
+
+const LINK_SYMLINK: u8 = 1;
+const LINK_HARD: u8 = 2;
 
 /// What an entry is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +96,34 @@ pub struct Entry {
     pub mode: u32,
     /// Truncated BLAKE3 of the file contents (all zero for directories).
     pub hash: FileHash,
+}
+
+/// What a [`File`](EntryKind::File) entry is when it is a link rather than a regular file with
+/// data of its own. Links are recorded in the critical `0x8002` extension; the entry itself
+/// stays an ordinary file entry, so tools that do not know about links see an empty file
+/// (symlink) or a file with the source's content (hard link).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Link {
+    /// A symbolic link. The entry has size 0 and the empty hash; the target is stored verbatim
+    /// (raw bytes, not necessarily UTF-8, never containing NUL, and not interpreted: it may be
+    /// absolute or contain `..`).
+    Symlink(Vec<u8>),
+    /// A hard link to an earlier entry (`source`, a regular file entry that is not itself a
+    /// hard link or a symlink). The entry has the same size and hash as its source and owns no
+    /// bytes in the data stream.
+    HardLink {
+        /// Index of the entry this one is linked to; always lower than this entry's own index.
+        source: usize,
+    },
+}
+
+/// One extended attribute (name and value are raw bytes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Xattr {
+    /// Attribute name, e.g. `user.comment` (1..=255 bytes, no NUL).
+    pub name: Vec<u8>,
+    /// Attribute value (at most 64 KiB).
+    pub value: Vec<u8>,
 }
 
 /// One chunk of the data stream, as recorded in the index.
@@ -118,6 +165,13 @@ pub struct Index {
     pub entry_starts: Vec<u64>,
     /// Absolute archive offset where the chunk records end (derived).
     pub data_end: u64,
+    /// Symbolic and hard links, ascending by entry number (derived from extension `0x8002`).
+    pub links: Vec<(usize, Link)>,
+    /// `(uid, gid)` of every entry, or empty when the archive records no ownership (derived
+    /// from extension `0x0002`).
+    pub owners: Vec<(u32, u32)>,
+    /// Extended attributes, ascending by entry number (derived from extension `0x0003`).
+    pub xattrs: Vec<(usize, Vec<Xattr>)>,
 }
 
 /// Smallest possible encoded directory entry: flags, path_len, one name byte, mtime, nanos, mode.
@@ -172,6 +226,233 @@ fn parse_dedup(data: &[u8], entry_count: usize) -> Result<Vec<(usize, usize)>> {
     Ok(pairs)
 }
 
+/// The link table: `(entry, link)` pairs, ascending by entry. Hard-link sources must come
+/// before the entries that link to them.
+pub fn links_extension(links: &[(usize, Link)]) -> Extension {
+    let mut w = Writer::default();
+    w.varint(links.len() as u64);
+    let mut previous: Option<usize> = None;
+    for (entry, link) in links {
+        w.varint((entry - previous.unwrap_or(0)) as u64);
+        previous = Some(*entry);
+        match link {
+            Link::Symlink(target) => {
+                w.u8(LINK_SYMLINK);
+                w.varint(target.len() as u64);
+                w.raw(target);
+            }
+            Link::HardLink { source } => {
+                w.u8(LINK_HARD);
+                w.varint((entry - source) as u64);
+            }
+        }
+    }
+    Extension {
+        tag: TAG_LINKS,
+        data: w.0,
+    }
+}
+
+/// Parse a link table for an index of `entry_count` entries (syntax and ranges only; the
+/// entries themselves are checked in `derive_layout`).
+fn parse_links(data: &[u8], entry_count: usize) -> Result<Vec<(usize, Link)>> {
+    let bad = |what: &str| Error::corrupt(format!("link table: {what}"));
+    let mut r = Reader::new(data);
+    let count = r.varint()?;
+    if count > (r.remaining() / 3) as u64 {
+        return Err(bad("larger than its data"));
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    let mut previous: Option<u64> = None;
+    for _ in 0..count {
+        let step = r.varint()?;
+        let entry = match previous {
+            None => step,
+            Some(p) => p
+                .checked_add(step)
+                .filter(|_| step > 0)
+                .ok_or_else(|| bad("entries are not ascending"))?,
+        };
+        if entry >= entry_count as u64 {
+            return Err(bad("names a bad entry"));
+        }
+        let link = match r.u8()? {
+            LINK_SYMLINK => {
+                let len = r.varint()?;
+                if len == 0 || len > MAX_LINK_TARGET as u64 || len > r.remaining() as u64 {
+                    return Err(bad("symlink target has an invalid length"));
+                }
+                let target = r.take(len as usize)?;
+                if target.contains(&0) {
+                    return Err(bad("symlink target contains NUL"));
+                }
+                Link::Symlink(target.to_vec())
+            }
+            LINK_HARD => {
+                let back = r.varint()?;
+                if back == 0 || back > entry {
+                    return Err(bad("hard link names a bad source"));
+                }
+                Link::HardLink {
+                    source: (entry - back) as usize,
+                }
+            }
+            _ => return Err(bad("unknown link kind")),
+        };
+        previous = Some(entry);
+        out.push((entry as usize, link));
+    }
+    if r.remaining() != 0 {
+        return Err(bad("trailing bytes"));
+    }
+    Ok(out)
+}
+
+/// The owner table: one `(uid, gid)` per entry, in entry order. Stored as a small table of the
+/// distinct pairs plus one table index per entry, which compresses to almost nothing.
+pub fn owner_extension(owners: &[(u32, u32)]) -> Extension {
+    let mut pairs: Vec<(u32, u32)> = owners.to_vec();
+    pairs.sort_unstable();
+    pairs.dedup();
+    let mut w = Writer::default();
+    w.varint(pairs.len() as u64);
+    for &(uid, gid) in &pairs {
+        w.varint(u64::from(uid));
+        w.varint(u64::from(gid));
+    }
+    for owner in owners {
+        let at = pairs
+            .binary_search(owner)
+            .expect("pair was collected above");
+        w.varint(at as u64);
+    }
+    Extension {
+        tag: TAG_OWNER,
+        data: w.0,
+    }
+}
+
+/// Parse an owner table for an index of `entry_count` entries.
+fn parse_owners(data: &[u8], entry_count: usize) -> Result<Vec<(u32, u32)>> {
+    let bad = |what: &str| Error::corrupt(format!("owner table: {what}"));
+    let mut r = Reader::new(data);
+    let pair_count = r.varint()?;
+    if pair_count > (r.remaining() / 2) as u64 {
+        return Err(bad("larger than its data"));
+    }
+    let mut pairs = Vec::with_capacity(pair_count as usize);
+    for _ in 0..pair_count {
+        let uid = u32::try_from(r.varint()?).map_err(|_| bad("user id out of range"))?;
+        let gid = u32::try_from(r.varint()?).map_err(|_| bad("group id out of range"))?;
+        pairs.push((uid, gid));
+    }
+    if entry_count > r.remaining() {
+        return Err(bad("has fewer rows than the archive has entries"));
+    }
+    let mut owners = Vec::with_capacity(entry_count);
+    for _ in 0..entry_count {
+        let at = r.varint()?;
+        owners.push(
+            *usize::try_from(at)
+                .ok()
+                .and_then(|at| pairs.get(at))
+                .ok_or_else(|| bad("names a missing owner"))?,
+        );
+    }
+    if r.remaining() != 0 {
+        return Err(bad("trailing bytes"));
+    }
+    Ok(owners)
+}
+
+/// The extended-attribute table: `(entry, attributes)`, ascending by entry, no empty lists.
+pub fn xattr_extension(records: &[(usize, Vec<Xattr>)]) -> Extension {
+    let mut w = Writer::default();
+    w.varint(records.len() as u64);
+    let mut previous: Option<usize> = None;
+    for (entry, attrs) in records {
+        w.varint((entry - previous.unwrap_or(0)) as u64);
+        previous = Some(*entry);
+        w.varint(attrs.len() as u64);
+        for a in attrs {
+            w.varint(a.name.len() as u64);
+            w.raw(&a.name);
+            w.varint(a.value.len() as u64);
+            w.raw(&a.value);
+        }
+    }
+    Extension {
+        tag: TAG_XATTR,
+        data: w.0,
+    }
+}
+
+/// Parse an extended-attribute table for an index of `entry_count` entries.
+fn parse_xattrs(data: &[u8], entry_count: usize) -> Result<Vec<(usize, Vec<Xattr>)>> {
+    let bad = |what: &str| Error::corrupt(format!("extended-attribute table: {what}"));
+    let mut r = Reader::new(data);
+    let count = r.varint()?;
+    if count > (r.remaining() / 4) as u64 {
+        return Err(bad("larger than its data"));
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    let mut previous: Option<u64> = None;
+    for _ in 0..count {
+        let step = r.varint()?;
+        let entry = match previous {
+            None => step,
+            Some(p) => p
+                .checked_add(step)
+                .filter(|_| step > 0)
+                .ok_or_else(|| bad("entries are not ascending"))?,
+        };
+        if entry >= entry_count as u64 {
+            return Err(bad("names a bad entry"));
+        }
+        let n = r.varint()?;
+        if n == 0 || n > MAX_XATTRS_PER_ENTRY as u64 || n > (r.remaining() / 2) as u64 {
+            return Err(bad("an entry has an invalid attribute count"));
+        }
+        let mut attrs = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let name_len = r.varint()?;
+            if name_len == 0 || name_len > MAX_XATTR_NAME as u64 || name_len > r.remaining() as u64
+            {
+                return Err(bad("attribute name has an invalid length"));
+            }
+            let name = r.take(name_len as usize)?.to_vec();
+            if name.contains(&0) {
+                return Err(bad("attribute name contains NUL"));
+            }
+            let value_len = r.varint()?;
+            if value_len > MAX_XATTR_VALUE as u64 || value_len > r.remaining() as u64 {
+                return Err(bad("attribute value has an invalid length"));
+            }
+            let value = r.take(value_len as usize)?.to_vec();
+            attrs.push(Xattr { name, value });
+        }
+        previous = Some(entry);
+        out.push((entry as usize, attrs));
+    }
+    if r.remaining() != 0 {
+        return Err(bad("trailing bytes"));
+    }
+    Ok(out)
+}
+
+/// How an entry sits in the data stream while the layout is derived.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// A directory or a file with data of its own (possibly zero bytes).
+    Data,
+    /// A deduplicated copy.
+    Dup,
+    /// A symbolic link.
+    Symlink,
+    /// A hard link.
+    Hard,
+}
+
 fn flags_of(e: &Entry) -> u8 {
     u8::from(e.kind == EntryKind::Dir) | (e.class.id() << 1)
 }
@@ -197,41 +478,129 @@ impl Index {
     /// Compute every derived field and check that entries and chunks describe the same stream.
     fn derive_layout(&mut self) -> Result<()> {
         let dups = self.dedup_pairs()?;
-        let mut is_dup = vec![false; self.entries.len()];
+        let n = self.entries.len();
+        let links = match self.single_extension(TAG_LINKS, "link table")? {
+            Some(x) => parse_links(&x.data, n)?,
+            None => Vec::new(),
+        };
+        let owners = match self.single_extension(TAG_OWNER, "owner table")? {
+            Some(x) => parse_owners(&x.data, n)?,
+            None => Vec::new(),
+        };
+        let xattrs = match self.single_extension(TAG_XATTR, "extended-attribute table")? {
+            Some(x) => parse_xattrs(&x.data, n)?,
+            None => Vec::new(),
+        };
+        let empty = empty_hash();
+        let mut own = vec![Own::Data; n];
         let mut next_dup = 0usize;
+        let mut next_link = 0usize;
         let mut offset = 0u64;
-        self.entry_starts = Vec::with_capacity(self.entries.len());
+        self.entry_starts = Vec::with_capacity(n);
         for (i, e) in self.entries.iter().enumerate() {
-            let source = match dups.get(next_dup) {
+            let dup = match dups.get(next_dup) {
                 Some(&(dup, source)) if dup == i => Some(source),
                 _ => None,
             };
-            if let Some(source) = source {
-                // A duplicate owns no bytes: it shares its source's region of the stream.
-                next_dup += 1;
-                let s = &self.entries[source];
-                if e.kind != EntryKind::File
-                    || s.kind != EntryKind::File
-                    || e.size == 0
-                    || e.size != s.size
-                    || e.hash != s.hash
-                    || is_dup[source]
-                {
+            let link = match links.get(next_link) {
+                Some((at, link)) if *at == i => Some(link),
+                _ => None,
+            };
+            next_dup += usize::from(dup.is_some());
+            next_link += usize::from(link.is_some());
+            match (dup, link) {
+                (Some(_), Some(_)) => {
                     return Err(Error::corrupt(format!(
-                        "{}: invalid deduplication reference",
+                        "{}: entry is both deduplicated and a link",
                         e.path
                     )));
                 }
-                is_dup[i] = true;
-                let start = self.entry_starts[source];
-                self.entry_starts.push(start);
-                continue;
+                (Some(source), None) => {
+                    // A duplicate owns no bytes: it shares its source's region of the stream.
+                    let s = &self.entries[source];
+                    if e.kind != EntryKind::File
+                        || s.kind != EntryKind::File
+                        || e.size == 0
+                        || e.size != s.size
+                        || e.hash != s.hash
+                        || own[source] != Own::Data
+                    {
+                        return Err(Error::corrupt(format!(
+                            "{}: invalid deduplication reference",
+                            e.path
+                        )));
+                    }
+                    own[i] = Own::Dup;
+                    let start = self.entry_starts[source];
+                    self.entry_starts.push(start);
+                }
+                (None, Some(Link::Symlink(_))) => {
+                    if e.kind != EntryKind::File
+                        || e.size != 0
+                        || e.hash != empty
+                        || e.class != Class::Unknown
+                    {
+                        return Err(Error::corrupt(format!(
+                            "{}: invalid symbolic link entry",
+                            e.path
+                        )));
+                    }
+                    own[i] = Own::Symlink;
+                    self.entry_starts.push(offset);
+                }
+                (None, Some(&Link::HardLink { source })) => {
+                    // Like a duplicate, a hard link owns no bytes and shares its source's region.
+                    // Its source may itself be a duplicate, but not a link.
+                    let s = &self.entries[source];
+                    if e.kind != EntryKind::File
+                        || s.kind != EntryKind::File
+                        || e.size != s.size
+                        || e.hash != s.hash
+                        || matches!(own[source], Own::Symlink | Own::Hard)
+                    {
+                        return Err(Error::corrupt(format!(
+                            "{}: invalid hard link reference",
+                            e.path
+                        )));
+                    }
+                    own[i] = Own::Hard;
+                    let start = self.entry_starts[source];
+                    self.entry_starts.push(start);
+                }
+                (None, None) => {
+                    self.entry_starts.push(offset);
+                    offset = offset
+                        .checked_add(e.size)
+                        .ok_or_else(|| Error::corrupt("total size overflows"))?;
+                }
             }
-            self.entry_starts.push(offset);
-            offset = offset
-                .checked_add(e.size)
-                .ok_or_else(|| Error::corrupt("total size overflows"))?;
         }
+        // Nothing may be stored below a symbolic link: extraction would have to write through
+        // it. (This is what keeps an archive from planting `a -> /etc` and then `a/passwd`.)
+        if links.iter().any(|(_, l)| matches!(l, Link::Symlink(_))) {
+            let mut names: Vec<&str> = self.entries.iter().map(|e| e.path.as_str()).collect();
+            names.sort_unstable();
+            for (at, link) in &links {
+                if !matches!(link, Link::Symlink(_)) {
+                    continue;
+                }
+                let mut prefix = self.entries[*at].path.clone();
+                prefix.push('/');
+                let first = names.partition_point(|name| *name < prefix.as_str());
+                if names
+                    .get(first)
+                    .is_some_and(|name| name.starts_with(&prefix))
+                {
+                    return Err(Error::corrupt(format!(
+                        "{}: entries are stored below a symbolic link",
+                        self.entries[*at].path
+                    )));
+                }
+            }
+        }
+        self.links = links;
+        self.owners = owners;
+        self.xattrs = xattrs;
         self.total_raw = offset;
 
         let mut raw = 0u64;
@@ -268,6 +637,58 @@ impl Index {
             return Err(Error::corrupt("more than one deduplication table"));
         }
         parse_dedup(&x.data, self.entries.len())
+    }
+
+    /// The one extension with `tag`; more than one is corrupt.
+    fn single_extension(&self, tag: u16, what: &str) -> Result<Option<&Extension>> {
+        let mut found = self.extensions.iter().filter(|x| x.tag == tag);
+        let first = found.next();
+        if found.next().is_some() {
+            return Err(Error::corrupt(format!("more than one {what}")));
+        }
+        Ok(first)
+    }
+
+    /// The link recorded for entry `i`, if it is a symbolic or hard link.
+    pub fn link(&self, i: usize) -> Option<&Link> {
+        self.links
+            .binary_search_by_key(&i, |(at, _)| *at)
+            .ok()
+            .map(|k| &self.links[k].1)
+    }
+
+    /// The target of entry `i` if it is a symbolic link.
+    pub fn symlink_target(&self, i: usize) -> Option<&[u8]> {
+        match self.link(i) {
+            Some(Link::Symlink(target)) => Some(target),
+            _ => None,
+        }
+    }
+
+    /// The entry that entry `i` is a hard link to, if it is one.
+    pub fn hard_link_source(&self, i: usize) -> Option<usize> {
+        match self.link(i) {
+            Some(&Link::HardLink { source }) => Some(source),
+            _ => None,
+        }
+    }
+
+    /// True if entry `i` is a symbolic link.
+    pub fn is_symlink(&self, i: usize) -> bool {
+        self.symlink_target(i).is_some()
+    }
+
+    /// The recorded `(uid, gid)` of entry `i`, if the archive stores ownership.
+    pub fn owner(&self, i: usize) -> Option<(u32, u32)> {
+        self.owners.get(i).copied()
+    }
+
+    /// The extended attributes recorded for entry `i` (empty if none).
+    pub fn xattrs_of(&self, i: usize) -> &[Xattr] {
+        self.xattrs
+            .binary_search_by_key(&i, |(at, _)| *at)
+            .ok()
+            .map_or(&[][..], |k| &self.xattrs[k].1)
     }
 
     /// The writer's creator string, if the archive carries one.
@@ -498,6 +919,15 @@ impl Index {
                 }
                 TAG_DEDUP => {
                     parse_dedup(&data, entry_count)?; // the entries are checked in `derive_layout`
+                }
+                TAG_LINKS => {
+                    parse_links(&data, entry_count)?;
+                }
+                TAG_OWNER => {
+                    parse_owners(&data, entry_count)?;
+                }
+                TAG_XATTR => {
+                    parse_xattrs(&data, entry_count)?;
                 }
                 t if t & TAG_CRITICAL != 0 => {
                     return Err(Error::Unsupported(format!(

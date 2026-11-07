@@ -43,7 +43,7 @@ pub mod walk;
 
 pub use archive::{
     Archive, BlockStats, ClassTotals, ExtractOptions, ExtractStats, PackOptions, PackStats,
-    extract, extract_with_progress, pack, pack_with_progress, verify, verify_with,
+    XattrMode, extract, extract_with_progress, pack, pack_with_progress, verify, verify_with,
     verify_with_progress,
 };
 pub use error::{Error, Result};

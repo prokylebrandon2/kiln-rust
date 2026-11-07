@@ -8,12 +8,12 @@ use clap::{Args, Parser, Subcommand};
 
 use kiln::bench::{self, BenchConfig};
 use kiln::codec::CodecSpec;
-use kiln::format::index::EntryKind;
+use kiln::format::index::{EntryKind, Link};
 use kiln::format::{DEFAULT_BLOCK_LOG2, FOOTER_LEN, MAX_BLOCK_LOG2, MIN_BLOCK_LOG2};
 use kiln::integrity::to_hex;
 use kiln::parallel::resolve_threads;
 use kiln::util::{format_size, format_utc, mib_per_sec, parse_size, ratio};
-use kiln::{Archive, ExtractOptions, PackOptions, Profile};
+use kiln::{Archive, ExtractOptions, PackOptions, Profile, XattrMode};
 
 /// Kiln: a fast multicore archiver with its own `.kiln` container format (Rust rewrite, phase 3).
 ///
@@ -72,6 +72,16 @@ struct PackArgs {
     /// Store files with identical content once (reads files that share a size an extra time)
     #[arg(long)]
     dedup: bool,
+    /// Do not store links: symbolic links are skipped with a warning and hard links are stored as
+    /// independent files (by default both are stored as links)
+    #[arg(long)]
+    no_links: bool,
+    /// Record the numeric owner and group of every entry (restore with `extract --same-owner`)
+    #[arg(long)]
+    owner: bool,
+    /// Record extended attributes: user attributes, ACLs, security labels
+    #[arg(long)]
+    xattrs: bool,
     /// Worker threads (0 = all cores)
     #[arg(short = 'j', long, default_value_t = 0)]
     threads: usize,
@@ -116,6 +126,19 @@ struct UnpackArgs {
     /// Refuse to extract more than this many bytes (guards against decompression bombs)
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     max_size: Option<u64>,
+    /// Do not create links: skip symbolic links and extract hard links as independent files
+    #[arg(long)]
+    no_links: bool,
+    /// Restore the numeric owner and group recorded in the archive (usually needs root)
+    #[arg(long)]
+    same_owner: bool,
+    /// Do not restore extended attributes (by default the `user.` ones are restored)
+    #[arg(long, conflicts_with = "all_xattrs")]
+    no_xattrs: bool,
+    /// Restore every recorded extended attribute, including security labels, ACLs and file
+    /// capabilities (only for archives you trust)
+    #[arg(long)]
+    all_xattrs: bool,
     /// Show a progress line on stderr
     #[arg(long)]
     progress: bool,
@@ -210,6 +233,48 @@ impl Meter {
     }
 }
 
+/// ", 3 symlinks, 2 hard links" (or nothing), for the summary lines.
+fn link_summary(symlinks: u64, hard_links: u64) -> String {
+    let mut out = String::new();
+    if symlinks > 0 {
+        out.push_str(&format!(", {symlinks} symlinks"));
+    }
+    if hard_links > 0 {
+        out.push_str(&format!(", {hard_links} hard links"));
+    }
+    out
+}
+
+/// Entry counts by kind. Symbolic links are not files.
+struct Counts {
+    files: u64,
+    dirs: u64,
+    symlinks: u64,
+    hard_links: u64,
+}
+
+impl Counts {
+    fn of(archive: &Archive) -> Self {
+        let index = archive.index();
+        let symlinks = index
+            .links
+            .iter()
+            .filter(|(_, l)| matches!(l, Link::Symlink(_)))
+            .count() as u64;
+        let dirs = archive
+            .entries()
+            .iter()
+            .filter(|e| e.kind == EntryKind::Dir)
+            .count() as u64;
+        Self {
+            files: archive.entries().len() as u64 - dirs - symlinks,
+            dirs,
+            symlinks,
+            hard_links: index.links.len() as u64 - symlinks,
+        }
+    }
+}
+
 fn parse_block_size(text: &str) -> Result<u8, String> {
     let bytes = parse_size(text)?;
     if !bytes.is_power_of_two() {
@@ -279,6 +344,10 @@ fn pack(a: PackArgs) -> Result<Outcome> {
     if a.dedup {
         options.dedup = true;
     }
+    options.symlinks = !a.no_links;
+    options.hard_links = !a.no_links;
+    options.owner = a.owner;
+    options.xattrs = a.xattrs;
     options.threads = a.threads;
     options.overwrite = a.force;
     options.memory_limit = a.memory_limit;
@@ -303,9 +372,10 @@ fn pack(a: PackArgs) -> Result<Outcome> {
     let warned = !stats.skipped.is_empty() || !stats.grew.is_empty();
     if !a.quiet {
         println!(
-            "packed {} files, {} dirs: {} -> {} ({:.2}x) in {secs:.2}s, {:.0} MiB/s  [{} {}, {} chunks, {} threads{}]",
+            "packed {} files, {} dirs{}: {} -> {} ({:.2}x) in {secs:.2}s, {:.0} MiB/s  [{} {}, {} chunks, {} threads{}]",
             stats.files,
             stats.dirs,
+            link_summary(stats.symlinks, stats.hard_links),
             format_size(stats.raw_bytes),
             format_size(stats.archive_bytes),
             ratio(stats.raw_bytes, stats.archive_bytes),
@@ -341,6 +411,13 @@ fn unpack(a: UnpackArgs) -> Result<Outcome> {
         members: a.members,
         memory_limit: a.memory_limit,
         max_bytes: a.max_size,
+        links: !a.no_links,
+        owner: a.same_owner,
+        xattrs: match (a.no_xattrs, a.all_xattrs) {
+            (true, _) => XattrMode::Off,
+            (_, true) => XattrMode::All,
+            _ => XattrMode::User,
+        },
     };
     let started = Instant::now();
     let mut meter = Meter::new(a.progress);
@@ -350,22 +427,29 @@ fn unpack(a: UnpackArgs) -> Result<Outcome> {
     let secs = started.elapsed().as_secs_f64();
     if stats.metadata_errors > 0 {
         eprintln!(
-            "warning: could not restore {} timestamps/permissions",
+            "warning: could not restore {} timestamps/permissions/ownership/attributes",
             stats.metadata_errors
+        );
+    }
+    if stats.hard_link_copies > 0 {
+        eprintln!(
+            "warning: {} hard links were extracted as copies (the file system does not support hard links)",
+            stats.hard_link_copies
         );
     }
     if !a.quiet {
         println!(
-            "extracted {} files, {} dirs ({}) in {secs:.2}s, {:.0} MiB/s  [{} of {} chunks decoded]",
+            "extracted {} files, {} dirs{} ({}) in {secs:.2}s, {:.0} MiB/s  [{} of {} chunks decoded]",
             stats.files,
             stats.dirs,
+            link_summary(stats.symlinks, stats.hard_links),
             format_size(stats.bytes),
             mib_per_sec(stats.bytes, secs),
             stats.blocks,
             archive.block_count(),
         );
     }
-    Ok(if stats.metadata_errors > 0 {
+    Ok(if stats.metadata_errors > 0 || stats.hard_link_copies > 0 {
         Outcome::Warnings
     } else {
         Outcome::Clean
@@ -377,34 +461,40 @@ fn list(a: ListArgs) -> Result<()> {
     // Stored in data order (grouped by compressibility); shown in name order.
     let mut order: Vec<usize> = (0..archive.entries().len()).collect();
     order.sort_by(|&x, &y| archive.entries()[x].path.cmp(&archive.entries()[y].path));
+    let index = archive.index();
     for i in order {
         let e = &archive.entries()[i];
         let suffix = if e.kind == EntryKind::Dir { "/" } else { "" };
+        let shown = match index.link(i) {
+            Some(Link::Symlink(target)) => {
+                format!("{} -> {}", e.path, String::from_utf8_lossy(target))
+            }
+            Some(&Link::HardLink { source }) => {
+                format!("{} link to {}", e.path, archive.entries()[source].path)
+            }
+            None => format!("{}{suffix}", e.path),
+        };
         if a.long {
             let method = archive.entry_method(i).map_or("-", |m| m.name());
             println!(
-                "{:>12}  {:<10} {:<5} {}  {:04o}  {}  {}{suffix}",
+                "{:>12}  {:<10} {:<5} {}  {:04o}  {}  {shown}",
                 e.size,
                 e.class.name(),
                 method,
                 format_utc(e.mtime_secs),
                 e.mode & 0o7777,
                 &to_hex(&e.hash)[..12],
-                e.path
             );
         } else {
-            println!("{}{suffix}", e.path);
+            println!("{shown}");
         }
     }
-    let files = archive
-        .entries()
-        .iter()
-        .filter(|e| e.kind == EntryKind::File)
-        .count();
+    let counts = Counts::of(&archive);
     eprintln!(
-        "{} files, {} dirs, {} -> {} ({:.2}x), {} chunks of up to {}, profile {}",
-        files,
-        archive.entries().len() - files,
+        "{} files, {} dirs{}, {} -> {} ({:.2}x), {} chunks of up to {}, profile {}",
+        counts.files,
+        counts.dirs,
+        link_summary(counts.symlinks, counts.hard_links),
         format_size(archive.total_raw()),
         format_size(archive.file_len()),
         ratio(archive.total_raw(), archive.file_len()),
@@ -417,17 +507,16 @@ fn list(a: ListArgs) -> Result<()> {
 
 fn info(a: InfoArgs) -> Result<()> {
     let archive = Archive::open(&a.archive)?;
-    let files = archive
-        .entries()
-        .iter()
-        .filter(|e| e.kind == EntryKind::File)
-        .count();
+    let counts = Counts::of(&archive);
+    let (files, dirs) = (counts.files, counts.dirs);
     let empty = archive
         .entries()
         .iter()
-        .filter(|e| e.kind == EntryKind::File && e.size == 0)
+        .enumerate()
+        .filter(|(i, e)| {
+            e.kind == EntryKind::File && e.size == 0 && archive.index().link(*i).is_none()
+        })
         .count();
-    let dirs = archive.entries().len() - files;
     let h = archive.header();
     println!("Archive:         {}", archive.path().display());
     println!(
@@ -442,6 +531,21 @@ fn info(a: InfoArgs) -> Result<()> {
     println!("Chunk size:      up to {}", format_size(h.block_size()));
     println!("Files:           {files} ({empty} empty)");
     println!("Directories:     {dirs}");
+    if counts.symlinks > 0 || counts.hard_links > 0 {
+        println!(
+            "Links:           {} symbolic, {} hard",
+            counts.symlinks, counts.hard_links
+        );
+    }
+    if !archive.index().owners.is_empty() {
+        println!("Ownership:       numeric user and group ids recorded");
+    }
+    if !archive.index().xattrs.is_empty() {
+        println!(
+            "Attributes:      extended attributes on {} entries",
+            archive.index().xattrs.len()
+        );
+    }
     let blocks = archive.block_stats();
     let mut kinds = Vec::new();
     for (n, name) in [
@@ -498,9 +602,10 @@ fn test(a: TestArgs) -> Result<()> {
     let stats = kiln::verify_with(&archive, a.threads, a.memory_limit)?;
     let secs = started.elapsed().as_secs_f64();
     println!(
-        "OK: {} files, {} dirs, {} verified in {secs:.2}s ({:.0} MiB/s)",
+        "OK: {} files, {} dirs{}, {} verified in {secs:.2}s ({:.0} MiB/s)",
         stats.files,
         stats.dirs,
+        link_summary(stats.symlinks, 0),
         format_size(stats.bytes),
         mib_per_sec(stats.bytes, secs)
     );

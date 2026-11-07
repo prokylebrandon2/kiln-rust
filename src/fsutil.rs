@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, IoContext, Result};
+use crate::format::index::Xattr;
 
 /// Read until `buf` is full or EOF; returns the number of bytes read.
 pub fn read_full<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> io::Result<usize> {
@@ -229,6 +230,230 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
         let _ = (path, mode);
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Links, ownership and extended attributes
+// ---------------------------------------------------------------------------------------------
+
+/// True for "this file system / platform has no such feature" errors.
+#[cfg(unix)]
+fn is_unsupported(e: &io::Error) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const NOT_SUPPORTED: i32 = 95; // EOPNOTSUPP
+    #[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "netbsd"))]
+    const NOT_SUPPORTED: i32 = 45; // ENOTSUP
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )))]
+    const NOT_SUPPORTED: i32 = -1;
+    e.kind() == io::ErrorKind::Unsupported || e.raw_os_error() == Some(NOT_SUPPORTED)
+}
+
+/// Read every extended attribute of `path` itself (a symbolic link is not followed), sorted by
+/// name. A file system without extended attributes yields an empty list; attributes that
+/// disappear while being read are skipped.
+#[cfg(unix)]
+pub fn read_xattrs(path: &Path) -> io::Result<Vec<Xattr>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let names = match xattr::list(path) {
+        Ok(names) => names,
+        Err(e) if is_unsupported(&e) => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for name in names {
+        match xattr::get(path, &name) {
+            Ok(Some(value)) => out.push(Xattr {
+                name: name.as_bytes().to_vec(),
+                value,
+            }),
+            Ok(None) => {}
+            Err(e) if is_unsupported(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Extended attributes are not read on this platform.
+#[cfg(not(unix))]
+pub fn read_xattrs(_path: &Path) -> io::Result<Vec<Xattr>> {
+    Ok(Vec::new())
+}
+
+/// Set one extended attribute on `path` itself (a symbolic link is not followed).
+#[cfg(unix)]
+pub fn set_xattr(path: &Path, name: &[u8], value: &[u8]) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    xattr::set(path, std::ffi::OsStr::from_bytes(name), value)
+}
+
+/// Extended attributes cannot be set on this platform.
+#[cfg(not(unix))]
+pub fn set_xattr(_path: &Path, _name: &[u8], _value: &[u8]) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+/// Change the owner and group of an open file.
+#[cfg(unix)]
+pub fn set_owner(file: &File, uid: u32, gid: u32) -> io::Result<()> {
+    std::os::unix::fs::fchown(file, Some(uid), Some(gid))
+}
+
+/// Ownership cannot be set on this platform.
+#[cfg(not(unix))]
+pub fn set_owner(_file: &File, _uid: u32, _gid: u32) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+/// Change the owner and group of `path` itself (a symbolic link is not followed).
+#[cfg(unix)]
+pub fn set_owner_path(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))
+}
+
+/// Ownership cannot be set on this platform.
+#[cfg(not(unix))]
+pub fn set_owner_path(_path: &Path, _uid: u32, _gid: u32) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+/// The target of the symbolic link `path`, as raw bytes.
+#[cfg(unix)]
+pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(fs::read_link(path)?.into_os_string().into_vec())
+}
+
+/// The target of the symbolic link `path`, as raw bytes.
+#[cfg(not(unix))]
+pub fn read_link_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    let target = fs::read_link(path)?;
+    target
+        .to_str()
+        .map(|t| t.as_bytes().to_vec())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "link target is not UTF-8"))
+}
+
+#[cfg(unix)]
+fn make_symlink(target: &[u8], link: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(target), link)
+}
+
+#[cfg(not(unix))]
+fn make_symlink(_target: &[u8], _link: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "symbolic links are only restored on Unix",
+    ))
+}
+
+/// A hidden, unused name beside `dest`, for building something that is then renamed into place.
+fn sibling_name(dest: &Path, suffix: &str) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    dest.with_file_name(format!(".{name}.{}.{n}.{suffix}", std::process::id()))
+}
+
+/// Create `dest` as a symbolic link to `target`.
+///
+/// Without `overwrite` anything already at `dest` (even a dangling link) fails with
+/// [`io::ErrorKind::AlreadyExists`]. With it, a non-directory at `dest` is replaced atomically
+/// (the link is built under a temporary name and renamed over it). A directory is never
+/// replaced.
+pub fn create_symlink(target: &[u8], dest: &Path, overwrite: bool) -> io::Result<()> {
+    if !overwrite {
+        return make_symlink(target, dest);
+    }
+    for _ in 0..64 {
+        let tmp = sibling_name(dest, "lnk");
+        match make_symlink(target, &tmp) {
+            Ok(()) => {
+                return fs::rename(&tmp, dest).inspect_err(|_| {
+                    let _ = fs::remove_file(&tmp);
+                });
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "cannot find an unused temporary name",
+    ))
+}
+
+/// How [`create_hard_link`] satisfied a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkOutcome {
+    /// A real hard link.
+    Linked,
+    /// The file system refused a hard link (FAT, some network and Android shared storage), so
+    /// the content was copied instead.
+    Copied,
+}
+
+/// Copy `source` to a new file `dest` (which must not exist), including permissions and
+/// modification time.
+fn copy_new(source: &Path, dest: &Path) -> io::Result<()> {
+    let meta = fs::metadata(source)?;
+    let mut input = File::open(source)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(dest)?;
+    let result = io::copy(&mut input, &mut output)
+        .and_then(|_| output.set_permissions(meta.permissions()))
+        .and_then(|()| match meta.modified() {
+            Ok(t) => output.set_modified(t),
+            Err(_) => Ok(()),
+        });
+    if result.is_err() {
+        drop(output);
+        let _ = fs::remove_file(dest);
+    }
+    result
+}
+
+/// Make `dest` a hard link to the existing file `source`.
+///
+/// Without `overwrite`, an existing `dest` fails with [`io::ErrorKind::AlreadyExists`]. With it,
+/// a non-directory at `dest` is replaced atomically. When the file system cannot make hard links
+/// the file is copied instead and [`LinkOutcome::Copied`] says so.
+pub fn create_hard_link(source: &Path, dest: &Path, overwrite: bool) -> io::Result<LinkOutcome> {
+    if !overwrite {
+        return match fs::hard_link(source, dest) {
+            Ok(()) => Ok(LinkOutcome::Linked),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+            Err(_) => copy_new(source, dest).map(|()| LinkOutcome::Copied),
+        };
+    }
+    for _ in 0..64 {
+        let tmp = sibling_name(dest, "lnk");
+        let made = match fs::hard_link(source, &tmp) {
+            Ok(()) => Ok(LinkOutcome::Linked),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => copy_new(source, &tmp).map(|()| LinkOutcome::Copied),
+        };
+        let outcome = made?;
+        let renamed = fs::rename(&tmp, dest);
+        // `rename` does nothing when both names already are the same file (extracting the same
+        // archive twice with --force); the temporary name must still go.
+        let _ = fs::remove_file(&tmp);
+        return renamed.map(|()| outcome);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "cannot find an unused temporary name",
+    ))
 }
 
 #[cfg(test)]

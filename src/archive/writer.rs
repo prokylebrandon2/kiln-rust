@@ -27,7 +27,8 @@ use crate::classify::{self, Class, SAMPLE_HEAD, SAMPLE_MID};
 use crate::codec::{BlockCodec, CodecSpec, Filter, Method, detect_filter, looks_incompressible};
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{
-    ChunkInfo, Entry, EntryKind, Extension, Index, TAG_CREATOR, dedup_extension,
+    ChunkInfo, Entry, EntryKind, Extension, Index, Link, TAG_CREATOR, Xattr, dedup_extension,
+    links_extension, owner_extension, xattr_extension,
 };
 use crate::format::record::EncodedBlock;
 use crate::format::{
@@ -38,7 +39,7 @@ use crate::fsutil::{TempOutput, read_full};
 use crate::integrity::{FileHash, FileHasher, HASH_LEN, empty_hash};
 use crate::parallel::{MemoryModel, Source, resolve_threads, run_ordered};
 use crate::profile::Profile;
-use crate::walk::{self, Skipped, SourceEntry};
+use crate::walk::{self, Skipped, SourceEntry, SourceLink, WalkOptions};
 
 /// Name written into the index so `info` can say which program made an archive.
 const CREATOR: &str = concat!("kiln ", env!("CARGO_PKG_VERSION"));
@@ -71,6 +72,18 @@ pub struct PackOptions {
     /// their size with another file are read one extra time to compare content. Archives that
     /// use it need a reader that knows format extension `0x8001`.
     pub dedup: bool,
+    /// Store symbolic links as links. When off they are skipped and reported. Archives that
+    /// contain links need a reader that knows format extension `0x8002`.
+    pub symlinks: bool,
+    /// Store files that are hard links of each other once, as a file plus hard links (Unix;
+    /// elsewhere nothing is detected). When off every name is stored as an independent file.
+    /// Archives that contain hard links need a reader that knows extension `0x8002`.
+    pub hard_links: bool,
+    /// Record the numeric user and group id of every entry (Unix). Off by default so that
+    /// archives do not depend on who made them.
+    pub owner: bool,
+    /// Record extended attributes: user attributes, ACLs, security labels (Unix). Off by default.
+    pub xattrs: bool,
 }
 
 impl PackOptions {
@@ -87,6 +100,10 @@ impl PackOptions {
             skip_incompressible: true,
             classify: s.classify,
             dedup: false,
+            symlinks: true,
+            hard_links: true,
+            owner: false,
+            xattrs: false,
         }
     }
 }
@@ -104,6 +121,10 @@ pub struct PackStats {
     pub files: u64,
     /// Directories archived.
     pub dirs: u64,
+    /// Symbolic links archived (not counted in `files`).
+    pub symlinks: u64,
+    /// Of `files`, those stored as hard links of an earlier file (they hold no data of their own).
+    pub hard_links: u64,
     /// Total uncompressed file bytes.
     pub raw_bytes: u64,
     /// Final archive size on disk.
@@ -120,7 +141,8 @@ pub struct PackStats {
     pub classified_stored_files: u64,
     /// Their total size in bytes.
     pub classified_stored_bytes: u64,
-    /// Items found but not archived (symlinks, special files).
+    /// Items found but not archived (special files, and symlinks when they are not stored), and
+    /// attributes that could not be read or stored.
     pub skipped: Vec<Skipped>,
     /// Files that grew while being read; only their original size was archived.
     pub grew: Vec<PathBuf>,
@@ -165,7 +187,13 @@ pub fn pack_with_progress(
         return Err(Error::Exists(output.to_path_buf()));
     }
 
-    let collected = walk::collect(inputs, &[output.to_path_buf()])?;
+    let walk_options = WalkOptions {
+        symlinks: options.symlinks,
+        hard_links: options.hard_links,
+        owner: options.owner,
+        xattrs: options.xattrs,
+    };
+    let collected = walk::collect_with(inputs, &[output.to_path_buf()], &walk_options)?;
     if collected.entries.len() as u64 > MAX_ENTRIES {
         return Err(Error::Invalid(format!(
             "too many entries: {} (the format allows at most {MAX_ENTRIES})",
@@ -185,6 +213,8 @@ pub fn pack_with_progress(
     for d in &dups {
         is_dup[d.dup] = true;
     }
+    // Links own no bytes of their own: they are appended after the data entries.
+    let is_link: Vec<bool> = collected.entries.iter().map(|e| e.link.is_some()).collect();
     let want_classes = options.classify && options.codec.method != Method::Store;
     let want_filters = options.codec.method == Method::Lzma2;
     let (mut classes, mut filters): (Vec<Class>, Vec<Filter>) = if want_classes || want_filters {
@@ -205,7 +235,7 @@ pub fn pack_with_progress(
     }
     let stored_by_class = |i: usize| classes[i].is_incompressible();
     let mut order: Vec<usize> = (0..collected.entries.len())
-        .filter(|&i| !is_dup[i] && !stored_by_class(i))
+        .filter(|&i| !is_dup[i] && !is_link[i] && !stored_by_class(i))
         .collect();
     // Files that share a filter sit together, so a chunk never mixes filters.
     if options.classify {
@@ -222,7 +252,9 @@ pub fn pack_with_progress(
     } else {
         order.sort_by_key(|&i| filters[i]);
     }
-    order.extend((0..collected.entries.len()).filter(|&i| !is_dup[i] && stored_by_class(i)));
+    order.extend(
+        (0..collected.entries.len()).filter(|&i| !is_dup[i] && !is_link[i] && stored_by_class(i)),
+    );
     let ordered: Vec<&SourceEntry> = order.iter().map(|&i| &collected.entries[i]).collect();
     let store_flags: Vec<bool> = order.iter().map(|&i| stored_by_class(i)).collect();
     let chunk_filters: Vec<Filter> = order
@@ -324,6 +356,12 @@ pub fn pack_with_progress(
             hash: *hash,
         });
     }
+    // Which archive entry each walk entry became, and the reverse (for the side tables).
+    let mut final_pos = vec![usize::MAX; collected.entries.len()];
+    for (pos, &i) in order.iter().enumerate() {
+        final_pos[i] = pos;
+    }
+    let mut final_walk: Vec<usize> = order.clone();
     let mut extensions = vec![Extension {
         tag: TAG_CREATOR,
         data: CREATOR.as_bytes().to_vec(),
@@ -331,13 +369,9 @@ pub fn pack_with_progress(
     if !dups.is_empty() {
         // Duplicates come after everything that has data and own no bytes in the stream. Each
         // carries its source's hash, which must still be what was measured beforehand.
-        let mut position_of = vec![usize::MAX; collected.entries.len()];
-        for (pos, &i) in order.iter().enumerate() {
-            position_of[i] = pos;
-        }
         let mut pairs = Vec::with_capacity(dups.len());
         for d in &dups {
-            let source_pos = position_of[d.source];
+            let source_pos = final_pos[d.source];
             if source.hashes[source_pos] != d.hash {
                 return Err(Error::FileChanged(
                     collected.entries[d.source].fs_path.clone(),
@@ -345,6 +379,8 @@ pub fn pack_with_progress(
             }
             let copy = &collected.entries[d.dup];
             pairs.push((entries.len(), source_pos));
+            final_pos[d.dup] = entries.len();
+            final_walk.push(d.dup);
             stats.files += 1;
             entries.push(Entry {
                 path: copy.name.clone(),
@@ -358,6 +394,72 @@ pub fn pack_with_progress(
             });
         }
         extensions.push(dedup_extension(&pairs));
+    }
+    // Symbolic links, then hard links (whose sources, data or duplicate, are all placed by now).
+    let mut links: Vec<(usize, Link)> = Vec::new();
+    for (i, src) in collected.entries.iter().enumerate() {
+        let Some(SourceLink::Symlink(target)) = &src.link else {
+            continue;
+        };
+        links.push((entries.len(), Link::Symlink(target.clone())));
+        final_pos[i] = entries.len();
+        final_walk.push(i);
+        stats.symlinks += 1;
+        entries.push(Entry {
+            path: src.name.clone(),
+            kind: EntryKind::File,
+            class: Class::Unknown,
+            size: 0,
+            mtime_secs: src.mtime_secs,
+            mtime_nanos: src.mtime_nanos,
+            mode: src.mode,
+            hash: empty_hash(),
+        });
+    }
+    for (i, src) in collected.entries.iter().enumerate() {
+        let Some(&SourceLink::HardLink { source: of }) = src.link.as_ref() else {
+            continue;
+        };
+        let at = final_pos[of];
+        let (class, size, hash) = (entries[at].class, entries[at].size, entries[at].hash);
+        links.push((entries.len(), Link::HardLink { source: at }));
+        final_pos[i] = entries.len();
+        final_walk.push(i);
+        stats.files += 1;
+        stats.hard_links += 1;
+        entries.push(Entry {
+            path: src.name.clone(),
+            kind: EntryKind::File,
+            class,
+            size,
+            mtime_secs: src.mtime_secs,
+            mtime_nanos: src.mtime_nanos,
+            mode: src.mode,
+            hash,
+        });
+    }
+    if !links.is_empty() {
+        extensions.push(links_extension(&links));
+    }
+    if options.owner {
+        let owners: Vec<(u32, u32)> = final_walk
+            .iter()
+            .filter_map(|&w| collected.entries[w].owner)
+            .collect();
+        if !owners.is_empty() && owners.len() == final_walk.len() {
+            extensions.push(owner_extension(&owners));
+        }
+    }
+    if options.xattrs {
+        let records: Vec<(usize, Vec<Xattr>)> = final_walk
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| !collected.entries[**w].xattrs.is_empty())
+            .map(|(at, w)| (at, collected.entries[*w].xattrs.clone()))
+            .collect();
+        if !records.is_empty() {
+            extensions.push(xattr_extension(&records));
+        }
     }
     let index = Index::build(entries, chunks, extensions)?;
     debug_assert_eq!(
@@ -432,7 +534,7 @@ fn hash_file(path: &Path, buf: &mut [u8]) -> std::io::Result<FileHash> {
 fn find_duplicates(entries: &[SourceEntry], threads: usize) -> Result<Vec<Duplicate>> {
     let mut by_size: HashMap<u64, Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
-        if e.kind == EntryKind::File && e.size > 0 {
+        if e.kind == EntryKind::File && e.size > 0 && e.link.is_none() {
             by_size.entry(e.size).or_default().push(i);
         }
     }
@@ -542,7 +644,9 @@ type Sample = (Class, Filter);
 /// [`Class::Unknown`] with no filter. Memory: at most 64 KiB of samples per worker.
 fn sample_files(entries: &[SourceEntry], threads: usize) -> Result<Vec<Sample>> {
     let files: Vec<usize> = (0..entries.len())
-        .filter(|&i| entries[i].kind == EntryKind::File && entries[i].size > 0)
+        .filter(|&i| {
+            entries[i].kind == EntryKind::File && entries[i].size > 0 && entries[i].link.is_none()
+        })
         .collect();
     let mut samples = vec![(Class::Unknown, Filter::None); entries.len()];
     let workers = threads.min(files.len().div_ceil(64)).max(1);

@@ -13,7 +13,13 @@
 //!        └─ small file  -> assembled in memory, handed to one of W writer threads chosen by the
 //!                          file's parent directory; the writer verifies BLAKE3 *before* it
 //!                          creates anything, then writes, sets metadata and renames
+//!  afterwards (serial): hard links, then symbolic links, then directory metadata
 //! ```
+//!
+//! Links never go through the pipeline: a hard link owns no bytes and a symbolic link has none.
+//! They are created once every file is in place, which also means no file can ever be written
+//! *through* a link made by the archive (the index refuses entries below a symbolic link, and
+//! directories are checked for links before anything is created in them).
 //!
 //! `verify` is the same pipeline with the writing switched off.
 
@@ -33,10 +39,11 @@ use super::reader::Archive;
 use super::{Progress, pipeline_config};
 use crate::codec::CodecSpec;
 use crate::error::{Error, IoContext, Result};
-use crate::format::index::{ChunkInfo, Entry, EntryKind};
+use crate::format::index::{ChunkInfo, Entry, EntryKind, Index, Link};
 use crate::format::record::{RecordHeader, decode_payload, read_record};
 use crate::fsutil::{
-    TempOutput, read_full, set_dir_mtime, set_file_mode, set_file_mtime, set_mode,
+    LinkOutcome, TempOutput, create_hard_link, create_symlink, read_full, set_dir_mtime,
+    set_file_mode, set_file_mtime, set_mode, set_owner, set_owner_path, set_xattr,
 };
 use crate::integrity::{FileHasher, empty_hash, to_hex};
 use crate::parallel::{MemoryModel, Source, resolve_threads, run_ordered};
@@ -52,6 +59,23 @@ const SMALL_BUDGET_MAX: u64 = 16 << 20;
 const MIN_JOB_CHARGE: u64 = 4 << 10;
 /// Most writer threads. Directory and journal locks make more of them counter-productive.
 const MAX_WRITERS: usize = 8;
+
+/// Which extended attributes [`extract`] restores.
+///
+/// Attributes outside the `user.` namespace carry security meaning (`security.capability` grants
+/// privileges to an executable, `security.selinux` sets a label, `system.posix_acl_*` are ACLs),
+/// so restoring them is opt-in even when the archive holds them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum XattrMode {
+    /// Restore none.
+    Off,
+    /// Restore the `user.` attributes only.
+    #[default]
+    User,
+    /// Restore every attribute in the archive (attributes the process may not set are counted
+    /// in [`ExtractStats::metadata_errors`]).
+    All,
+}
 
 /// Settings for [`extract`].
 #[derive(Clone, Debug)]
@@ -70,6 +94,14 @@ pub struct ExtractOptions {
     /// Refuse to extract if the selected files add up to more than this many bytes. Guards
     /// against decompression bombs: a tiny archive can legitimately describe terabytes.
     pub max_bytes: Option<u64>,
+    /// Restore symbolic links and hard links (the default). When off, symbolic links are
+    /// skipped and hard links are extracted as independent files.
+    pub links: bool,
+    /// Restore the numeric owner and group recorded in the archive (Unix; usually needs root).
+    /// Failures are counted in [`ExtractStats::metadata_errors`]. Off by default.
+    pub owner: bool,
+    /// Which recorded extended attributes to restore (default: the `user.` ones).
+    pub xattrs: XattrMode,
 }
 
 impl ExtractOptions {
@@ -82,6 +114,9 @@ impl ExtractOptions {
             members: Vec::new(),
             memory_limit: None,
             max_bytes: None,
+            links: true,
+            owner: false,
+            xattrs: XattrMode::default(),
         }
     }
 }
@@ -97,8 +132,15 @@ pub struct ExtractStats {
     pub bytes: u64,
     /// Data blocks decoded (fewer than the archive holds when extracting a subset).
     pub blocks: u64,
-    /// Timestamps or permissions that could not be applied (non-fatal).
+    /// Timestamps, permissions, ownership or attributes that could not be applied (non-fatal).
     pub metadata_errors: u64,
+    /// Symbolic links created (or, for [`verify`], checked). Not counted in `files`.
+    pub symlinks: u64,
+    /// Files created as hard links of another extracted file; they are counted in `files` too.
+    pub hard_links: u64,
+    /// Of the hard links, those that had to be written as copies because the file system
+    /// refuses hard links.
+    pub hard_link_copies: u64,
 }
 
 /// Extract (a subset of) `archive` into `options.dest`, verifying every file's BLAKE3 hash.
@@ -130,6 +172,9 @@ pub fn extract_with_progress(
     let output = Output {
         dest: &options.dest,
         overwrite: options.overwrite,
+        links: options.links,
+        owner: options.owner,
+        xattrs: options.xattrs,
     };
     fs::create_dir_all(&options.dest).at(&options.dest)?;
     run(
@@ -192,6 +237,58 @@ fn select(archive: &Archive, members: &[String]) -> Result<Vec<usize>> {
 struct Output<'a> {
     dest: &'a Path,
     overwrite: bool,
+    links: bool,
+    owner: bool,
+    xattrs: XattrMode,
+}
+
+/// What to restore besides contents, permissions and modification time.
+#[derive(Clone, Copy)]
+struct Restore<'a> {
+    index: &'a Index,
+    owner: bool,
+    xattrs: XattrMode,
+}
+
+impl Restore<'_> {
+    /// Ownership and attributes of entry `entry`, which is the open file `file` currently at
+    /// `path`. Returns how many could not be applied.
+    fn file(&self, entry: usize, file: &File, path: &Path) -> u64 {
+        let mut errors = 0;
+        if self.owner
+            && let Some((uid, gid)) = self.index.owner(entry)
+        {
+            errors += u64::from(set_owner(file, uid, gid).is_err());
+        }
+        errors + self.attributes(entry, path)
+    }
+
+    /// The same for something reached by name that must not be followed (a directory or a
+    /// symbolic link).
+    fn path(&self, entry: usize, path: &Path) -> u64 {
+        let mut errors = 0;
+        if self.owner
+            && let Some((uid, gid)) = self.index.owner(entry)
+        {
+            errors += u64::from(set_owner_path(path, uid, gid).is_err());
+        }
+        errors + self.attributes(entry, path)
+    }
+
+    fn attributes(&self, entry: usize, path: &Path) -> u64 {
+        let mut errors = 0;
+        for a in self.index.xattrs_of(entry) {
+            let wanted = match self.xattrs {
+                XattrMode::Off => false,
+                XattrMode::User => a.name.starts_with(b"user."),
+                XattrMode::All => true,
+            };
+            if wanted && set_xattr(path, &a.name, &a.value).is_err() {
+                errors += 1;
+            }
+        }
+        errors
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -415,6 +512,7 @@ fn writer_loop(
     entries: &[Entry],
     dest: &Path,
     overwrite: bool,
+    restore: Restore<'_>,
 ) {
     let mut dirs = DirCache::new(dest);
     for job in rx.iter().flatten() {
@@ -422,7 +520,15 @@ fn writer_loop(
         let charge = size.max(MIN_JOB_CHARGE);
         if !shared.failed.load(Ordering::SeqCst) {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                write_small(&entries[job.entry], &job.data, dest, overwrite, &mut dirs)
+                write_small(
+                    &entries[job.entry],
+                    job.entry,
+                    &job.data,
+                    dest,
+                    overwrite,
+                    &mut dirs,
+                    restore,
+                )
             }));
             match outcome {
                 Ok(Ok(meta_errors)) => {
@@ -444,10 +550,12 @@ fn writer_loop(
 /// touches the file system.
 fn write_small(
     e: &Entry,
+    entry: usize,
     data: &[u8],
     dest: &Path,
     overwrite: bool,
     dirs: &mut DirCache,
+    restore: Restore<'_>,
 ) -> Result<u64> {
     let mut hasher = FileHasher::new();
     hasher.update(data);
@@ -466,7 +574,7 @@ fn write_small(
         // Replacing an existing file must be atomic, so go through a temporary name.
         let (temp, mut file) = TempOutput::create(&path, true)?;
         file.write_all(data).at(temp.temp_path())?;
-        let errors = apply_file_metadata(&file, temp.temp_path(), e);
+        let errors = apply_file_metadata(&file, temp.temp_path(), e, entry, &restore);
         temp.commit_fast(file)?;
         return Ok(errors);
     }
@@ -493,7 +601,8 @@ fn write_small(
         let _ = fs::remove_file(&path);
         return Err(Error::Io { path, source: err });
     }
-    let mut errors = u64::from(set_file_mtime(&file, e.mtime_secs, e.mtime_nanos).is_err());
+    let mut errors = restore.file(entry, &file, &path);
+    errors += u64::from(set_file_mtime(&file, e.mtime_secs, e.mtime_nanos).is_err());
     errors += u64::from(set_file_mode(&file, e.mode).is_err());
     Ok(errors)
 }
@@ -579,7 +688,7 @@ impl<'a> Dispatcher<'a> {
 
 fn run(
     archive: &Archive,
-    selected: &[usize],
+    chosen: &[usize],
     output: Option<Output<'_>>,
     threads: usize,
     memory_limit: Option<u64>,
@@ -601,6 +710,38 @@ fn run(
         "this archive's chunk size sets the floor; the limit cannot go lower",
     )?;
     let index = &archive.index;
+    let restore = output.as_ref().map(|o| Restore {
+        index,
+        owner: o.owner,
+        xattrs: o.xattrs,
+    });
+
+    // Split off the links. A symbolic link has no data and a hard link shares its source's, so
+    // neither goes through the pipeline; they are created afterwards. A hard link whose source
+    // is not being extracted (or when links are switched off) is simply extracted as a file.
+    let links_wanted = output.as_ref().is_some_and(|o| o.links);
+    let mut is_chosen = vec![false; if links_wanted { index.entries.len() } else { 0 }];
+    if links_wanted {
+        for &i in chosen {
+            is_chosen[i] = true;
+        }
+    }
+    let mut selected: Vec<usize> = Vec::with_capacity(chosen.len());
+    let mut symlinks: Vec<usize> = Vec::new();
+    let mut hard_links: Vec<usize> = Vec::new();
+    let mut verified_symlinks = 0u64;
+    for &i in chosen {
+        match index.link(i) {
+            Some(Link::Symlink(_)) if output.is_none() => verified_symlinks += 1,
+            Some(Link::Symlink(_)) if links_wanted => symlinks.push(i),
+            Some(Link::Symlink(_)) => {} // links switched off: nothing to write
+            Some(&Link::HardLink { source }) if links_wanted && is_chosen[source] => {
+                hard_links.push(i);
+            }
+            _ => selected.push(i),
+        }
+    }
+    let selected = &selected[..];
 
     // Which chunks do the selected files touch?
     let mut needed = vec![false; archive.block_count()];
@@ -661,8 +802,11 @@ fn run(
                 senders.push(tx);
                 let (shared, entries) = (&shared, &index.entries[..]);
                 let (dest, overwrite) = (out.dest, out.overwrite);
+                let restore = restore.expect("an output implies a restore plan");
                 handles
-                    .push(scope.spawn(move || writer_loop(&rx, shared, entries, dest, overwrite)));
+                    .push(scope.spawn(move || {
+                        writer_loop(&rx, shared, entries, dest, overwrite, restore)
+                    }));
             }
         }
         let dispatcher = (!senders.is_empty()).then(|| Dispatcher::new(senders, &shared));
@@ -677,6 +821,7 @@ fn run(
             dirs: output.as_ref().map(|o| DirCache::new(o.dest)),
             output,
             dispatcher,
+            restore,
             stats: ExtractStats::default(),
         };
 
@@ -738,11 +883,104 @@ fn run(
         stats.files += shared.files.load(Ordering::Relaxed);
         stats.bytes += shared.bytes.load(Ordering::Relaxed);
         stats.metadata_errors += shared.metadata_errors.load(Ordering::Relaxed);
-        if let (Some(out), Some(mut dirs)) = (&output, dirs) {
-            stats.metadata_errors += finish_dirs(entries, selected, out, &mut dirs)?;
+        stats.symlinks += verified_symlinks;
+        if let (Some(out), Some(mut dirs), Some(restore)) = (&output, dirs, &restore) {
+            // Links first: creating them must not disturb the directory timestamps set below.
+            let made = finish_links(&hard_links, &symlinks, out, &mut dirs, restore)?;
+            stats.files += made.hard_links;
+            stats.bytes = stats.bytes.saturating_add(made.bytes);
+            stats.hard_links += made.hard_links;
+            stats.hard_link_copies += made.copies;
+            stats.symlinks += made.symlinks;
+            stats.metadata_errors += made.errors;
+            stats.metadata_errors += finish_dirs(entries, selected, out, &mut dirs, restore)?;
         }
         Ok(stats)
     })
+}
+
+/// What [`finish_links`] created.
+#[derive(Default)]
+struct LinkStats {
+    symlinks: u64,
+    hard_links: u64,
+    copies: u64,
+    bytes: u64,
+    errors: u64,
+}
+
+/// Refuse to replace a directory with a file or link.
+fn check_not_a_directory(path: &Path, overwrite: bool) -> Result<()> {
+    if overwrite && fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
+        return Err(Error::Invalid(format!(
+            "cannot replace directory {} with a file or link",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Map a failure to create `path` onto the crate's errors.
+fn link_error(path: &Path, e: std::io::Error) -> Error {
+    if e.kind() == std::io::ErrorKind::AlreadyExists {
+        Error::Exists(path.to_path_buf())
+    } else {
+        Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }
+    }
+}
+
+/// Create the hard links, then the symbolic links, once all file data is on disk.
+///
+/// Every hard link's source was extracted by this run (that is how it got here), and the
+/// parent directories go through the same checks as files: a symbolic link planted in the
+/// destination is refused, never followed. Symbolic link targets are stored as they were and are
+/// not interpreted; nothing is ever written through them.
+fn finish_links(
+    hard_links: &[usize],
+    symlinks: &[usize],
+    out: &Output<'_>,
+    dirs: &mut DirCache,
+    restore: &Restore<'_>,
+) -> Result<LinkStats> {
+    let index = restore.index;
+    let entries = &index.entries;
+    let mut made = LinkStats::default();
+    for &i in hard_links {
+        let source = index.hard_link_source(i).expect("selected as a hard link");
+        let from = safe_join(out.dest, &entries[source].path)?;
+        let path = safe_join(out.dest, &entries[i].path)?;
+        if let Some(parent) = path.parent() {
+            dirs.ensure(parent)?;
+        }
+        check_not_a_directory(&path, out.overwrite)?;
+        match create_hard_link(&from, &path, out.overwrite).map_err(|e| link_error(&path, e))? {
+            LinkOutcome::Linked => {}
+            LinkOutcome::Copied => {
+                // A copy is a new file: it needs the attributes the shared inode would have had.
+                made.copies += 1;
+                made.errors += restore.path(i, &path);
+            }
+        }
+        made.hard_links += 1;
+        made.bytes = made.bytes.saturating_add(entries[i].size);
+    }
+    for &i in symlinks {
+        let target = index
+            .symlink_target(i)
+            .expect("selected as a symbolic link");
+        let path = safe_join(out.dest, &entries[i].path)?;
+        if let Some(parent) = path.parent() {
+            dirs.ensure(parent)?;
+        }
+        check_not_a_directory(&path, out.overwrite)?;
+        create_symlink(target, &path, out.overwrite).map_err(|e| link_error(&path, e))?;
+        made.symlinks += 1;
+        made.errors += restore.path(i, &path);
+    }
+    Ok(made)
 }
 
 /// Create explicitly archived directories (so empty ones exist) and apply their metadata,
@@ -752,17 +990,20 @@ fn finish_dirs(
     selected: &[usize],
     out: &Output<'_>,
     dirs: &mut DirCache,
+    restore: &Restore<'_>,
 ) -> Result<u64> {
-    let mut list: Vec<&Entry> = selected
+    let mut list: Vec<usize> = selected
         .iter()
-        .map(|&i| &entries[i])
-        .filter(|e| e.kind == EntryKind::Dir)
+        .copied()
+        .filter(|&i| entries[i].kind == EntryKind::Dir)
         .collect();
-    list.sort_by(|a, b| b.path.cmp(&a.path));
+    list.sort_by(|&a, &b| entries[b].path.cmp(&entries[a].path));
     let mut errors = 0;
-    for d in list {
+    for i in list {
+        let d = &entries[i];
         let path = safe_join(out.dest, &d.path)?;
         dirs.ensure(&path)?;
+        errors += restore.path(i, &path);
         errors += set_dir_mtime(&path, d.mtime_secs, d.mtime_nanos).is_err() as u64;
         errors += set_mode(&path, d.mode).is_err() as u64;
     }
@@ -868,6 +1109,7 @@ struct Demux<'a> {
     output: Option<Output<'a>>,
     dirs: Option<DirCache>,
     dispatcher: Option<Dispatcher<'a>>,
+    restore: Option<Restore<'a>>,
     stats: ExtractStats,
 }
 
@@ -948,7 +1190,10 @@ impl Demux<'_> {
             }
             OpenTarget::Stream { temp, file, hasher } => {
                 check_hash(e, hasher.finalize())?;
-                self.stats.metadata_errors += apply_file_metadata(&file, temp.temp_path(), e);
+                if let Some(restore) = &self.restore {
+                    self.stats.metadata_errors +=
+                        apply_file_metadata(&file, temp.temp_path(), e, entry, restore);
+                }
                 temp.commit_fast(file)?;
                 self.stats.files += 1;
                 self.stats.bytes += e.size;
@@ -994,7 +1239,10 @@ impl Demux<'_> {
             file.write_all(&buf[..n]).at(temp.temp_path())?;
         }
         check_hash(e, hasher.finalize())?;
-        self.stats.metadata_errors += apply_file_metadata(&file, temp.temp_path(), e);
+        if let Some(restore) = &self.restore {
+            self.stats.metadata_errors +=
+                apply_file_metadata(&file, temp.temp_path(), e, to, restore);
+        }
         temp.commit_fast(file)?;
         self.stats.files += 1;
         self.stats.bytes += e.size;
@@ -1055,9 +1303,17 @@ impl Demux<'_> {
     }
 }
 
-/// Apply timestamp and permissions; returns how many of the two failed (non-fatal).
-fn apply_file_metadata(file: &File, path: &Path, e: &Entry) -> u64 {
-    u64::from(set_file_mtime(file, e.mtime_secs, e.mtime_nanos).is_err())
+/// Apply ownership, attributes, timestamp and permissions of entry `entry` (`e`) to the file
+/// `file` currently at `path`; returns how many could not be applied (non-fatal).
+fn apply_file_metadata(
+    file: &File,
+    path: &Path,
+    e: &Entry,
+    entry: usize,
+    restore: &Restore<'_>,
+) -> u64 {
+    restore.file(entry, file, path)
+        + u64::from(set_file_mtime(file, e.mtime_secs, e.mtime_nanos).is_err())
         + u64::from(set_mode(path, e.mode).is_err())
 }
 

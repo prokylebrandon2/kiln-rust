@@ -791,6 +791,7 @@ fn hard_linked_inputs_are_stored_once_and_extract_as_separate_files() {
     let arc = dir.path().join("h.kiln");
     let o = PackOptions {
         dedup: true,
+        hard_links: false,
         ..opts(Profile::Balanced, 2)
     };
     pack(&arc, std::slice::from_ref(&src), &o).unwrap();

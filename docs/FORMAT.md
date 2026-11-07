@@ -117,6 +117,23 @@ itself a duplicate. A duplicate owns no bytes in the data stream and its content
 the sizes of the non-duplicate entries add up to the chunk `raw_len`s, and a duplicate's stream
 offset is its source's. The container version stays 2; a reader that lacks the extension
 refuses the archive.
+`0x8002` links (critical): `count` varint, then `count` records `step` varint, `kind` u8, body.
+`step` is the distance from the previous record's entry (the first from entry 0; every later step
+is at least 1), so entry numbers strictly increase. Kind 1 is a symbolic link: `len` varint
+(1..=4096) and that many target bytes, stored verbatim (no NUL, not interpreted, may be absolute
+or contain `..`). Kind 2 is a hard link: `back` varint (>= 1); its source is entry `n - back`.
+A link is an ordinary file entry. A symbolic link has size 0, the hash of empty content and class
+0, and owns no bytes. A hard link has the size and hash of its source and owns no bytes; its
+source is a file entry that is not itself a link (it may be a deduplicated copy) and always
+comes first. An entry cannot be both a link and a duplicate, and **no entry may be stored below
+a symbolic link** (`a -> /etc` followed by `a/passwd` is refused when the index is read).
+`0x0002` owner table (non-critical): `pair_count` varint, `pair_count` pairs of varints
+(`uid`, `gid`), then one varint per entry, in entry order, naming its pair. Absent when the
+archive records no ownership.
+`0x0003` extended attributes (non-critical): `count` varint, then `count` records `step` varint
+(as for links), `n` varint (1..=1024), then `n` attributes of `name_len` varint (1..=255), name
+bytes (no NUL), `value_len` varint (at most 65536), value bytes. Only entries that have
+attributes appear.
 
 ## Footer (24 bytes)
 
@@ -149,8 +166,12 @@ refuses the archive.
 * Timestamps: seconds + nanoseconds since the Unix epoch (negative allowed).
 * Mode: Unix permission bits as stored; on extraction only the low nine bits are applied (no
   set-uid/gid/sticky). Archives created on non-Unix systems store `0644` / `0755`.
-* Not stored (yet): symlinks, hard links, ownership, extended attributes. Extraction **refuses to
-  follow an existing symbolic link inside the destination tree**.
+* Symbolic links, hard links, numeric ownership and extended attributes are stored by the
+  extensions above (`0x8002`, `0x0002`, `0x0003`). Special files (sockets, FIFOs, devices) are not
+  stored. Extraction creates links after all file data is in place and never writes through one;
+  it restores ownership only on request and, by default, only the `user.` attributes (security
+  labels, ACLs and file capabilities need an explicit opt-in). It **refuses to follow an existing
+  symbolic link inside the destination tree**.
 
 ## Compatibility policy
 

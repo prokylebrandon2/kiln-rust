@@ -219,7 +219,7 @@ fn skipped_symlinks_give_the_warning_exit_code_but_still_create_the_archive() {
     let dir = tempfile::tempdir().unwrap();
     make_tree(dir.path());
     std::os::unix::fs::symlink("readme.txt", dir.path().join("proj/link")).unwrap();
-    let out = kiln(&["create", "a.kiln", "proj"], dir.path());
+    let out = kiln(&["create", "--no-links", "a.kiln", "proj"], dir.path());
     assert_eq!(code(&out), 7, "{}", stderr(&out));
     assert!(
         stderr(&out).contains("warning: skipped"),

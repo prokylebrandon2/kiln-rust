@@ -52,6 +52,8 @@ kiln extract backup.kiln --output restored/       # extract everything
 kiln extract backup.kiln photos/2024 -o out/      # extract a subtree (decodes only needed blocks)
 kiln create  --memory-limit 256MiB --progress big.kiln data/   # cap estimated peak memory, show progress
 kiln extract backup.kiln -o restored/ --memory-limit 64MiB      # same limit option on extract and test
+kiln create  --owner --xattrs backup.kiln /srv/data   # also record owner ids and extended attributes
+kiln extract backup.kiln -o out/ --same-owner         # restore owners (usually needs root); also --all-xattrs, --no-xattrs, --no-links
 kiln bench   data/ -c lz4 -c zstd:3 -c lzma:6 -b 4MiB -b 32MiB   # measure on YOUR data
 ```
 
@@ -61,7 +63,7 @@ The `.kiln` extension is a convention, not enforced.
 **Exit codes:** 0 success - 1 other error - 2 usage error - 3 I/O error (missing file, unwritable
 output) - 4 not a Kiln archive / unsupported version - 5 corrupt archive or checksum mismatch -
 6 request refused (output exists, unsafe path, bad option, no such member) - 7 completed with
-warnings (e.g. symlinks skipped; the archive is still valid).
+warnings (e.g. special files skipped, hard links extracted as copies; the archive is still valid).
 
 `--memory-limit SIZE` lowers threads and the in-flight block window until an *estimate* of peak
 memory fits (it is a model checked against measured peak RSS, not an enforced cap); a limit too
@@ -134,8 +136,9 @@ What it is **not** yet:
 * **Format version 2** has a written compatibility policy and one golden test archive, but it is
   **not compatible with Phase 2's `.kr` (v1) or the original `.kln`**. LZ4/LZMA2 chunks and
   extensions have no golden files yet.
-* Stores regular files and directories only: symlinks and special files are skipped with a
-  warning; no ownership or extended attributes. Names containing a backslash are refused.
+* Stores regular files, directories, symbolic links and hard links; numeric ownership (`--owner`)
+  and extended attributes (`--xattrs`) are opt-in. Special files (sockets, FIFOs, devices) are
+  skipped with a warning. Names containing a backslash are refused.
 * No encryption, no append/update, no fuzzing, no archive repair mode yet.
 * Still open from the Phase 1 throughput plan: per-file hashing runs on the producer thread, no
   buffer pool, no read-ahead. See `docs/PHASE2.md`.

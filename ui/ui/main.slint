@@ -657,6 +657,9 @@ export component MainWindow inherits Window {
                         x: 6px + i * bar.cell;
                         y: 6px;
                         width: bar.cell;
+                        // a Rectangle without a height fills its parent: that made the tile (and its
+                        // press highlight) as tall as the bar, 6 dp past the bottom edge
+                        height: tile-probe.preferred-height;
                         visible: !root.paste-mode;
                         icon: bar.icons[i];
                         label: caption;
@@ -820,6 +823,8 @@ export component MainWindow inherits Window {
                         x: 6px + i * ((parent.width - 12px) / root.arc-tiles.length);
                         y: 6px + arc-bar.save-h;
                         width: (parent.width - 12px) / root.arc-tiles.length;
+                        // see the selection bar: without a height the tile fills the whole bar
+                        height: arc-probe.preferred-height;
                         visible: tile.label != "";
                         icon: tile.icon;
                         label: tile.label;

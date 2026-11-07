@@ -732,10 +732,15 @@ export component KTile inherits Rectangle {
     preferred-width: Math.max(label-text.preferred-width, 24px) + 20px;
     preferred-height: 8px + 24px + 2px + label-text.preferred-height + 6px;
     border-radius: 14px;
+    // the pressed state below only sets the scale, and Slint draws the element (icon included) at
+    // scale 0 unless the resting scale is set explicitly (same as KButton)
+    transform-scale: 1;
 
     Icon {
         x: (parent.width - 24px) / 2;
         y: 8px;
+        width: 24px;
+        height: 24px;
         name: root.icon;
         tint: root.tint;
     }

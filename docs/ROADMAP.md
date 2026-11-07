@@ -33,7 +33,7 @@ zero-fill); scaling is only measured up to 2 threads.
 ## Phase 3 - Ratio and format  (partly done; see `PHASE3.md`)
 
 Done: format v2 + compatibility policy, profiles, classification, parallel extraction, 7-Zip
-comparison. **Not done:** BCJ/delta filters, deduplication, dictionaries, links/ownership/xattrs
+comparison. **Not done:** BCJ/delta filters, block-level deduplication (whole-file dedup is done: `pack --dedup`), dictionaries, links/ownership/xattrs
 (still listed below).
 
 *Why:* the original is 3.2% (text) and 9.6% (binary) better than the current best; independent
@@ -44,7 +44,7 @@ blocks cost ~4% on text.
 * Reduce the block-independence cost: larger blocks for LZMA, zstd long-distance matching,
   solid groups (several blocks sharing a window), grouping similar files (by extension) before
   blocking, dictionaries for many small files. Each change must show a measured gain.
-* Whole-file and block deduplication (evaluate content-defined chunking).
+* Block deduplication (evaluate content-defined chunking). Whole-file deduplication is done (`pack --dedup`, format extension 0x8001).
 * Presets (`fast`, `balanced`, `max`) chosen from the data, replacing raw level numbers.
 * Symlinks, hard links, ownership, xattrs. **Freeze format version 1** (or bump to 2) with a
   written compatibility policy and golden test archives.

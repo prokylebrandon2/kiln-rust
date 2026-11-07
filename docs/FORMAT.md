@@ -109,6 +109,14 @@ no backslash; no NUL; valid UTF-8.
 A tag with bit 15 set (`0x8000`) is **critical**: a reader that does not know it must refuse the
 archive. Any other unknown tag is skipped (and preserved if the index is re-encoded). Defined:
 `0x0001` creator string (UTF-8, ≤ 256 bytes, non-critical).
+`0x8001` whole-file deduplication table (critical): `count` varint, then `count` pairs of
+varints `step`, `back`. Pair *k* names the duplicate entry `d = d(k-1) + step` (`d(0) = 0`, so
+entry numbers strictly increase) and its source entry `d - back` (`back >= 1`). A duplicate is a
+non-empty file entry with the same size and hash as its source, which is a file entry that is not
+itself a duplicate. A duplicate owns no bytes in the data stream and its content is its source's:
+the sizes of the non-duplicate entries add up to the chunk `raw_len`s, and a duplicate's stream
+offset is its source's. The container version stays 2; a reader that lacks the extension
+refuses the archive.
 
 ## Footer (24 bytes)
 

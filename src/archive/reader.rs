@@ -169,9 +169,13 @@ impl Archive {
         &self.index
     }
 
-    /// Total uncompressed size of all files.
+    /// Total uncompressed size of all files, counting every copy of a deduplicated file (the
+    /// data stream itself is `index().total_raw` bytes).
     pub fn total_raw(&self) -> u64 {
-        self.index.total_raw
+        self.index
+            .entries
+            .iter()
+            .fold(0u64, |sum, e| sum.saturating_add(e.size))
     }
 
     /// Number of data chunks.

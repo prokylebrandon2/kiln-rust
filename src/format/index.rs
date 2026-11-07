@@ -39,6 +39,9 @@ use crate::path::{MAX_PATH_LEN, validate_archive_path};
 pub const INDEX_VERSION: u8 = 1;
 /// Extension tag: free-form UTF-8 name of the program that wrote the archive. Non-critical.
 pub const TAG_CREATOR: u16 = 0x0001;
+/// Extension tag: whole-file deduplication table (`docs/FORMAT.md`). Critical: without it the
+/// entry sizes do not add up to the data stream, so a reader that lacks it must refuse.
+pub const TAG_DEDUP: u16 = 0x8001;
 /// Extension tags with this bit set are *critical*: a reader that does not know one must refuse
 /// the archive. Tags without it may be skipped.
 pub const TAG_CRITICAL: u16 = 0x8000;
@@ -122,6 +125,51 @@ const MIN_ENTRY_BYTES: usize = 6;
 /// Smallest possible encoded chunk: raw_len, comp_len, method.
 const MIN_CHUNK_BYTES: usize = 3;
 
+/// The deduplication extension for `(duplicate, source)` entry pairs: ascending by duplicate,
+/// with every source before its duplicate.
+pub fn dedup_extension(pairs: &[(usize, usize)]) -> Extension {
+    let mut w = Writer::default();
+    w.varint(pairs.len() as u64);
+    let mut previous = 0usize;
+    for &(dup, source) in pairs {
+        w.varint((dup - previous) as u64);
+        w.varint((dup - source) as u64);
+        previous = dup;
+    }
+    Extension {
+        tag: TAG_DEDUP,
+        data: w.0,
+    }
+}
+
+/// Parse a deduplication table for an index of `entry_count` entries.
+fn parse_dedup(data: &[u8], entry_count: usize) -> Result<Vec<(usize, usize)>> {
+    let mut r = Reader::new(data);
+    let count = r.varint()?;
+    if count > (r.remaining() / 2) as u64 {
+        return Err(Error::corrupt("deduplication table is larger than its data"));
+    }
+    let mut pairs = Vec::with_capacity(count as usize);
+    let mut previous = 0u64;
+    for _ in 0..count {
+        let step = r.varint()?;
+        let back = r.varint()?;
+        let dup = previous
+            .checked_add(step)
+            .filter(|&d| step > 0 && d < entry_count as u64)
+            .ok_or_else(|| Error::corrupt("deduplication table names a bad entry"))?;
+        if back == 0 || back > dup {
+            return Err(Error::corrupt("deduplication table names a bad source"));
+        }
+        pairs.push((dup as usize, (dup - back) as usize));
+        previous = dup;
+    }
+    if r.remaining() != 0 {
+        return Err(Error::corrupt("deduplication table has trailing bytes"));
+    }
+    Ok(pairs)
+}
+
 fn flags_of(e: &Entry) -> u8 {
     u8::from(e.kind == EntryKind::Dir) | (e.class.id() << 1)
 }
@@ -146,9 +194,37 @@ impl Index {
 
     /// Compute every derived field and check that entries and chunks describe the same stream.
     fn derive_layout(&mut self) -> Result<()> {
+        let dups = self.dedup_pairs()?;
+        let mut is_dup = vec![false; self.entries.len()];
+        let mut next_dup = 0usize;
         let mut offset = 0u64;
         self.entry_starts = Vec::with_capacity(self.entries.len());
-        for e in &self.entries {
+        for (i, e) in self.entries.iter().enumerate() {
+            let source = match dups.get(next_dup) {
+                Some(&(dup, source)) if dup == i => Some(source),
+                _ => None,
+            };
+            if let Some(source) = source {
+                // A duplicate owns no bytes: it shares its source's region of the stream.
+                next_dup += 1;
+                let s = &self.entries[source];
+                if e.kind != EntryKind::File
+                    || s.kind != EntryKind::File
+                    || e.size == 0
+                    || e.size != s.size
+                    || e.hash != s.hash
+                    || is_dup[source]
+                {
+                    return Err(Error::corrupt(format!(
+                        "{}: invalid deduplication reference",
+                        e.path
+                    )));
+                }
+                is_dup[i] = true;
+                let start = self.entry_starts[source];
+                self.entry_starts.push(start);
+                continue;
+            }
             self.entry_starts.push(offset);
             offset = offset
                 .checked_add(e.size)
@@ -176,6 +252,20 @@ impl Index {
             ));
         }
         Ok(())
+    }
+
+    /// The `(duplicate, source)` entry pairs of the deduplication table, ascending by
+    /// duplicate (empty without one). Only the syntax is checked here; `derive_layout` checks
+    /// the pairs against the entries.
+    fn dedup_pairs(&self) -> Result<Vec<(usize, usize)>> {
+        let mut found = self.extensions.iter().filter(|x| x.tag == TAG_DEDUP);
+        let Some(x) = found.next() else {
+            return Ok(Vec::new());
+        };
+        if found.next().is_some() {
+            return Err(Error::corrupt("more than one deduplication table"));
+        }
+        parse_dedup(&x.data, self.entries.len())
     }
 
     /// The writer's creator string, if the archive carries one.
@@ -403,6 +493,9 @@ impl Index {
                     if data.len() > MAX_CREATOR_LEN || str::from_utf8(&data).is_err() {
                         return Err(Error::corrupt("invalid creator extension"));
                     }
+                }
+                TAG_DEDUP => {
+                    parse_dedup(&data, entry_count)?; // the entries are checked in `derive_layout`
                 }
                 t if t & TAG_CRITICAL != 0 => {
                     return Err(Error::Unsupported(format!(

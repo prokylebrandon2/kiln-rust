@@ -15,6 +15,7 @@
 //!  finally: index record + footer, fsync, atomic rename onto the destination
 //! ```
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -25,7 +26,9 @@ use super::{Progress, pipeline_config};
 use crate::classify::{self, Class, SAMPLE_HEAD, SAMPLE_MID};
 use crate::codec::{BlockCodec, CodecSpec, Filter, Method, detect_filter, looks_incompressible};
 use crate::error::{Error, IoContext, Result};
-use crate::format::index::{ChunkInfo, Entry, EntryKind, Extension, Index, TAG_CREATOR};
+use crate::format::index::{
+    ChunkInfo, Entry, EntryKind, Extension, Index, TAG_CREATOR, dedup_extension,
+};
 use crate::format::record::EncodedBlock;
 use crate::format::{
     FOOTER_LEN, Footer, HEADER_LEN, Header, MAX_BLOCK_LOG2, MAX_ENTRIES, MAX_INDEX_RAW,
@@ -64,6 +67,10 @@ pub struct PackOptions {
     /// Sample every file first, store the incompressible ones in their own chunks, and record
     /// each file's content class in the index.
     pub classify: bool,
+    /// Store files with identical content once (whole-file deduplication). Files that share
+    /// their size with another file are read one extra time to compare content. Archives that
+    /// use it need a reader that knows format extension `0x8001`.
+    pub dedup: bool,
 }
 
 impl PackOptions {
@@ -79,6 +86,7 @@ impl PackOptions {
             memory_limit: None,
             skip_incompressible: true,
             classify: s.classify,
+            dedup: false,
         }
     }
 }
@@ -168,6 +176,15 @@ pub fn pack_with_progress(
     // Classify (optional), then order: everything that will be compressed first, in walk order,
     // then the files that will be stored verbatim, in walk order.
     let threads = resolve_threads(options.threads);
+    let dups = if options.dedup {
+        find_duplicates(&collected.entries, threads)?
+    } else {
+        Vec::new()
+    };
+    let mut is_dup = vec![false; collected.entries.len()];
+    for d in &dups {
+        is_dup[d.dup] = true;
+    }
     let want_classes = options.classify && options.codec.method != Method::Store;
     let want_filters = options.codec.method == Method::Lzma2;
     let (mut classes, mut filters): (Vec<Class>, Vec<Filter>) = if want_classes || want_filters {
@@ -188,7 +205,7 @@ pub fn pack_with_progress(
     }
     let stored_by_class = |i: usize| classes[i].is_incompressible();
     let mut order: Vec<usize> = (0..collected.entries.len())
-        .filter(|&i| !stored_by_class(i))
+        .filter(|&i| !is_dup[i] && !stored_by_class(i))
         .collect();
     // Files that share a filter sit together, so a chunk never mixes filters.
     if options.classify {
@@ -205,7 +222,7 @@ pub fn pack_with_progress(
     } else {
         order.sort_by_key(|&i| filters[i]);
     }
-    order.extend((0..collected.entries.len()).filter(|&i| stored_by_class(i)));
+    order.extend((0..collected.entries.len()).filter(|&i| !is_dup[i] && stored_by_class(i)));
     let ordered: Vec<&SourceEntry> = order.iter().map(|&i| &collected.entries[i]).collect();
     let store_flags: Vec<bool> = order.iter().map(|&i| stored_by_class(i)).collect();
     let chunk_filters: Vec<Filter> = order
@@ -307,14 +324,42 @@ pub fn pack_with_progress(
             hash: *hash,
         });
     }
-    let index = Index::build(
-        entries,
-        chunks,
-        vec![Extension {
-            tag: TAG_CREATOR,
-            data: CREATOR.as_bytes().to_vec(),
-        }],
-    )?;
+    let mut extensions = vec![Extension {
+        tag: TAG_CREATOR,
+        data: CREATOR.as_bytes().to_vec(),
+    }];
+    if !dups.is_empty() {
+        // Duplicates come after everything that has data and own no bytes in the stream. Each
+        // carries its source's hash, which must still be what was measured beforehand.
+        let mut position_of = vec![usize::MAX; collected.entries.len()];
+        for (pos, &i) in order.iter().enumerate() {
+            position_of[i] = pos;
+        }
+        let mut pairs = Vec::with_capacity(dups.len());
+        for d in &dups {
+            let source_pos = position_of[d.source];
+            if source.hashes[source_pos] != d.hash {
+                return Err(Error::FileChanged(
+                    collected.entries[d.source].fs_path.clone(),
+                ));
+            }
+            let copy = &collected.entries[d.dup];
+            pairs.push((entries.len(), source_pos));
+            stats.files += 1;
+            entries.push(Entry {
+                path: copy.name.clone(),
+                kind: EntryKind::File,
+                class: classes[d.dup],
+                size: copy.size,
+                mtime_secs: copy.mtime_secs,
+                mtime_nanos: copy.mtime_nanos,
+                mode: copy.mode,
+                hash: d.hash,
+            });
+        }
+        extensions.push(dedup_extension(&pairs));
+    }
+    let index = Index::build(entries, chunks, extensions)?;
     debug_assert_eq!(
         index.data_end, position,
         "chunk table disagrees with the file"
@@ -344,12 +389,111 @@ pub fn pack_with_progress(
     })?;
     guard.commit(file)?;
 
-    stats.raw_bytes = index.total_raw;
+    stats.raw_bytes = index
+        .entries
+        .iter()
+        .fold(0u64, |sum, e| sum.saturating_add(e.size));
     stats.archive_bytes = position;
     stats.index_bytes = index_block.header.total_len();
     stats.skipped = collected.skipped;
     stats.grew = source.grew;
     Ok(stats)
+}
+
+/// A file whose content is identical to that of an earlier file in walk order.
+struct Duplicate {
+    /// Index of the duplicate in the walk results.
+    dup: usize,
+    /// Index of the first file with the same content.
+    source: usize,
+    /// BLAKE3 of the shared content, as measured now.
+    hash: FileHash,
+}
+
+/// BLAKE3 of a whole file, read through `buf`.
+fn hash_file(path: &Path, buf: &mut [u8]) -> std::io::Result<FileHash> {
+    let mut file = File::open(path)?;
+    let mut hasher = FileHasher::new();
+    loop {
+        match file.read(buf) {
+            Ok(0) => return Ok(hasher.finalize()),
+            Ok(n) => {
+                hasher.update(&buf[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Find files with identical content. Only files that share their size with another file are
+/// read; they are hashed with up to `threads` workers, and the first file in walk order of each
+/// group of identical files is its source.
+fn find_duplicates(entries: &[SourceEntry], threads: usize) -> Result<Vec<Duplicate>> {
+    let mut by_size: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if e.kind == EntryKind::File && e.size > 0 {
+            by_size.entry(e.size).or_default().push(i);
+        }
+    }
+    let mut candidates: Vec<usize> = by_size
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .flatten()
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    candidates.sort_unstable();
+    let workers = threads.min(candidates.len()).max(1);
+    let cursor = AtomicUsize::new(0);
+    let results: Vec<Result<Vec<(usize, FileHash)>>> = thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| -> Result<Vec<(usize, FileHash)>> {
+                    let mut done = Vec::new();
+                    let mut buf = vec![0u8; 1 << 20];
+                    loop {
+                        let n = cursor.fetch_add(1, Ordering::Relaxed);
+                        let Some(&i) = candidates.get(n) else {
+                            return Ok(done);
+                        };
+                        crate::cancel::check()?;
+                        let path = &entries[i].fs_path;
+                        done.push((i, hash_file(path, &mut buf).at(path)?));
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(Error::Internal("hashing thread panicked".into())))
+            })
+            .collect()
+    });
+    let mut hashed: Vec<(usize, FileHash)> = Vec::with_capacity(candidates.len());
+    for part in results {
+        hashed.extend(part?);
+    }
+    hashed.sort_unstable_by_key(|(i, _)| *i);
+    let mut first: HashMap<(u64, FileHash), usize> = HashMap::new();
+    let mut dups = Vec::new();
+    for (i, hash) in hashed {
+        let key = (entries[i].size, hash);
+        match first.get(&key) {
+            Some(&source) => dups.push(Duplicate {
+                dup: i,
+                source,
+                hash,
+            }),
+            None => {
+                first.insert(key, i);
+            }
+        }
+    }
+    Ok(dups)
 }
 
 /// Grouping key for the compressible lane: `(class rank, lower-case extension)`.

@@ -17,7 +17,7 @@
 //!
 //! `verify` is the same pipeline with the writing switched off.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufReader, Seek, SeekFrom, Write};
@@ -602,17 +602,24 @@ fn run(
 
     // Which chunks do the selected files touch?
     let mut needed = vec![false; archive.block_count()];
-    let mut targets = Vec::new();
+    // Deduplicated copies of a file share one region of the stream (equal `entry_starts`): it is
+    // decoded once, for the first selected copy, and the other copies are written from it.
+    let mut regions: BTreeMap<u64, (Target, Vec<usize>)> = BTreeMap::new();
     for &i in selected {
         let e = &index.entries[i];
         if e.kind == EntryKind::File && e.size > 0 {
             let start = index.entry_starts[i];
+            if let Some((_, copies)) = regions.get_mut(&start) {
+                copies.push(i);
+                continue;
+            }
             let end = start + e.size; // validated: cannot overflow (sum of sizes == total_raw)
-            targets.push(Target {
+            let target = Target {
                 entry: i,
                 start,
                 end,
-            });
+            };
+            regions.insert(start, (target, Vec::new()));
             let (first, last) = (
                 index.chunk_containing(start),
                 index.chunk_containing(end - 1),
@@ -620,6 +627,7 @@ fn run(
             needed[first..=last].iter_mut().for_each(|n| *n = true);
         }
     }
+    let (targets, aliases): (Vec<Target>, Vec<Vec<usize>>) = regions.into_values().unzip();
     let block_list: Vec<u32> = needed
         .iter()
         .enumerate()
@@ -660,6 +668,7 @@ fn run(
             entries: &index.entries,
             selected,
             targets,
+            aliases,
             next: 0,
             open: None,
             chunk_starts: &index.chunk_starts,
@@ -849,6 +858,8 @@ struct Demux<'a> {
     entries: &'a [Entry],
     selected: &'a [usize],
     targets: Vec<Target>,
+    /// For each target, the other selected entries with the same content.
+    aliases: Vec<Vec<usize>>,
     next: usize,
     open: Option<OpenTarget>,
     chunk_starts: &'a [u64],
@@ -916,15 +927,21 @@ impl Demux<'_> {
         Ok(())
     }
 
-    fn complete(&mut self, entry: usize) -> Result<()> {
+    /// Finish the file in `entry`, and write the other copies of its content named in `copies`
+    /// (deduplicated files that share its region of the stream).
+    fn complete(&mut self, entry: usize, copies: &[usize]) -> Result<()> {
         let e = &self.entries[entry];
         match self.open.take().expect("a file is open") {
             OpenTarget::Hash(hasher) => {
                 check_hash(e, hasher.finalize())?;
-                self.stats.files += 1;
-                self.stats.bytes += e.size;
+                let n = 1 + copies.len() as u64;
+                self.stats.files += n;
+                self.stats.bytes = self.stats.bytes.saturating_add(e.size.saturating_mul(n));
             }
             OpenTarget::Buffer(data) => {
+                for &copy in copies {
+                    self.dispatch(copy, data.clone())?;
+                }
                 self.dispatch(entry, data)?;
             }
             OpenTarget::Stream { temp, file, hasher } => {
@@ -933,8 +950,40 @@ impl Demux<'_> {
                 temp.commit_fast(file)?;
                 self.stats.files += 1;
                 self.stats.bytes += e.size;
+                for &copy in copies {
+                    self.copy_file(entry, copy)?;
+                }
             }
         }
+        Ok(())
+    }
+
+    /// Write `to` as a copy of `from`, a file that was just streamed to disk and verified (so
+    /// the copy is not hashed again).
+    fn copy_file(&mut self, from: usize, to: usize) -> Result<()> {
+        let entries = self.entries;
+        let (Some(out), Some(dirs)) = (&self.output, &mut self.dirs) else {
+            return Ok(());
+        };
+        let source = safe_join(out.dest, &entries[from].path)?;
+        let e = &entries[to];
+        let path = safe_join(out.dest, &e.path)?;
+        if let Some(parent) = path.parent() {
+            dirs.ensure(parent)?;
+        }
+        if out.overwrite && fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+            return Err(Error::Invalid(format!(
+                "cannot replace directory {} with a file",
+                path.display()
+            )));
+        }
+        let (temp, mut file) = TempOutput::create(&path, out.overwrite)?;
+        let mut input = File::open(&source).at(&source)?;
+        std::io::copy(&mut input, &mut file).at(temp.temp_path())?;
+        self.stats.metadata_errors += apply_file_metadata(&file, temp.temp_path(), e);
+        temp.commit_fast(file)?;
+        self.stats.files += 1;
+        self.stats.bytes += e.size;
         Ok(())
     }
 
@@ -968,7 +1017,8 @@ impl Demux<'_> {
             if e < t.end {
                 break; // the file continues in the next chunk
             }
-            self.complete(t.entry)?;
+            let copies = std::mem::take(&mut self.aliases[self.next]);
+            self.complete(t.entry, &copies)?;
             self.next += 1;
         }
         if let Some(d) = &mut self.dispatcher {

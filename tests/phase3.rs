@@ -9,7 +9,9 @@ use std::path::Path;
 use common::*;
 use kiln::classify::Class;
 use kiln::codec::{CodecSpec, Method};
-use kiln::format::index::{Entry, EntryKind, Extension, Index, TAG_CRITICAL};
+use kiln::format::index::{
+    ChunkInfo, Entry, EntryKind, Extension, Index, TAG_CRITICAL, dedup_extension,
+};
 use kiln::format::record::EncodedBlock;
 use kiln::format::{FOOTER_LEN, Footer, HEADER_LEN, Header};
 use kiln::integrity::FileHasher;
@@ -580,4 +582,93 @@ fn every_byte_flip_and_truncation_of_a_classified_archive_is_detected() {
     for len in 0..good.len() {
         assert!(!accepts(&good[..len]), "prefix of {len} bytes accepted");
     }
+}
+
+#[test]
+fn dedup_stores_identical_files_once_and_every_copy_extracts() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(src.join("a")).unwrap();
+    fs::create_dir_all(src.join("b")).unwrap();
+    let big = prose(600_000, 7); // above the in-memory limit of the extractor: streamed
+    let small = prose(20_000, 8);
+    for d in ["a", "b"] {
+        fs::write(src.join(d).join("big.txt"), &big).unwrap();
+        fs::write(src.join(d).join("small.txt"), &small).unwrap();
+    }
+    // Same size as small.txt, different content: must not be taken for a copy.
+    fs::write(src.join("a/other.txt"), prose(20_000, 9)).unwrap();
+    fs::write(src.join("empty1"), b"").unwrap();
+    fs::write(src.join("empty2"), b"").unwrap();
+
+    let plain = dir.path().join("plain.kiln");
+    let deduped = dir.path().join("deduped.kiln");
+    let o = opts(Profile::Adaptive, 2);
+    let before = pack(&plain, std::slice::from_ref(&src), &o).unwrap();
+    let dedup_options = PackOptions {
+        dedup: true,
+        ..o
+    };
+    let after = pack(&deduped, std::slice::from_ref(&src), &dedup_options).unwrap();
+    assert_eq!(after.raw_bytes, before.raw_bytes);
+    assert!(
+        after.archive_bytes < before.archive_bytes,
+        "{after:?} vs {before:?}"
+    );
+
+    let a = Archive::open(&deduped).unwrap();
+    assert_eq!(a.total_raw(), before.raw_bytes);
+    assert_eq!(
+        a.index().total_raw,
+        before.raw_bytes - (big.len() + small.len()) as u64
+    );
+    assert_eq!(verify(&a, 2).unwrap().files, 7);
+    let out = dir.path().join("out");
+    extract(&a, &ExtractOptions::new(&out)).unwrap();
+    assert_same_tree(&src, &out.join("src"));
+
+    // Selecting only the copies still extracts them.
+    let one = dir.path().join("one");
+    let options = ExtractOptions {
+        members: vec!["src/b/big.txt".into(), "src/b/small.txt".into()],
+        ..ExtractOptions::new(&one)
+    };
+    extract(&a, &options).unwrap();
+    assert_eq!(fs::read(one.join("src/b/big.txt")).unwrap(), big);
+    assert_eq!(fs::read(one.join("src/b/small.txt")).unwrap(), small);
+}
+
+#[test]
+fn a_dedup_table_must_describe_identical_files() {
+    let file = |path: &str, size: u64, hash: u8| Entry {
+        path: path.into(),
+        kind: EntryKind::File,
+        class: Class::Unknown,
+        size,
+        mtime_secs: 0,
+        mtime_nanos: 0,
+        mode: 0o644,
+        hash: [hash; 16],
+    };
+    let chunk = ChunkInfo {
+        raw_len: 5,
+        comp_len: 5,
+        method: Method::Store,
+    };
+    let build = |entries: Vec<Entry>, pairs: &[(usize, usize)]| {
+        Index::build(entries, vec![chunk], vec![dedup_extension(pairs)])
+    };
+    let index = build(vec![file("a", 5, 1), file("b", 5, 1)], &[(1, 0)]).unwrap();
+    assert_eq!(index.total_raw, 5);
+    assert_eq!(index.entry_starts, [0, 0]);
+
+    let bad = |entries: Vec<Entry>, pairs: &[(usize, usize)]| build(entries, pairs).is_err();
+    // Different hash, different size, a duplicate of a duplicate, an entry out of range.
+    assert!(bad(vec![file("a", 5, 1), file("b", 5, 2)], &[(1, 0)]));
+    assert!(bad(vec![file("a", 5, 1), file("b", 4, 1)], &[(1, 0)]));
+    assert!(bad(
+        vec![file("a", 5, 1), file("b", 5, 1), file("c", 5, 1)],
+        &[(1, 0), (2, 1)]
+    ));
+    assert!(bad(vec![file("a", 5, 1)], &[(1, 0)]));
 }

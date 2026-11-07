@@ -69,7 +69,9 @@ struct PackArgs {
     /// Never classify files, whatever the profile says
     #[arg(long)]
     no_classify: bool,
-    /// Worker threads (0 = all cores)
+    /// Store files with identical content once (reads files that share a size an extra time)
+    #[arg(long)]
+    dedup: bool,    /// Worker threads (0 = all cores)
     #[arg(short = 'j', long, default_value_t = 0)]
     threads: usize,
     /// Overwrite the archive if it exists
@@ -272,6 +274,9 @@ fn pack(a: PackArgs) -> Result<Outcome> {
     }
     if a.no_classify {
         options.classify = false;
+    }
+    if a.dedup {
+        options.dedup = true;
     }
     options.threads = a.threads;
     options.overwrite = a.force;

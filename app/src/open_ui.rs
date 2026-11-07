@@ -1,5 +1,5 @@
-//! Opening a file in another app: the options sheet (`fileSheet`) and the saved default app
-//! (`Defaults.get`, `openFile`). The app chooser (`appChooser`) comes in task 31.
+//! Opening a file in another app: the options sheet (`fileSheet`), the app chooser
+//! (`appChooser`) and the saved default app (`Defaults.get`, `openFile`).
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,7 @@ use std::time::UNIX_EPOCH;
 use serde_json::json;
 
 use crate::browse_ui::opt;
+use crate::browser::Kind;
 use crate::dialog::{Btn, BtnKind, Spec};
 use crate::host::{OpenApp, OpenWith};
 use crate::{App, fmt, sniff};
@@ -100,6 +101,22 @@ impl App {
             self.toast("That app isn't available any more");
             self.file_sheet(path, size, time);
         }
+    }
+
+    /// `M_OPTIONS`: the options sheet for the one selected plain file. The selection is cleared
+    /// first, as the Java does.
+    pub(crate) fn menu_open_options(&self) {
+        let (path, size, time) = {
+            let b = self.browser.borrow();
+            match b.only_selected() {
+                Some(row) if row.kind == Kind::File => (b.cwd.join(&row.key), row.size, row.time),
+                _ => return,
+            }
+        };
+        self.browser.borrow_mut().clear_selection();
+        self.render_rows();
+        self.render_chrome();
+        self.file_sheet(path, size, time);
     }
 
     /// `fileSheet`: size and date, then "Open with..." and "Edit with...". The "in Kiln" rows

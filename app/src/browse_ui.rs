@@ -439,10 +439,10 @@ impl App {
                 out.push(opt("folder", "Icon and color...", App::pick_selected_icon));
             }
             if one == Some(Kind::File) {
-                out.push(soon("open", "Open options..."));
+                out.push(opt("open", "Open options...", App::menu_open_options));
             }
             if matches!(one, Some(Kind::Archive | Kind::Set)) {
-                out.push(soon("extract", "Extract..."));
+                out.push(opt("extract", "Extract...", App::menu_extract_selected));
             }
             if one == Some(Kind::Set) {
                 out.push(opt("folder", "Browse as plain folder", App::menu_plain_set));

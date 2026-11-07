@@ -783,7 +783,7 @@ export component KFab inherits Rectangle {
     in property <bool> shown: false;
     callback clicked();
     height: 48px;
-    preferred-width: Math.max(64px, label.preferred-width + 32px);
+    width: Math.max(64px, probe.preferred-width + 32px);
     border-radius: 10px;
     background: Theme.accent;
     drop-shadow-color: #00000040;
@@ -791,6 +791,14 @@ export component KFab inherits Rectangle {
     drop-shadow-offset-y: 3px;
     visible: root.opacity > 0.01;
 
+    // measures the text, so that the button is as wide as its label plus the 16 dp padding
+    probe := Text {
+        visible: false;
+        text: root.text;
+        font-size: Theme.sp(15px);
+        font-weight: Theme.bold;
+        wrap: no-wrap;
+    }
     label := Text {
         width: 100%;
         height: 100%;

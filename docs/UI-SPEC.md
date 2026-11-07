@@ -234,8 +234,9 @@ Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust:
 - **No drag-select.** `MainActivity` has none either: a long press on a row toggles that one row
   (`setOnItemLongClickListener`, ignored while a folder is loading) and taps toggle while anything
   is selected. No touch handler selects a range, so none is built.
-- **Not yet in this part** (the Java has them; see the Phase B list): the menus and every dialog, file operations, thumbnails, opening files, archives, the
-  service notification. Tapping a file says "Not in this build yet".
+- **Not in this part** (they come in the parts below): the menus and dialogs (parts 3 to 8),
+  archives (parts 9 and 10), opening files and thumbnails (part 11). The service notification is
+  not built yet.
 
 ## Main screen, Phase B part 2: pull down and bookmarks (`MainActivity`, `PullSwipe`, `SwipeRefreshLayout`)
 
@@ -333,8 +334,10 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - **Built.** Select all adds every row shown. Clear selection. The two Show toggles flip
   `show_all` / `show_hidden`, save them to `kiln.xml` and read the folder again (selection cleared).
   Refresh reads the folder again and keeps the selection. Browse as plain folder opens the set as an
-  ordinary folder (with the banner). Icon and color... opens the folder icon picker (see part 5 below). Properties opens the properties sheet (see part 6 below). Every other row toasts "Not in this build yet" until its
-  dialog is built.
+  ordinary folder (with the banner). Icon and color... opens the folder icon picker (see part 5 below). Properties opens the properties sheet (see part 6 below). Open options... (one plain
+  file selected) opens the file sheet (see part 11 below), and Extract... (one archive selected)
+  opens the archive and then its Extract form (see parts 9 and 10 below). Settings is the one row
+  that still toasts "Not in this build yet" (Phase C).
 - **Rename** is also hidden in a protected (read-only) folder in the Java; that rule comes with
   Root and Shizuku (Phase C).
 
@@ -350,10 +353,10 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 
 ## Main screen, Phase B part 4: the selection bar and Delete (`MainActivity.deleteSelected`, `deleteForGood`)
 
-- **Bar.** While rows are selected: Copy, Move, Delete (danger tint) and Pack tiles. Only Delete is
-  built; Copy and Move are built too (B6), and Pack opens the Pack form (see part 7 below). The Java shows a
+- **Bar.** While rows are selected: Copy, Move, Delete (danger tint) and Pack tiles. All four are
+  built (Pack opens the Pack form, see part 7 below). The Java shows a
   single Copy tile in a protected (read-only) folder; that rule comes with Root and Shizuku
-  (Phase C), and the archive bars come with the archive part.
+  (Phase C). The archive's bar is described in part 9 below.
 - **Delete.** A dialog "Delete <what>?" (what is the quoted name for one item, "N items" for more),
   the text "This can't be undone.", Cancel (text) and Delete (danger). Delete runs `fs_delete` on a
   worker thread. A cancelled run toasts "Cancelled"; a failed one opens the message sheet "Couldn't
@@ -518,7 +521,7 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 
 ### Differences from the Java in this part
 
-- Browse (`pickFolder`) toasts "Not in this build yet"; the chooser comes with Extract.
+- Browse (`pickFolder`) opens the folder chooser (see part 10 below).
 - There is no `Priv.involves` check ("Can't pack here yet"); it comes with Root and Shizuku (Phase C).
 - The thread count is always Automatic (jobs = 0); Settings is Phase C.
 - No autofocus on the Name field. A long name in the result sheet is cut at the end, not in the middle.
@@ -546,6 +549,144 @@ Slint: `KSheet` and `KSheetOption` (`ui/ui/components.slint`), the dialog block 
 - The tagline has no extra line spacing (the Java sets 1.15).
 - The build number comes from `Host::version_code` (`PackageInfo.getLongVersionCode()`).
 - The sheet was written without being seen on screen; check it on a device.
+
+## Archive browsing, Phase B part 9: an open archive (`openItem`, `doOpen`, `onOpened`, `guardLeave`, `saveArchive`, `discardArchive`)
+
+Rust: `app/src/arc_ui.rs` (what is shown, what taps do) and `app/src/arc.rs` (the archive's state and
+the readers of the engine's lines); the bar and the sheets are drawn by `ui/ui/main.slint`.
+
+- **Opening.** Tapping an archive row, or Extract... for a selected archive (part 3), reads its
+  contents behind a progress sheet headed "Opening..." ("Unlocking..." once a password was given).
+  A set (an encrypted folder) and an archive with a lock icon ask for the password first: the sheet
+  "Unlock <name>" has a Password field, "Show password", Cancel and Unlock; Unlock with nothing typed
+  says "Enter the password". A wrong password toasts "Incorrect password" and asks again. Any other
+  failure is the sheet "Couldn't open <name>" with the engine's message.
+- **Inside.** The rows are the folders and files directly in the folder shown; a folder adds up what
+  is below it. Tapping a folder enters it, tapping a file opens its sheet (part 11). Back goes up one
+  folder and lands where that folder was left scrolled; Back at the top leaves the archive for the
+  folder it was opened from. Searching inside an archive matches the words against file names, at
+  most 1000 hits, each shown with the folder it lives in.
+- **Changes.** The first change (Rename, for one) starts an editing session behind "Preparing...";
+  what is changed stays in it until it is saved.
+- **Unsaved changes.** An archive with changes shows an "Unsaved changes" row above the bar, and
+  Save changes and Discard changes at the top of its menu. Leaving it (Back at the top, a file
+  opened from another app, Browse as plain folder) first asks "Unsaved changes": "This archive has
+  changes that haven't been saved." with Keep editing, Discard and Save. Save runs behind
+  "Saving..." and toasts "Saved" (a failure is "Couldn't save"). Discard asks "Discard changes?"
+  ("Everything you changed since the last save is thrown away.") and then runs behind
+  "Discarding..." (a failure is "Couldn't discard").
+- **Menu.** Nothing selected: Save changes and Discard changes (only with changes), Extract all...,
+  Check integrity, Select all, Archive info and, for a set, Browse as plain folder and Decrypt folder
+  in place.... Rows selected: Rename (one row), Properties, Select all, Clear selection.
+- **Bar.** Four tiles. Nothing selected: Extract all, Add, Check, Info. Rows selected: Extract, Copy,
+  Move, Delete (danger tint). Extract all, Extract, Check and Info are built (part 10); Add, Copy,
+  Move and Delete toast "Not in this build yet".
+
+### Differences from the Java in this part
+
+- `Priv` (Root and Shizuku) is Phase C: no archive is a locked copy, so Rename is always offered,
+  and saving never goes through `Priv`.
+- The Add, Copy, Move and Delete tiles of the bar are not built yet.
+- Written from the Java source; not compared with it on a device.
+
+## Archive tools, Phase B part 10: Extract, Check, Info and the folder chooser (`extractDialog`, `runExtract`, `runTest`, `infoDialog`, `decryptInPlace`, `pickFolder`)
+
+Rust: `app/src/extract_ui.rs` and `app/src/folder_ui.rs`; the sheets are in `ui/ui/main.slint`.
+
+- **Extract form.** Opened from the archive menu (Extract all...), the bar (Extract all, or Extract
+  for the selected rows), a file's sheet (Extract...) or the folder list's selection menu (which
+  opens the archive first). The text says "Extract all N files to:" or "Extract N file(s) to:", and
+  under it are the folder field, Browse and the box "Replace files that already exist". The folder
+  starts beside the archive, named like the archive without its extension ("<name>_files" for a
+  set); for a file opened from another app it starts in the folder that file came from, or in the
+  storage root when it was shared. Browse opens the folder chooser at the folder in the field and
+  writes the pick back. Buttons: Cancel and Extract; an empty folder says "Choose a folder". With
+  unsaved changes the form is replaced by the sheet "Unsaved changes" ("Save or discard your
+  changes first, then extract.").
+- **Running it.** The engine's `extract` runs behind the progress sheet "Extracting..." (it can be
+  cancelled: toast "Cancelled"). When files already exist and the box was not ticked, the sheet
+  "Replace existing files?" has Cancel and Replace; Replace runs it again, overwriting. Any other
+  failure is the sheet "Couldn't extract" with the engine's message.
+- **Result sheet.** Tiles for the number of files ("file" or "files") and the time ("N s"), then
+  detail rows: Result, Saved to, From, Verification ("Every checksum matches", when the engine says
+  all checksums are OK) and Existing files ("Replaced", when overwriting). OK closes it; Open folder
+  leaves the archive and shows the folder the files went to.
+- **Check.** Check integrity (menu) or the Check tile runs the engine's `test` behind "Checking..."
+  (it can be cancelled). With unsaved changes it shows the sheet "Unsaved changes" ("Save your
+  changes first; Check works on the saved archive."). The result sheet has a verdict, tiles (files
+  checked, time) and detail rows: Result ("Every checksum matches", the engine's text, or "No
+  problems found"), Encryption (AES-256-GCM or None) and Files in archive. A failed check shows
+  "What went wrong" and "Details" instead, and the warning "The archive may be damaged. Keep your
+  original files until you've restored or re-created it."
+- **Info.** Archive info (menu) or the Info tile: a tile with the file count, what was saved
+  ("Saved <size> (<n>%)", or "No saving") with the caption "Stored size is <n>% of the original",
+  a line that says "Encrypted" and "AES-256-GCM" joined by a middle dot, or "Not encrypted", and
+  detail rows: Type ("Archive" or "Encrypted set (one archive per file)"), Folders, Modified, Size
+  on disk and Location.
+- **Decrypt folder in place...** (sets only). The sheet "Decrypt in place?" says the folder becomes
+  an ordinary folder and that the encryption and the random file names are removed; Cancel and
+  Decrypt. It runs behind "Decrypting...", toasts "Decrypted" and closes the archive; a failure is
+  the sheet "Couldn't decrypt".
+- **Folder chooser (`pickFolder`).** A sheet with the path, the folders of one directory, "New
+  folder..." and the other storages. "Select this folder" gives the folder back to whoever asked
+  (Extract, and Pack's Browse).
+
+### Differences from the Java in this part
+
+- `Priv` is Phase C: no destination counts as protected, and no folder is read through it.
+- Written from the Java source; not compared with it on a device.
+
+## Opening files, Phase B part 11: Open, edit, files from other apps and thumbnails (`openFile`, `fileSheet`, `appChooser`, `openIncoming`, `Thumbs`)
+
+Rust: `app/src/open_ui.rs`, `app/src/host.rs` (what the phone does, the `Host` trait),
+`platform/src/android.rs` (the JNI calls, the only code that can run only on a phone),
+`app/src/thumbs.rs` and `app/src/thumbs_ui.rs`.
+
+- **Tapping a plain file (`openFile`).** The app saved for its extension (`def_<ext>` in `kiln.xml`,
+  stored as "package|label") opens it at once. With none saved, or with a value for Kiln's own
+  viewer or editor (Phase C), the file sheet is shown. A saved app that is gone is forgotten:
+  toast "That app isn't available any more", then the file sheet. The type sent to the other app is
+  the one Android knows for the extension, else what the content looks like.
+- **File sheet (`fileSheet`).** Titled with the file's name; the text is the size and the date
+  joined by a middle dot. Rows: "Open with..." and "Edit with...", then Cancel. The same sheet opens
+  from "Open options..." in the selection menu (one plain file selected); the selection is cleared
+  first. The "in Kiln" rows wait for Phase C.
+- **App chooser (`appChooser`).** Titled "Open with" or "Edit with", it lists the apps that can open
+  (or edit) the file, then "More options..." for the system's own list. For Open with a file that
+  has an extension, the first row is "Always open .<ext> files with this app"; tapping it flips its
+  tick and shows the sheet again, and an app chosen while it is ticked is saved for that
+  extension. Failures toast "That app couldn't open the file" or "No app can open this file".
+- **Handing the file over.** The other app gets a `content://` URI from `MediaStore.Files` (found
+  by the file's path). When the media scanner has no row for it, a `file://` URI is used instead
+  (some receiving apps cannot read it).
+- **A file inside an archive.** Its sheet is titled with the file's name; the text is the size and,
+  when known, the date. Rows: "Open with..." (the file is extracted to the cache behind "Opening...",
+  which can be cancelled, then the chooser opens), "Edit with..." (an editing session, then the
+  file is copied out behind "Preparing..." and the chooser opens for editing) and, when nothing is
+  waiting to be saved, "Extract...". When the app comes back to the front and the copy that went
+  to an editor changed, the sheet "Update the archive?" asks whether to put the new version in
+  ("<name>" was changed. Put the new version in the archive? (You still need to Save.)); Update runs
+  behind "Updating..." (a failure is "Couldn't update").
+- **Files from other apps (`openIncoming`).** When another app opens an archive with Kiln, it is
+  opened once storage access and the engine are ready, after the question about unsaved changes if
+  an archive with changes is open. A `file://` file is opened where it is, and Extract starts
+  beside it. A `content://` file is copied to the cache (behind "Opening...") and then opened;
+  Extract starts in the storage root. Older copies are removed, and leaving the archive removes
+  its copy. A failure is the sheet "Couldn't open the file".
+- **Thumbnails (`Thumbs`).** A row gets a preview in place of its icon (the icon stays while the
+  row is selected). Pictures (png, jpg, jpeg, gif, webp, bmp, heic, heif) up to 15 MB, the cover art
+  inside audio files (mp3, m4a, flac, ogg, oga, opus, wav, aac, wma, mka, amr) and a frame one
+  second into videos (mp4, mkv, webm, 3gp, mov, avi, m4v, ts). Only the rows in view are decoded,
+  by two worker threads, at 96 dp and never above one million pixels; results are kept in a cache
+  of at most 32 MB and 2048 entries. A file that cannot be decoded keeps its icon. There are no
+  previews inside archives or when the setting `previews` (on by default) is off.
+
+### Differences from the Java in this part
+
+- Sharing (an `ACTION_SEND` row) is not built: `Host` can open a file but not send one.
+- "View in Kiln" and "Edit in Kiln" are left out until Phase C.
+- The foreground service that keeps an operation alive in the background (`OpService`) is not built.
+- Written from the Java source; not compared with it on a device.
 
 ## Known differences from the Java
 

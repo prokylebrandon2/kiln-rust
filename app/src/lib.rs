@@ -87,6 +87,9 @@ struct App {
     volumes_at: Cell<Option<Instant>>,
     /// Set to stop the folder size count of the pull-down strip that is running.
     pull_stop: RefCell<Arc<AtomicBool>>,
+    /// The size counted for a storage root by the pull-down strip, and when: it is kept for a
+    /// while so that a pull does not walk all of the storage again.
+    pull_root_size: RefCell<Option<(std::path::PathBuf, Instant, String)>>,
     /// What the buttons of the dialog sheet that is up do (see dialog.rs).
     dialog: RefCell<dialog::Dialog>,
     /// The operation whose progress sheet is up, or about to be (see dialog.rs), and a counter
@@ -143,6 +146,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         marks_model: Rc::new(VecModel::default()),
         volumes_at: Cell::new(None),
         pull_stop: RefCell::new(Arc::new(AtomicBool::new(true))),
+        pull_root_size: RefCell::default(),
         dialog: RefCell::default(),
         op: RefCell::default(),
         op_gen: Cell::new(0),

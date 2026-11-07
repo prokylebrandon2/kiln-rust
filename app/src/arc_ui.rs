@@ -81,6 +81,24 @@ impl App {
 
     /// `openItem`: ask for the password of a set or an encrypted archive, then open it.
     pub(crate) fn open_row(&self, key: &str) {
+        self.open_row_then(key, None);
+    }
+
+    /// `M_EXTRACT`: open the one selected archive, then show its Extract form.
+    pub(crate) fn menu_extract_selected(&self) {
+        let key = {
+            let b = self.browser.borrow();
+            match b.only_selected() {
+                Some(row) if matches!(row.kind, Kind::Archive | Kind::Set) => row.key.clone(),
+                _ => return,
+            }
+        };
+        let after: After = Box::new(|app| app.extract_dialog(Vec::new()));
+        self.open_row_then(&key, Some(after));
+    }
+
+    /// `openItem(it, then)`: like [`App::open_row`], and `after` runs once the archive is open.
+    pub(crate) fn open_row_then(&self, key: &str, after: Option<After>) {
         let (file, locked) = {
             let b = self.browser.borrow();
             let Some(row) = b.rows.iter().find(|r| r.key == key) else {
@@ -90,9 +108,9 @@ impl App {
         };
         if locked {
             let name = file_name(&file);
-            self.ask_password(&name, move |app, pw| app.do_open(file, pw, None));
+            self.ask_password(&name, move |app, pw| app.do_open(file, pw, after));
         } else {
-            self.do_open(file, String::new(), None);
+            self.do_open(file, String::new(), after);
         }
     }
 

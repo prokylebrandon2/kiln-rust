@@ -2,7 +2,7 @@
 //! and the `onPull` refresh). The strip's look and the way the list is pulled down are in
 //! `ui/ui/browser.slint` and `ui/ui/pull.slint`; this is what fills the strip and what a pull does.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -17,6 +17,9 @@ const POST_EVERY: Duration = Duration::from_millis(120);
 const MAX_DEPTH: u32 = 40;
 /// The strip goes on counting while it slides back, which takes at most 250 + 220 ms.
 const LINGER: Duration = Duration::from_millis(500);
+/// The size counted for a storage root is shown again for this long, so that a pull does not walk
+/// all of the phone's storage each time. Other folders are counted afresh on every pull.
+const KEEP_ROOT_SIZE: Duration = Duration::from_secs(600);
 
 /// A running count of a folder's size.
 struct Counter {
@@ -70,6 +73,15 @@ fn show_size(stop: &Arc<AtomicBool>, text: String) {
     });
 }
 
+/// Keep the size counted for a storage root, to show again for [`KEEP_ROOT_SIZE`].
+fn keep_root_size(path: PathBuf, text: String) {
+    let _ = slint::invoke_from_event_loop(move || {
+        app_do(|app| {
+            *app.pull_root_size.borrow_mut() = Some((path, Instant::now(), text));
+        });
+    });
+}
+
 impl App {
     /// Connect the pull's callbacks.
     pub(crate) fn wire_pull(&self) {
@@ -117,6 +129,18 @@ impl App {
         ui.set_pull_free(free.into());
         ui.set_pull_used(used);
         ui.set_pull_name(name.into());
+        if home {
+            let kept = self
+                .pull_root_size
+                .borrow()
+                .as_ref()
+                .filter(|(path, when, _)| *path == at && when.elapsed() < KEEP_ROOT_SIZE)
+                .map(|(_, _, text)| text.clone());
+            if let Some(text) = kept {
+                ui.set_pull_size(text.into());
+                return;
+            }
+        }
         ui.set_pull_size("Size: ...".into());
         // The folder's size climbs while it is counted.
         std::thread::spawn(move || {
@@ -127,7 +151,11 @@ impl App {
             };
             counter.walk(&at, 0);
             if !stop.load(Ordering::Relaxed) {
-                show_size(&stop, format!("Size: {}", size_text(counter.total)));
+                let text = format!("Size: {}", size_text(counter.total));
+                show_size(&stop, text.clone());
+                if home {
+                    keep_root_size(at, text);
+                }
             }
         });
     }

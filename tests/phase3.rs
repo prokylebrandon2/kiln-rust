@@ -669,3 +669,135 @@ fn a_dedup_table_must_describe_identical_files() {
     ));
     assert!(bad(vec![file("a", 5, 1)], &[(1, 0)]));
 }
+
+#[test]
+fn dedup_copies_extract_without_their_source_and_over_existing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    let big = prose(600_000, 11); // streamed by the extractor
+    let small = prose(20_000, 12); // buffered, written by the writer pool
+    let random = noise(80_000, 13); // classified incompressible: the stored lane
+    for d in ["a", "b", "c"] {
+        fs::create_dir_all(src.join(d)).unwrap();
+        fs::write(src.join(d).join("big.txt"), &big).unwrap();
+        fs::write(src.join(d).join("small.txt"), &small).unwrap();
+    }
+    for d in ["a", "b"] {
+        fs::write(src.join(d).join("noise.dat"), &random).unwrap();
+    }
+    let arc = dir.path().join("d.kiln");
+    let o = PackOptions {
+        dedup: true,
+        ..opts(Profile::Adaptive, 2)
+    };
+    let stats = pack(&arc, std::slice::from_ref(&src), &o).unwrap();
+    let once = (big.len() + small.len() + random.len()) as u64;
+    let logical = 3 * (big.len() + small.len()) as u64 + 2 * random.len() as u64;
+    assert_eq!((stats.files, stats.raw_bytes), (8, logical));
+    assert_eq!(stats.classified_stored_files, 1, "{stats:?}");
+
+    let a = Archive::open(&arc).unwrap();
+    assert_eq!((a.total_raw(), a.index().total_raw), (logical, once));
+    let v = verify(&a, 2).unwrap();
+    assert_eq!((v.files, v.bytes), (8, logical));
+
+    // Only copies selected: the file their content was stored under is not extracted at all.
+    let members = [
+        "src/b/big.txt",
+        "src/c/big.txt",
+        "src/b/small.txt",
+        "src/c/small.txt",
+        "src/b/noise.dat",
+    ];
+    let one = dir.path().join("one");
+    let options = ExtractOptions {
+        members: members.iter().map(|m| (*m).to_string()).collect(),
+        ..ExtractOptions::new(&one)
+    };
+    let s = extract(&a, &options).unwrap();
+    let wanted = 2 * (big.len() + small.len()) as u64 + random.len() as u64;
+    assert_eq!((s.files, s.bytes), (5, wanted));
+    for m in members {
+        assert_eq!(
+            fs::read(one.join(m)).unwrap(),
+            fs::read(dir.path().join(m)).unwrap(),
+            "{m}"
+        );
+    }
+    assert!(!one.join("src/a").exists());
+
+    // Overwrite mode replaces damaged files, copies included.
+    let out = dir.path().join("out");
+    extract(&a, &ExtractOptions::new(&out)).unwrap();
+    for m in ["src/b/big.txt", "src/c/small.txt", "src/b/noise.dat"] {
+        fs::write(out.join(m), b"damaged").unwrap();
+    }
+    let again = ExtractOptions {
+        overwrite: true,
+        ..ExtractOptions::new(&out)
+    };
+    extract(&a, &again).unwrap();
+    assert_same_tree(&src, &out.join("src"));
+}
+
+#[test]
+fn every_byte_flip_and_truncation_of_a_deduplicated_archive_is_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("s");
+    fs::create_dir_all(&src).unwrap();
+    for name in ["t1.txt", "t2.txt"] {
+        fs::write(src.join(name), prose(9_000, 5)).unwrap();
+    }
+    for name in ["n1.bin", "n2.bin"] {
+        fs::write(src.join(name), noise(9_000, 6)).unwrap();
+    }
+    let arc = dir.path().join("c.kiln");
+    let o = PackOptions {
+        block_log2: 12,
+        threads: 2,
+        dedup: true,
+        ..PackOptions::from_profile(Profile::Adaptive)
+    };
+    let stats = pack(&arc, &[src], &o).unwrap();
+    assert_eq!(stats.files, 4);
+    assert_eq!(Archive::open(&arc).unwrap().index().total_raw, 18_000);
+    let good = fs::read(&arc).unwrap();
+    let probe = dir.path().join("probe.kiln");
+    let accepts = |bytes: &[u8]| {
+        fs::write(&probe, bytes).unwrap();
+        Archive::open(&probe).is_ok_and(|a| verify(&a, 2).is_ok())
+    };
+    assert!(accepts(&good));
+    for i in 0..good.len() {
+        let mut bad = good.clone();
+        bad[i] ^= 0xA5;
+        assert!(!accepts(&bad), "flip at byte {i} was not detected");
+    }
+    for len in 0..good.len() {
+        assert!(!accepts(&good[..len]), "prefix of {len} bytes accepted");
+    }
+}
+
+#[test]
+fn hard_linked_inputs_are_stored_once_and_extract_as_separate_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let body = prose(30_000, 21);
+    fs::write(src.join("orig.txt"), &body).unwrap();
+    if fs::hard_link(src.join("orig.txt"), src.join("link.txt")).is_err() {
+        return; // this file system has no hard links
+    }
+    let arc = dir.path().join("h.kiln");
+    let o = PackOptions {
+        dedup: true,
+        ..opts(Profile::Balanced, 2)
+    };
+    pack(&arc, std::slice::from_ref(&src), &o).unwrap();
+    let a = Archive::open(&arc).unwrap();
+    assert_eq!(a.index().total_raw, body.len() as u64);
+    assert_eq!(a.total_raw(), 2 * body.len() as u64);
+    let out = dir.path().join("out");
+    extract(&a, &ExtractOptions::new(&out)).unwrap();
+    assert_same_tree(&src, &out.join("src"));
+}

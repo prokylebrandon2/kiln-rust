@@ -35,7 +35,9 @@ use crate::codec::CodecSpec;
 use crate::error::{Error, IoContext, Result};
 use crate::format::index::{ChunkInfo, Entry, EntryKind};
 use crate::format::record::{RecordHeader, decode_payload, read_record};
-use crate::fsutil::{TempOutput, set_dir_mtime, set_file_mode, set_file_mtime, set_mode};
+use crate::fsutil::{
+    TempOutput, read_full, set_dir_mtime, set_file_mode, set_file_mtime, set_mode,
+};
 use crate::integrity::{FileHasher, empty_hash, to_hex};
 use crate::parallel::{MemoryModel, Source, resolve_threads, run_ordered};
 use crate::path::{normalize_selector, safe_join, selector_matches};
@@ -958,8 +960,8 @@ impl Demux<'_> {
         Ok(())
     }
 
-    /// Write `to` as a copy of `from`, a file that was just streamed to disk and verified (so
-    /// the copy is not hashed again).
+    /// Write `to` as a copy of `from`, a file that was just streamed to disk and verified. The
+    /// copy is hashed again while it is written.
     fn copy_file(&mut self, from: usize, to: usize) -> Result<()> {
         let entries = self.entries;
         let (Some(out), Some(dirs)) = (&self.output, &mut self.dirs) else {
@@ -979,7 +981,19 @@ impl Demux<'_> {
         }
         let (temp, mut file) = TempOutput::create(&path, out.overwrite)?;
         let mut input = File::open(&source).at(&source)?;
-        std::io::copy(&mut input, &mut file).at(temp.temp_path())?;
+        // The source was verified when it was written but is read back from disk here, so the
+        // copy is hashed too: a bad read can never produce a wrong file.
+        let mut hasher = FileHasher::new();
+        let mut buf = vec![0u8; 256 << 10];
+        loop {
+            let n = read_full(&mut input, &mut buf).at(&source)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            file.write_all(&buf[..n]).at(temp.temp_path())?;
+        }
+        check_hash(e, hasher.finalize())?;
         self.stats.metadata_errors += apply_file_metadata(&file, temp.temp_path(), e);
         temp.commit_fast(file)?;
         self.stats.files += 1;

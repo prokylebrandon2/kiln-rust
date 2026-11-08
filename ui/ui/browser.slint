@@ -19,13 +19,21 @@ export struct RowData {
     where-line: string,
     size-text: string,
     selected: bool,
-    /// A thumbnail of the file, drawn instead of the icon while `has-preview` (and the row is not selected).
-    preview: image,
-    has-preview: bool,
+}
+
+/// The thumbnail of the row with the same index in `rows`, drawn instead of the icon while `has`
+/// (and the row is not selected). It is a model of its own so that a thumbnail arriving changes
+/// nothing a row's texts depend on: a change of any row of a model makes every row view that
+/// reads the model evaluate its bindings again.
+export struct PreviewData {
+    image: image,
+    has: bool,
 }
 
 export component KFileList inherits Rectangle {
     in property <[RowData]> rows;
+    /// The thumbnails, one per entry of `rows` (see `PreviewData`).
+    in property <[PreviewData]> previews;
     /// The ".." row above the first row.
     in property <bool> up-row: false;
     /// Search hits show the folder they live in on a third line.
@@ -306,6 +314,7 @@ export component KFileList inherits Rectangle {
                 property <int> idx: self.at - (root.up-live ? 1 : 0);
                 property <bool> is-up: root.up-live && self.at == 0;
                 property <RowData> d: root.rows[self.idx];
+                property <PreviewData> pv: root.previews[self.idx];
                 x: root.enter-dx;
                 y: root.slack + root.shift - root.over + self.at * root.row-h + root.enter-dy;
                 width: root.width;
@@ -319,8 +328,8 @@ export component KFileList inherits Rectangle {
                 where-line: self.is-up ? "" : self.d.where-line;
                 size-text: self.is-up ? "" : self.d.size-text;
                 selected: !self.is-up && self.d.selected;
-                preview: self.d.preview;
-                has-preview: !self.is-up && self.d.has-preview;
+                preview: self.pv.image;
+                has-preview: !self.is-up && self.pv.has;
                 clicked => {
                     root.row-clicked(self.is-up ? -1 : self.idx);
                 }

@@ -46,7 +46,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use kiln_ui::{MainWindow, MarkRow, RowData, Theme};
+use kiln_ui::{MainWindow, MarkRow, PreviewData, RowData, Theme};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::browser::{Browser, SortKey};
@@ -71,6 +71,8 @@ struct App {
     status: RefCell<Status>,
     browser: RefCell<Browser>,
     model: Rc<VecModel<RowData>>,
+    /// The thumbnails of `model`'s rows, row for row (see `PreviewData` in browser.slint).
+    previews: Rc<VecModel<PreviewData>>,
     /// Offsets of the phone's time zone from UTC, by day since 1970, so that a folder of
     /// thousands of files asks the phone once per day and not once per file.
     offsets: RefCell<HashMap<i64, i32>>,
@@ -138,6 +140,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         status: RefCell::default(),
         browser: RefCell::new(Browser::new(host.storage_root())),
         model: Rc::new(VecModel::default()),
+        previews: Rc::new(VecModel::default()),
         offsets: RefCell::default(),
         toast_gen: Cell::new(0),
         loading_hint: Cell::new(false),
@@ -167,6 +170,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
 
     app.read_settings();
     app.ui.set_rows(ModelRc::from(app.model.clone()));
+    app.ui.set_previews(ModelRc::from(app.previews.clone()));
     app.ui.set_mark_rows(ModelRc::from(app.marks_model.clone()));
     app.apply_look();
     app.refresh_permission();

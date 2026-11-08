@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use kiln_ui::{PickIcon, RowData, Theme};
+use kiln_ui::{PickIcon, PreviewData, RowData, Theme};
 use serde_json::{Value, json};
 use slint::{Color, ComponentHandle, Model, ModelRc, Timer, VecModel};
 
@@ -74,7 +74,7 @@ pub(crate) fn color_index(color: u32) -> i32 {
 }
 
 /// One row of the list as the Slint list wants it.
-fn row_data(row: &Row, selected: bool, where_line: &str, preview: Option<slint::Image>) -> RowData {
+fn row_data(row: &Row, selected: bool, where_line: &str) -> RowData {
     let (tint_kind, tint) = match row.tint {
         Tint::Accent => (0, Color::default()),
         Tint::Text2 => (1, Color::default()),
@@ -91,8 +91,6 @@ fn row_data(row: &Row, selected: bool, where_line: &str, preview: Option<slint::
         detail: row.sub.as_str().into(),
         where_line: where_line.into(),
         size_text: row.right.as_str().into(),
-        has_preview: preview.is_some(),
-        preview: preview.unwrap_or_default(),
         selected,
     }
 }
@@ -165,14 +163,21 @@ impl App {
         let picked_colors = self.prefs.folder_color_map();
         let default_color = self.prefs.default_folder_color();
         let thumb_px = self.thumb_px(&b);
+        let mut previews: Vec<PreviewData> = Vec::with_capacity(b.rows.len());
         let rows: Vec<RowData> = b
             .rows
             .iter()
             .map(|r| {
                 let selected = b.selected.contains(&r.key);
                 if r.kind != Kind::Dir {
-                    return row_data(r, selected, where_line, self.thumb_cached(&b, r, thumb_px));
+                    let image = self.thumb_cached(&b, r, thumb_px);
+                    previews.push(PreviewData {
+                        has: image.is_some(),
+                        image: image.unwrap_or_default(),
+                    });
+                    return row_data(r, selected, where_line);
                 }
+                previews.push(PreviewData::default());
                 let path = b.cwd.join(&r.key).to_string_lossy().into_owned();
                 let mut r = r.clone();
                 if let Some(key) = picked_icons.get(&path).and_then(Value::as_str) {
@@ -184,10 +189,11 @@ impl App {
                 } else if default_color != 0 {
                     r.tint = Tint::Rgb(default_color & 0x00FF_FFFF);
                 }
-                row_data(&r, selected, where_line, None)
+                row_data(&r, selected, where_line)
             })
             .collect();
         self.model.set_vec(rows);
+        self.previews.set_vec(previews);
         self.thumb_request();
     }
 

@@ -10,7 +10,7 @@ export { ArcTile, FcRow }
 
 import { Theme } from "theme.slint";
 import { DetailRow, Icon, KButton, KCheck, KDetailCard, KFab, KMeter, KProgressBar, KSheet, KSheetOption, KSheetRadio, KSheetText, KStatTile, KTextField, KTile, KToast, KTopBar, PressArea, KMark } from "components.slint";
-import { KFileList, RowData } from "browser.slint";
+import { KFileList, PreviewData, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
 import { BenchRow, CheckRow, KBenchList, KCheckList, KSettingsPage, KWheel, OpenWithRow, SettingsState } from "settings.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
@@ -127,7 +127,7 @@ component KPickCell inherits Rectangle {
 }
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
-export { BenchRow, CheckRow, DetailRow, MarkRow, OpenWithRow, RowData, SettingsState, Theme }
+export { BenchRow, CheckRow, DetailRow, MarkRow, OpenWithRow, PreviewData, RowData, SettingsState, Theme }
 
 
 /// A text field with the red line under it that marks an invalid entry. Typing
@@ -182,6 +182,7 @@ export component MainWindow inherits Window {
     in property <string> banner-text;
     /// The file list.
     in property <[RowData]> rows;
+    in property <[PreviewData]> previews;
     in property <bool> up-row: false;
     /// Settings > Rows on screen, and the colour of the ".." row's icon: the default folder colour
     /// when `has-up-color`, else the accent.
@@ -627,6 +628,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     pull-enabled: root.pull-enabled;
                     rows: root.rows;
+                    previews: root.previews;
                     up-row: root.up-row;
                     rows-fit: root.rows-on-screen;
                     up-tint: root.has-up-color ? root.up-color : Theme.accent;

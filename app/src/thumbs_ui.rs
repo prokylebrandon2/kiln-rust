@@ -2,15 +2,17 @@
 //! ones in view, and putting the results into the list. The rules, the cache and the workers are
 //! in [`crate::thumbs`]; the decoding is the phone's ([`crate::Host::thumb_decoder`]).
 //!
-//! Everything here runs on the UI thread. A result arrives through `invoke_from_event_loop` and
-//! is looked up by file, modification time, size and decode size; it is dropped when no row wants
-//! it any more. The list never holds a picture the cache does not: what the cache lets go of is
-//! taken out of the rows too, so the cache's limit is the limit of the memory the previews use.
+//! Everything here runs on the UI thread, except turning a decoded result into Slint's pixel
+//! buffer (a copy of up to a megabyte), which the worker does before handing the result over. A
+//! result arrives through `invoke_from_event_loop` and is looked up by file, modification time,
+//! size and decode size; it is dropped when no row wants it any more. The list never holds a
+//! picture the cache does not: what the cache lets go of is taken out of the rows too, so the
+//! cache's limit is the limit of the memory the previews use.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use kiln_ui::RowData;
+use kiln_ui::PreviewData;
 use slint::{Image, Model, Rgba8Pixel, SharedPixelBuffer};
 
 use crate::browser::{Browser, Kind, Row};
@@ -68,7 +70,17 @@ fn thumb_key(b: &Browser, row: &Row, px: u32) -> Option<(Key, ThumbKind)> {
     Some((key, kind))
 }
 
-fn image_of(p: Pixels) -> Option<Image> {
+/// A decoded preview as Slint's pixel buffer. Unlike an [`Image`] the buffer may cross threads, so
+/// a worker builds it and the UI thread only wraps it (`Image::from_rgba8` does not copy).
+struct Ready {
+    buffer: SharedPixelBuffer<Rgba8Pixel>,
+    /// What the pixels weigh, for the cache.
+    bytes: usize,
+}
+
+/// `None` when the pixels do not fit their size (a decoder that got it wrong): the file then gets
+/// no preview, as for any other failure.
+fn ready_of(p: Pixels) -> Option<Ready> {
     let want = (p.width as usize)
         .checked_mul(p.height as usize)?
         .checked_mul(4)?;
@@ -77,7 +89,10 @@ fn image_of(p: Pixels) -> Option<Image> {
     }
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(p.width, p.height);
     buffer.make_mut_bytes().copy_from_slice(&p.rgba);
-    Some(Image::from_rgba8(buffer))
+    Some(Ready {
+        buffer,
+        bytes: want,
+    })
 }
 
 impl App {
@@ -89,9 +104,12 @@ impl App {
             return;
         };
         let done: Done = Arc::new(|key: Key, pixels: Option<Pixels>| {
+            // This runs on the worker: the copy into Slint's buffer is made here, not on the UI
+            // thread.
+            let ready = pixels.and_then(ready_of);
             // The window may be gone by now; then there is nobody to tell.
             let _ = slint::invoke_from_event_loop(move || {
-                app_do(|app| app.thumb_done(key, pixels));
+                app_do(|app| app.thumb_done(key, ready));
             });
         });
         self.thumbs.borrow_mut().pool = Some(Pool::start(decoder, done));
@@ -180,9 +198,9 @@ impl App {
 
     /// A worker finished `key`. Failures are cached too, so a file with no preview is not tried
     /// again.
-    fn thumb_done(&self, key: Key, pixels: Option<Pixels>) {
-        let cost = ENTRY_COST + pixels.as_ref().map_or(0, |p| p.rgba.len());
-        let image = pixels.and_then(image_of);
+    fn thumb_done(&self, key: Key, ready: Option<Ready>) {
+        let cost = ENTRY_COST + ready.as_ref().map_or(0, |r| r.bytes);
+        let image = ready.map(|r| Image::from_rgba8(r.buffer));
         let evicted = {
             let mut t = self.thumbs.borrow_mut();
             t.in_flight.remove(&key);
@@ -200,8 +218,9 @@ impl App {
         }
     }
 
-    /// The row (and its list entry) a key belongs to, if it is still on screen at that size.
-    fn thumb_row_of(&self, b: &Browser, key: &Key) -> Option<(usize, RowData)> {
+    /// The index of the row (and of its list entries) a key belongs to, if it is still on screen
+    /// at that size.
+    fn thumb_row_of(&self, b: &Browser, key: &Key) -> Option<usize> {
         if self.thumb_px(b) != Some(key.px) || key.path.parent() != Some(b.cwd.as_path()) {
             return None;
         }
@@ -211,15 +230,19 @@ impl App {
             .iter()
             .position(|r| r.key == name && r.time == key.time && r.size == key.size)?;
         let row = self.model.row_data(i)?;
-        (row.name.as_str() == b.rows[i].title).then_some((i, row))
+        (row.name.as_str() == b.rows[i].title && i < self.previews.row_count()).then_some(i)
     }
 
     fn thumb_show(&self, key: &Key, image: &Image) {
         let b = self.browser.borrow();
-        if let Some((i, mut row)) = self.thumb_row_of(&b, key) {
-            row.preview = image.clone();
-            row.has_preview = true;
-            self.model.set_row_data(i, row);
+        if let Some(i) = self.thumb_row_of(&b, key) {
+            self.previews.set_row_data(
+                i,
+                PreviewData {
+                    image: image.clone(),
+                    has: true,
+                },
+            );
         }
     }
 
@@ -230,13 +253,10 @@ impl App {
         }
         let b = self.browser.borrow();
         for key in keys {
-            if let Some((i, mut row)) = self
-                .thumb_row_of(&b, key)
-                .filter(|(_, row)| row.has_preview)
+            if let Some(i) = self.thumb_row_of(&b, key)
+                && self.previews.row_data(i).is_some_and(|p| p.has)
             {
-                row.has_preview = false;
-                row.preview = Image::default();
-                self.model.set_row_data(i, row);
+                self.previews.set_row_data(i, PreviewData::default());
             }
         }
     }
@@ -245,5 +265,43 @@ impl App {
     pub(crate) fn thumb_trim(&self) {
         self.thumbs.borrow_mut().cache.clear();
         self.render_rows();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pixels(width: u32, height: u32, len: usize) -> Pixels {
+        Pixels {
+            width,
+            height,
+            rgba: vec![7; len],
+        }
+    }
+
+    #[test]
+    fn a_decoded_preview_keeps_its_size_and_pixels() {
+        let ready = ready_of(pixels(3, 2, 24)).expect("fits");
+        assert_eq!(ready.bytes, 24);
+        assert_eq!((ready.buffer.width(), ready.buffer.height()), (3, 2));
+        assert!(ready.buffer.as_bytes().iter().all(|b| *b == 7));
+    }
+
+    #[test]
+    fn pixels_that_do_not_fit_their_size_give_no_preview() {
+        assert!(ready_of(pixels(3, 2, 23)).is_none());
+        assert!(ready_of(pixels(3, 2, 25)).is_none());
+        assert!(ready_of(pixels(0, 2, 0)).is_none());
+        assert!(ready_of(pixels(2, 0, 0)).is_none());
+        // a size whose byte count overflows is refused, not wrapped
+        assert!(ready_of(pixels(u32::MAX, u32::MAX, 4)).is_none());
+    }
+
+    /// The buffer is what a worker hands to the UI thread, so it has to be `Send`.
+    #[test]
+    fn a_ready_preview_can_cross_threads() {
+        fn is_send<T: Send>() {}
+        is_send::<Ready>();
     }
 }

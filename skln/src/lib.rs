@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bundle;
+
 use std::fmt;
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -181,7 +183,7 @@ pub fn seal_with(key: &[u8; 32], params: &Params, plaintext: &[u8]) -> Result<Ve
     let cipher = make_cipher(key, &salt)?;
     // At least one record, so an empty payload still has a "last" record to authenticate.
     let pieces: Vec<&[u8]> = if plaintext.is_empty() {
-        vec![&plaintext[..]]
+        vec![plaintext]
     } else {
         plaintext.chunks(chunk).collect()
     };
@@ -197,7 +199,7 @@ pub fn seal_with(key: &[u8; 32], params: &Params, plaintext: &[u8]) -> Result<Ve
             .encrypt(
                 Nonce::from_slice(&n),
                 Payload {
-                    msg: *piece,
+                    msg: piece,
                     aad: &aad,
                 },
             )

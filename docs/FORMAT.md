@@ -188,9 +188,13 @@ attributes appear.
 
 ## The `.skln` container (encrypted) — version 1
 
-> **Status:** specification only. Nothing in Kiln writes or reads `.skln` yet. It is separate from
-> the `.kiln` container above: a `.skln` wraps data (a plain `.kiln` archive, or a bundle of named
-> members) in authenticated encryption. Recommended extension: `.skln`.
+> **Status:** the raw-key path is implemented by the `kiln-skln` crate (`skln/`): `seal` / `open`
+> under a 32-byte key, and the member bundle (`kiln_skln::bundle`). The password layer (the scrypt
+> block) is specified here but not built, and the Kiln app does not read or write `.skln` yet.
+> Two golden files in `skln/tests/golden/` were written by an independent Python implementation
+> of this section (`make_v1.py`). A `.skln` is separate from the `.kiln` container above: it wraps
+> data (a plain `.kiln` archive, or a bundle of named members) in authenticated encryption.
+> Recommended extension: `.skln`.
 
 **The format is public.** Nothing here depends on it being secret; the only secret is the key.
 Everything a reader needs before decrypting is in the header, and the whole header is
@@ -237,7 +241,7 @@ cut record, or appended bytes fails authentication, and a wrong key fails record
 
 Kind 0: the decrypted stream is a complete plain `.kiln` v2 archive. Kind 1: a bundle,
 `count u32 | { name_len u16 | name (UTF-8) | data_len u32 | data }*`. Names are labels, not paths:
-no separators, not `.` or `..`, no control characters, at most 255 bytes, no duplicates; at most
+not empty, no separators, not `.` or `..`, no control characters, at most 255 bytes, no duplicates; at most
 1024 members and 64 MiB in all. (Silk's interim `SKIM` bundle uses big-endian lengths; it stays a
 read-only source so existing vaults can be converted.)
 
@@ -251,6 +255,7 @@ open; a reader that wants rollback protection compares it with the highest value
 
 ### Required tests (written with the engine)
 
-Wrong key; every single-byte change and every truncation of a real file; swapped records;
+Done for the raw-key path (`skln/src/lib.rs`, `skln/src/bundle.rs`, `skln/tests/golden.rs`); the
+password round trip waits for the password layer. Wrong key; every single-byte change and every truncation of a real file; swapped records;
 appended bytes; header values outside the limits; a raw-key and a password round trip; and a
 checked-in golden file that must keep opening. Never edit the golden file: bump the version.

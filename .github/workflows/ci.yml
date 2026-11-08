@@ -41,3 +41,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - run: cargo test --locked
+
+  # The `.skln` crate is a workspace member, not the root package, so the jobs above never format,
+  # lint or test it. The Python step checks the golden files against the independent implementation.
+  skln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - run: cargo fmt -p kiln-skln --check
+      - run: cargo clippy --locked -p kiln-skln --all-targets -- -D warnings
+      - run: cargo test --locked -p kiln-skln
+
+      - run: |
+          pip install cryptography
+          python3 -I skln/tests/golden/make_v1.py --verify

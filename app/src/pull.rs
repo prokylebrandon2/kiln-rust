@@ -16,6 +16,12 @@ const POST_EVERY: Duration = Duration::from_millis(120);
 const MAX_DEPTH: u32 = 40;
 /// The strip goes on counting while it slides back, which takes at most 250 + 220 ms.
 const LINGER: Duration = Duration::from_millis(500);
+/// The count rests for [`BREATH`] after this many entries, so that walking a big folder does not take
+/// the CPU and the storage away from the UI thread while the list is being pulled (that was the
+/// pull being smooth in a small folder and stuttering in a big one).
+const BREATH_EVERY: u32 = 64;
+/// How long the count rests each time.
+const BREATH: Duration = Duration::from_millis(1);
 /// The size counted for a storage root is shown again for this long, so that a pull does not walk
 /// all of the phone's storage each time. Other folders are counted afresh on every pull.
 const KEEP_ROOT_SIZE: Duration = Duration::from_secs(600);
@@ -25,6 +31,8 @@ struct Counter {
     total: u64,
     stop: Arc<AtomicBool>,
     posted: Instant,
+    /// Entries looked at since the count last rested.
+    since_rest: u32,
 }
 
 impl Counter {
@@ -46,6 +54,11 @@ impl Counter {
                 Ok(meta) if meta.is_dir() => self.walk(&path, depth + 1),
                 Ok(meta) => self.total += meta.len(),
                 Err(_) => {}
+            }
+            self.since_rest += 1;
+            if self.since_rest >= BREATH_EVERY {
+                self.since_rest = 0;
+                std::thread::sleep(BREATH);
             }
             if self.posted.elapsed() >= POST_EVERY {
                 self.posted = Instant::now();
@@ -147,6 +160,7 @@ impl App {
                 total: 0,
                 stop: stop.clone(),
                 posted: Instant::now(),
+                since_rest: 0,
             };
             counter.walk(&at, 0);
             if !stop.load(Ordering::Relaxed) {

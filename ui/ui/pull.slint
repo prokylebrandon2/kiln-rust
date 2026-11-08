@@ -103,7 +103,10 @@ export component KRefreshCircle inherits Rectangle {
     property <length> target-y: root.pulling ? root.pull-y : root.refreshing ? 24px + root.offset : -40px;
 
     // the ring: a start angle and a sweep, in degrees
-    property <float> phase: 0;
+    // One turn of the ring, 0..1, run by Slint's animation clock: it follows the time and the frames,
+    // so a late frame does not slow the ring down (a Timer that added a fixed step per tick did, and
+    // it beat against the display's refresh). It only runs while refreshing.
+    property <float> phase: root.refreshing ? 1 : 0;
     property <float> turns: (-0.25 + 0.4 * root.adjusted + root.tension * 2) * 0.5;
     property <angle> a0: root.refreshing ? root.phase * 360deg - 90deg : root.turns * 360deg;
     property <float> trim: root.refreshing ? 0.1 + 0.7 * (0.5 - 0.5 * Math.cos(root.phase * 360deg)) : Math.min(0.8, root.adjusted * 0.8);
@@ -120,12 +123,10 @@ export component KRefreshCircle inherits Rectangle {
         duration: 300ms;
     }
 
-    Timer {
-        interval: 16ms;
-        running: root.refreshing;
-        triggered => {
-            root.phase = Math.mod(root.phase + 16 / 1332, 1);
-        }
+    animate phase {
+        duration: root.refreshing ? 1332ms : 0ms;
+        iteration-count: root.refreshing ? -1 : 1;
+        easing: linear;
     }
 
     ring := Rectangle {

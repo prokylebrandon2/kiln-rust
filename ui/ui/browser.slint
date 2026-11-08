@@ -202,12 +202,14 @@ export component KFileList inherits Rectangle {
 
     // Is a finger on the list? A TouchArea around the Flickable sees the pointer while it is
     // inside, even while the Flickable has the drag.
+    // It ticks every frame, so a lifted finger is noticed after about 3 frames (48 ms) and not after
+    // 150-200 ms: `release` is what starts the refresh. Holding still for 2 s still lets go.
     Timer {
-        interval: 50ms;
+        interval: 16ms;
         running: root.held;
         triggered => {
             root.still += 1;
-            if ((!touch.has-hover && root.still >= 3) || root.still >= 40) {
+            if ((!touch.has-hover && root.still >= 3) || root.still >= 125) {
                 root.release();
             }
         }
@@ -251,6 +253,15 @@ export component KFileList inherits Rectangle {
     }
 
     touch := TouchArea {
+        // A finger that comes down on a list that is already at the top may pull at once: no fling
+        // can be going on, because a fling has no finger. (The 180 ms rest above is then only for
+        // a pull that begins some other way.)
+        changed has-hover => {
+            if (self.has-hover && !root.held && root.over <= 0px && root.scroll-pos <= 0.5px) {
+                root.top-rest = true;
+            }
+        }
+
         flick := Flickable {
             content-width: root.width;
             content-height: Math.max(root.slack + root.total * root.row-h + root.bottom-pad, root.height + root.slack);

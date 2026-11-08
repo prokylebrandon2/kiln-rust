@@ -492,6 +492,14 @@ export component MainWindow inherits Window {
     public function scroll-list-to(y: length) {
         list.scroll-to(y);
     }
+    /// Another folder is being opened: the rows fade out; and fade in again when it is read.
+    public function list-fade-out() {
+        list.fade-out();
+    }
+    public function list-fade-in() {
+        list.fade-in();
+    }
+    out property <bool> list-faded: list.faded;
     /// How far the file list is scrolled, in dp.
     out property <length> list-pos: list.scroll-pos;
     /// Give the Back key a place to arrive (the search box has the focus while it is open).
@@ -599,7 +607,7 @@ export component MainWindow inherits Window {
                 clip: true;
 
                 // pullPanel: behind the list, as tall as the list has been pulled down
-                KPullPanel {
+                pull-panel := KPullPanel {
                     x: 0px;
                     y: 0px;
                     width: parent.width;
@@ -654,6 +662,8 @@ export component MainWindow inherits Window {
                     drag: list.over;
                     pulling: list.held;
                     refreshing: root.refreshing;
+                    // a bit lower than the library puts it: clear of the usage bar of the strip
+                    offset: Math.max(24px, pull-panel.bar-bottom - 24px);
                 }
 
                 if root.empty-text != "": Text {

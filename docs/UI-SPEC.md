@@ -198,7 +198,12 @@ Scrim 50 % black; a tap on the scrim cancels when the sheet is cancelable.
 Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust: `app/src/browser.rs`
 (state and rules), `app/src/browse_ui.rs` (what is shown, what taps do).
 
-- **Row.** Padding 16 / 9, minimum height 58 dp, 12 dp between tile, text and size. The tile is
+- **Row.** Padding 16 / 9, minimum height 58 dp, 12 dp between tile, text and size. Each row is
+  followed by a 6 dp gap and is a card 6 dp in from both sides (radius 12; the padding is 6 dp less
+  so nothing inside moves). The card dips to 96 % while pressed and once on every tap. The row is
+  cached by the renderer (`cache-rendering-hint`), because it does not change while it scrolls.
+  Opening another folder fades the rows out (70 ms), swaps them at the top while they are out of
+  sight, and fades them in (180 ms) sliding up 10 dp. The tile is
   40 dp, radius 10, k_chip, with a 22 dp icon (9 dp in). Name 16 sp (ellipsised in the middle),
   date line 12 sp k_text2, in a search a third line 12 sp k_accent (ellipsised at the start),
   size 13 sp k_text2 on the right. A selected row is tinted k_sel and shows a check in the tile.
@@ -252,7 +257,9 @@ Slint: `ui/ui/browser.slint` (`KFileList`), `ui/ui/pull.slint` (`KPullPanel`, `K
   Under them, 10 dp down, a 6 dp bar: k_line track, k_accent fill, `used / total` and never below
   8 / 1000 once the space is known. The count walks the folder on a worker thread (at most 40 levels
   deep), stops when the strip is gone (500 ms after the finger lets go) or a new pull begins.
-- **Pulling.** Only at the top of the list, with nothing selected and access granted. The list
+- **Pulling.** Only at the top of the list, with nothing selected and access granted, and only
+  when the list was already resting there (for 180 ms) before the finger pulled: a fast scroll that
+  runs into the top is stopped there and neither opens the strip nor refreshes. The list
   (and the empty line) move down by 0.6 of the finger's travel, at most 84 dp; the strip is as tall
   as that and fades in over the first 42 dp. On release they slide back in 220 ms (scaled by the
   animation speed), after a 250 ms wait when the strip was at least 90 % out; the easing is
@@ -261,9 +268,9 @@ Slint: `ui/ui/browser.slint` (`KFileList`), `ui/ui/pull.slint` (`KPullPanel`, `K
   k_surface, 4 dp elevation, a 7.5 dp ring 2.5 dp thick in k_accent. The library's drag rate is 0.5
   and its trigger distance 64 dp, so the pull must be longer than 128 dp. While the finger moves
   the circle follows the library's curve (`moveSpinner`: top = -40 + 64 * drag% + the slingshot
-  term), the ring grows to 0.8 of a turn with an arrow at its end, drawn at 30 % until the pull is
+  term, plus the circle's `offset`, which keeps it below the usage bar of the strip), the ring grows to 0.8 of a turn with an arrow at its end, drawn at 30 % until the pull is
   long enough and then at full strength (300 ms). On release the circle either rises out of view
-  (200 ms) or settles 24 dp from the top and turns (1332 ms a cycle) until the folder has been read
+  (200 ms) or settles 24 dp (plus the offset) from the top and turns (1332 ms a cycle) until the folder has been read
   again (`applyScan`: `setRefreshing(false)`). The folder is read with the selection kept. The
   values are those of androidx `SwipeRefreshLayout` 1.1 (not in this repository).
 - **Bookmarks (`showBookmarks`, `markRow`, `actionRow`, `goTo`).** Tapping the title block (when

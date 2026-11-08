@@ -630,6 +630,11 @@ export component KTopBar inherits Rectangle {
 /// One row: a 40 dp tile (radius 10, k_chip) with a 22 dp icon, the name (16 sp, middle), a date
 /// line (12 sp), an optional folder line (12 sp, accent, start-ellipsised) and the size (13 sp).
 /// Padding 16 / 9. A selected row is tinted k_sel and shows a check in the tile.
+///
+/// The row is a slot: `gap` of its height is the space between this row and the next, and the row
+/// itself is a card in the rest of it, 6 dp in from both sides (its padding is 6 dp less, so the
+/// tile and the texts stay where they were). The card dips a little while it is pressed, and once
+/// on every tap, however short.
 export component KListRow inherits Rectangle {
     in property <string> icon;
     in property <color> icon-tint: Theme.text2;
@@ -643,96 +648,146 @@ export component KListRow inherits Rectangle {
     /// Settings > Rows on screen: the height this row is made to fit (RowView.fit). 0 keeps the
     /// natural height and the fixed sizes.
     in property <length> fit-h: 0px;
+    /// The space under the card, the part of the row's height that is not the card.
+    in property <length> gap: 6px;
     callback clicked();
     callback long-pressed();
 
     // RowView.fit(): every part scales with the row height (the icon fills the row up to 64 dp,
     // its glyph is 60 % of the tile, the text grows and shrinks with it).
     property <bool> fit: root.fit-h > 0px;
-    property <float> hd: root.fit-h / 1px;
+    // a tight fit keeps most of its height for the card
+    property <length> gp: root.fit ? Math.min(root.gap, root.fit-h * 0.1) : root.gap;
+    property <float> hd: Math.max(0px, root.fit-h - root.gp) / 1px;
     property <length> ic: root.fit ? Math.min(Math.round(root.hd * 0.88) * 1px, 64px) : 40px;
     property <length> glyph: root.fit ? root.ic * 0.6 : 22px;
     property <length> name-px: root.fit ? Math.max(12.0, Math.min(17.5, root.hd * 0.37)) * 1px : 16px;
     property <length> sub-px: root.fit ? Math.max(10.0, Math.min(13.0, root.hd * 0.27)) * 1px : 12px;
     property <length> size-px: root.fit ? root.sub-px + 1px : 13px;
-    min-height: root.fit ? 0px : 58px;
-    preferred-height: root.fit ? root.fit-h : (col.preferred-height + 18px > 58px ? col.preferred-height + 18px : 58px);
-    background: root.selected ? Theme.sel-solid : Theme.bg;
+    // how far the card is in from the sides of the list
+    property <length> inset: 6px;
+    // a tap dips the card even when the finger is up again before the dip has shown
+    property <bool> pulsing: false;
+    min-height: root.fit ? 0px : 58px + root.gp;
+    preferred-height: root.fit ? root.fit-h : (col.preferred-height + 18px > 58px ? col.preferred-height + 18px : 58px) + root.gp;
+    // The texts and the icon of a row do not change while the list scrolls past, so the renderer
+    // keeps the row as a picture and only moves it.
+    cache-rendering-hint: true;
 
-    HorizontalLayout {
-        padding-left: root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px;
-        padding-right: root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px;
-        padding-top: root.fit ? 2px : 9px;
-        padding-bottom: root.fit ? 2px : 9px;
-        spacing: root.fit ? (root.hd < 34.0 ? 10px : 13px) : 12px;
-        VerticalLayout {
-            width: root.ic;
-            alignment: center;
-            Rectangle {
-                height: root.ic;
-                border-radius: root.fit ? root.ic * 0.25 : 10px;
-                background: Theme.chip;
-                clip: true;
-                if root.has-preview && !root.selected: Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.preview;
-                    image-fit: cover;
-                }
-                if !root.has-preview || root.selected: Icon {
-                    x: (root.ic - root.glyph) / 2;
-                    y: (root.ic - root.glyph) / 2;
-                    width: root.glyph;
-                    height: root.glyph;
-                    name: root.selected ? "check" : root.icon;
-                    tint: root.selected ? Theme.accent : root.icon-tint;
-                }
-            }
-        }
-        col := VerticalLayout {
-            padding-left: root.fit ? 0px : 2px;
-            alignment: center;
-            horizontal-stretch: 1;
-            min-width: 0px;
-            KEllipsisText {
-                text: root.name;
-                font-size: Theme.sp(root.name-px);
-                mode: 1;
-                cap: root.selected ? Theme.sel-solid : Theme.bg;
-            }
-            if root.detail != "": KEllipsisText {
-                text: root.detail;
-                font-size: Theme.sp(root.sub-px);
-                tint: Theme.text2;
-                mode: 0;
-            }
-            if root.where-line != "": KEllipsisText {
-                text: root.where-line;
-                font-size: Theme.sp(root.sub-px);
-                tint: Theme.accent;
-                mode: 2;
-                cap: root.selected ? Theme.sel-solid : Theme.bg;
-            }
-        }
-        Text {
-            text: root.size-text;
-            color: Theme.text2;
-            font-size: Theme.sp(root.size-px);
-            vertical-alignment: center;
-            wrap: no-wrap;
+    Timer {
+        interval: 130ms;
+        running: root.pulsing;
+        triggered => {
+            root.pulsing = false;
         }
     }
-    PressArea {
-        width: 100%;
-        height: 100%;
-        ripple-color: Theme.ripple-row;
-        long-press: true;
-        clicked => {
-            root.clicked();
+
+    card := Rectangle {
+        x: root.inset;
+        y: root.gp / 2;
+        width: parent.width - root.inset * 2;
+        height: parent.height - root.gp;
+        border-radius: 12px;
+        background: root.selected ? Theme.sel-solid : Theme.bg;
+        // Slint draws the element at scale 0 unless the resting scale is set explicitly (KTile)
+        transform-scale: 1;
+
+        HorizontalLayout {
+            padding-left: (root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px) - root.inset;
+            padding-right: (root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px) - root.inset;
+            padding-top: root.fit ? 2px : 9px;
+            padding-bottom: root.fit ? 2px : 9px;
+            spacing: root.fit ? (root.hd < 34.0 ? 10px : 13px) : 12px;
+            VerticalLayout {
+                width: root.ic;
+                alignment: center;
+                Rectangle {
+                    height: root.ic;
+                    border-radius: root.fit ? root.ic * 0.25 : 10px;
+                    background: Theme.chip;
+                    clip: true;
+                    if root.has-preview && !root.selected: Image {
+                        width: 100%;
+                        height: 100%;
+                        source: root.preview;
+                        image-fit: cover;
+                    }
+                    if !root.has-preview || root.selected: Icon {
+                        x: (root.ic - root.glyph) / 2;
+                        y: (root.ic - root.glyph) / 2;
+                        width: root.glyph;
+                        height: root.glyph;
+                        name: root.selected ? "check" : root.icon;
+                        tint: root.selected ? Theme.accent : root.icon-tint;
+                    }
+                }
+            }
+            col := VerticalLayout {
+                padding-left: root.fit ? 0px : 2px;
+                alignment: center;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                KEllipsisText {
+                    text: root.name;
+                    font-size: Theme.sp(root.name-px);
+                    mode: 1;
+                    cap: root.selected ? Theme.sel-solid : Theme.bg;
+                }
+                if root.detail != "": KEllipsisText {
+                    text: root.detail;
+                    font-size: Theme.sp(root.sub-px);
+                    tint: Theme.text2;
+                    mode: 0;
+                }
+                if root.where-line != "": KEllipsisText {
+                    text: root.where-line;
+                    font-size: Theme.sp(root.sub-px);
+                    tint: Theme.accent;
+                    mode: 2;
+                    cap: root.selected ? Theme.sel-solid : Theme.bg;
+                }
+            }
+            Text {
+                text: root.size-text;
+                color: Theme.text2;
+                font-size: Theme.sp(root.size-px);
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
         }
-        long-pressed => {
-            root.long-pressed();
+        area := PressArea {
+            width: 100%;
+            height: 100%;
+            radius: 12px;
+            ripple-color: Theme.ripple-row;
+            long-press: true;
+            clicked => {
+                root.pulsing = true;
+                root.clicked();
+            }
+            long-pressed => {
+                root.long-pressed();
+            }
         }
+
+        states [
+            down when area.pressed || root.pulsing: {
+                transform-scale: 0.96;
+                in {
+                    animate transform-scale {
+                        delay: Theme.dur(25ms);
+                        duration: Theme.dur(80ms);
+                        easing: ease-in-out-sine;
+                    }
+                }
+                out {
+                    animate transform-scale {
+                        duration: Theme.dur(200ms);
+                        easing: ease-out;
+                    }
+                }
+            }
+        ]
     }
 }
 

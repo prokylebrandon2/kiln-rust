@@ -38,6 +38,8 @@ export component KFileList inherits Rectangle {
     in property <int> rows-fit: 0;
     /// The colour of the ".." row's icon (Settings > Default folder color).
     in property <color> up-tint: Theme.accent;
+    /// The space between two rows (part of each row's slot, so it is also part of `row-h`).
+    in property <length> row-gap: 6px;
     /// A tap; the index is into `rows`, or -1 for the ".." row.
     callback row-clicked(int);
     callback row-long-pressed(int);
@@ -55,7 +57,9 @@ export component KFileList inherits Rectangle {
     out property <length> over: Math.max(0px, flick.content-y + root.slack);
     /// How far the list is shown moved down: 0.6 of the pull, at most 84 dp (`PULL_H`), and back to
     /// 0 when the finger lets go (220 ms, after 250 ms when the strip was almost fully out).
-    out property <length> shift: root.releasing || !root.pull-enabled ? 0px : Math.min(root.over * 0.6, 84px);
+    /// Only a pull that began with the list resting at the top (`held`) moves the list: a fling
+    /// that runs into the top is stopped there instead (see `changed content-y`).
+    out property <length> shift: root.releasing || !root.pull-enabled || !root.held ? 0px : Math.min(root.over * 0.6, 84px);
     /// A pull is going on: the finger is down, or has only just left.
     in-out property <bool> held: false;
 
@@ -65,11 +69,24 @@ export component KFileList inherits Rectangle {
     property <bool> releasing: false;
     property <bool> full: false;
     property <int> still: 0;
+    // A pull may only begin when the list was already resting at the top: it has not been
+    // anywhere else for 180 ms. A fast fling that arrives at the top is still "moving" and so
+    // never opens the info strip or refreshes; it just stops at the top like any other scroll.
+    property <bool> top-rest: true;
+    // The last scroll position handed to Rust (it only cares about steps of 6 dp).
+    property <length> last-sent: 0px;
+    // Opening another folder: the rows fade out while it is read and fade in, already at the top,
+    // when it is here, so that the swap happens out of sight. `up-live` is the ".." row as the
+    // rows on screen have it: it only follows `up-row` while the list is not faded out, so the
+    // old rows do not jump by a row when the top bar already shows the new folder.
+    in-out property <bool> faded: false;
+    property <bool> up-live: false;
+    property <length> enter-dy: root.faded ? 10px : 0px;
     // The biggest height the list has had, so opening the search row or a banner does not resize
     // the rows (`listRoom`); a new width (a rotation) starts again.
     property <length> room: 0px;
     property <length> row-h: root.rows-fit > 0 ? Math.max(24px, root.room / root.rows-fit) : probe.preferred-height;
-    property <int> total: root.rows.length + (root.up-row ? 1 : 0);
+    property <int> total: root.rows.length + (root.up-live ? 1 : 0);
     property <int> first: Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 1);
     property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
     // How many row views are built: enough for the rows in view and a few over, and always the same
@@ -89,9 +106,21 @@ export component KFileList inherits Rectangle {
         easing: ease-in-out-sine;
     }
 
+    animate enter-dy {
+        duration: root.faded ? Theme.dur(70ms) : Theme.dur(200ms);
+        easing: ease-out;
+    }
+
     init => {
         flick.content-y = -root.slack;
         root.room = root.height;
+        root.up-live = root.up-row;
+    }
+
+    changed up-row => {
+        if (!root.faded) {
+            root.up-live = root.up-row;
+        }
     }
 
     changed height => {
@@ -112,6 +141,21 @@ export component KFileList inherits Rectangle {
         root.visible-changed(root.first, root.shown);
     }
 
+    /// Another folder is being opened: let the rows on screen fade out.
+    public function fade-out() {
+        root.faded = true;
+    }
+
+    /// The rows of the folder are in place: show them (sliding up a little as they fade in).
+    public function fade-in() {
+        root.reveal();
+    }
+
+    function reveal() {
+        root.up-live = root.up-row;
+        root.faded = false;
+    }
+
     /// Scroll to the very top (a new folder always starts there).
     public function scroll-top() {
         flick.content-y = -root.slack;
@@ -125,6 +169,7 @@ export component KFileList inherits Rectangle {
     /// The finger let go (or has not moved for a while): hand the list back and say so.
     function release() {
         root.held = false;
+        root.top-rest = false;
         root.full = root.over * 0.6 >= 84px * 0.9;
         root.releasing = true;
         root.pull-ended(root.over * 0.5 > 64px);
@@ -144,6 +189,24 @@ export component KFileList inherits Rectangle {
         }
     }
 
+    // The list counts as resting at the top once it has stayed there for 180 ms.
+    Timer {
+        interval: 180ms;
+        running: !root.top-rest && !root.held && root.over <= 0px && root.scroll-pos <= 0.5px;
+        triggered => {
+            root.top-rest = true;
+        }
+    }
+
+    // A folder that never answers must not leave the list invisible.
+    Timer {
+        interval: 8000ms;
+        running: root.faded;
+        triggered => {
+            root.reveal();
+        }
+    }
+
     // covers what is below the rows, from the top of the list as it is shown
     Rectangle {
         y: root.shift;
@@ -160,23 +223,42 @@ export component KFileList inherits Rectangle {
         detail: "Wg";
         where-line: root.has-where ? "Wg" : "";
         size-text: "1 B";
+        gap: root.row-gap;
     }
 
     touch := TouchArea {
         flick := Flickable {
             content-width: root.width;
             content-height: Math.max(root.slack + root.total * root.row-h + root.bottom-pad, root.height + root.slack);
+            opacity: root.faded ? 0 : 1;
+            animate opacity {
+                duration: root.faded ? Theme.dur(70ms) : Theme.dur(180ms);
+                easing: ease-out;
+            }
             changed content-y => {
-                root.scrolled(root.scroll-pos);
+                if (root.scroll-pos > 0.5px) {
+                    root.top-rest = false;
+                }
+                // Rust only wants to hear about steps of 6 dp (it hides "+ New" while scrolling)
+                if (Math.abs((root.scroll-pos - root.last-sent) / 1px) >= 6 || (root.scroll-pos <= 0px && root.last-sent > 0px)) {
+                    root.last-sent = root.scroll-pos;
+                    root.scrolled(root.scroll-pos);
+                }
                 if (root.over > 0px) {
-                    root.still = 0;
-                    if (!root.held) {
+                    if (root.held) {
+                        root.still = 0;
+                    } else if (root.top-rest) {
+                        // a pull: it began with the list resting at the top
+                        root.still = 0;
                         root.held = true;
                         root.releasing = false;
                         root.full = false;
                         if (root.pull-enabled) {
                             root.pull-started();
                         }
+                    } else {
+                        // a fling (or a drag that began further down) ran past the top: stop it there
+                        flick.content-y = -root.slack;
                     }
                 }
             }
@@ -185,13 +267,14 @@ export component KFileList inherits Rectangle {
                 // the row this view builds: the one at or after `first` whose number is `slot` mod `slots`
                 property <int> at: root.first + Math.floor(Math.mod(slot + root.slots - Math.mod(root.first, root.slots), root.slots));
                 visible: self.at < root.total;
-                property <int> idx: self.at - (root.up-row ? 1 : 0);
-                property <bool> is-up: root.up-row && self.at == 0;
+                property <int> idx: self.at - (root.up-live ? 1 : 0);
+                property <bool> is-up: root.up-live && self.at == 0;
                 property <RowData> d: root.rows[self.idx];
                 x: 0px;
-                y: root.slack + root.shift - root.over + self.at * root.row-h;
+                y: root.slack + root.shift - root.over + self.at * root.row-h + root.enter-dy;
                 width: root.width;
                 height: root.row-h;
+                gap: root.row-gap;
                 icon: self.is-up ? "up_dir" : self.d.icon;
                 fit-h: root.rows-fit > 0 ? root.row-h : 0px;
                 icon-tint: self.is-up ? root.up-tint : self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;

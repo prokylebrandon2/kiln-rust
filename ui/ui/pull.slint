@@ -19,6 +19,8 @@ export component KPullPanel inherits Rectangle {
     // Where the usage bar goes: under the two text lines, 10 dp below them. The lines are packed
     // at the top of their columns (`alignment: start`), so this is where they really end.
     property <length> lines-h: Math.max(left-col.preferred-height, right-col.preferred-height);
+    /// The bottom edge of the usage bar, for the refresh circle to stay below it.
+    out property <length> bar-bottom: 10px + root.lines-h + 10px + 6px;
 
     background: Theme.surface;
     clip: true;
@@ -83,11 +85,15 @@ export component KPullPanel inherits Rectangle {
 /// 2.5 dp thick. While the finger pulls (`drag` is how far it has moved) the circle follows the
 /// library's slingshot curve and the ring grows with an arrow at its end; past 128 dp of drag
 /// (64 dp after the library's 0.5 drag rate) the ring is at full strength and letting go refreshes.
-/// While refreshing the circle rests 24 dp from the top and the ring turns (1332 ms a cycle).
+/// While refreshing the circle rests 24 dp (plus `offset`) from the top and the ring turns (1332 ms
+/// a cycle).
 export component KRefreshCircle inherits Rectangle {
     in property <length> drag: 0px;
     in property <bool> pulling: false;
     in property <bool> refreshing: false;
+    /// How far lower than SwipeRefreshLayout puts it the circle is held, so that it does not cover
+    /// the usage bar of the info strip (the strip gives the bottom edge of the bar).
+    in property <length> offset: 32px;
 
     // moveSpinner(): overscrollTop is half the drag
     property <float> drag-pct: Math.min(1, root.drag * 0.5 / 64px);
@@ -95,8 +101,8 @@ export component KRefreshCircle inherits Rectangle {
     property <float> extra: root.drag * 0.5 / 1px - 64;
     property <float> slingshot: Math.max(0, Math.min(root.extra, 128) / 64);
     property <float> tension: (Math.max(root.slingshot / 4, 0) - Math.pow(root.slingshot / 4, 2)) * 2;
-    property <length> pull-y: -40px + 64px * root.drag-pct + 64px * root.tension * 2;
-    property <length> target-y: root.pulling ? root.pull-y : root.refreshing ? 24px : -40px;
+    property <length> pull-y: -40px + (64px + root.offset) * root.drag-pct + 64px * root.tension * 2;
+    property <length> target-y: root.pulling ? root.pull-y : root.refreshing ? 24px + root.offset : -40px;
 
     // the ring: a start angle and a sweep, in degrees
     property <float> phase: 0;

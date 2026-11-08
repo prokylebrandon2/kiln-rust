@@ -241,7 +241,14 @@ impl App {
         } else if !status.engine_up {
             "Starting...".to_string()
         } else {
-            b.empty_text(self.loading_hint.get())
+            let hint = self.loading_hint.get();
+            let text = b.empty_text(hint);
+            // A folder that is slow to open: the rows of the old one have faded out by now.
+            if text.is_empty() && hint && b.pending {
+                "Loading...".to_string()
+            } else {
+                text
+            }
         };
         ui.set_empty_text(empty.into());
         let up = b.up_shown();
@@ -271,13 +278,7 @@ impl App {
             };
             ui.set_paste_here_text(go.into());
         }
-        let fab_wanted = !selecting
-            && !holding
-            && status.engine_up
-            && b.storage_ok
-            && !b.searching
-            && b.arc.is_none();
-        ui.set_fab_shown(fab_wanted && !self.fab_hidden.get());
+        ui.set_fab_shown(self.fab_allowed() && !self.fab_hidden.get());
         self.render_arc_bar(&b);
 
         // A short pulse on the mark when you arrive at home.
@@ -289,6 +290,19 @@ impl App {
             });
         }
         self.was_home.set(home);
+    }
+
+    /// Whether "+ New" may be on screen at all (it is hidden apart from that while the list
+    /// scrolls down).
+    fn fab_allowed(&self) -> bool {
+        let b = self.browser.borrow();
+        let holding = !b.clip.is_empty() && b.arc.is_none();
+        !b.selecting()
+            && !holding
+            && self.status.borrow().engine_up
+            && b.storage_ok
+            && !b.searching
+            && b.arc.is_none()
     }
 
     /// `toast`.
@@ -312,6 +326,7 @@ impl App {
     pub(crate) fn load_dir(&self, dir: PathBuf, keep_selection: bool) {
         // Leaving an archive by any route closes its editing session (Java loadDir).
         let in_archive = self.browser.borrow().arc.is_some();
+        let moving = in_archive || self.browser.borrow().cwd != dir;
         if in_archive {
             self.close_session();
             self.ui.set_arc_bar_shown(false);
@@ -324,7 +339,14 @@ impl App {
             (generation, path, b.show_all, b.show_hidden)
         };
         self.loading_hint.set(false);
-        self.render_rows();
+        if moving {
+            // Another folder: the rows on screen fade out while it is read, and are replaced out
+            // of sight in `scan_done`. (Drawing the old rows again here, and the new folder's
+            // ".." row over them, is what made opening a folder jump twice.)
+            self.ui.invoke_list_fade_out();
+        } else {
+            self.render_rows();
+        }
         self.render_chrome();
         Timer::single_shot(Duration::from_millis(LOADING_MS), move || {
             app_do(|app| app.show_loading(generation));
@@ -340,7 +362,9 @@ impl App {
     fn show_loading(&self, generation: u64) {
         let slow = {
             let b = self.browser.borrow();
-            b.pending && b.generation == generation && b.rows.is_empty()
+            b.pending
+                && b.generation == generation
+                && (b.rows.is_empty() || self.ui.get_list_faded())
         };
         if slow {
             self.loading_hint.set(true);
@@ -359,14 +383,16 @@ impl App {
             return;
         }
         self.loading_hint.set(false);
-        self.render_rows();
-        self.render_chrome();
-        // A new folder always starts at the top.
+        // A new folder always starts at the top. That is done first, while the list is still
+        // faded out, so that no frame shows the new rows where the old folder was scrolled to.
         let cwd = self.browser.borrow().cwd.clone();
         if *self.last_dir.borrow() != cwd {
             *self.last_dir.borrow_mut() = cwd;
             self.ui.invoke_scroll_list_top();
         }
+        self.render_rows();
+        self.render_chrome();
+        self.ui.invoke_list_fade_in();
     }
 
     // ---- what taps do -------------------------------------------------------------------------
@@ -676,7 +702,9 @@ impl App {
         self.scroll_last.set(y);
         if self.fab_hidden.get() != hide {
             self.fab_hidden.set(hide);
-            self.render_chrome();
+            // Only the button changes; building all of the chrome again (it asks the phone for its
+            // volumes, for one) in the middle of a scroll was a stutter at every change of direction.
+            self.ui.set_fab_shown(self.fab_allowed() && !hide);
         }
     }
 }

@@ -1,162 +1,193 @@
-# Kiln (Rust rewrite) - Phase 3: `.kiln` format v2 and performance (partial scope)
+<div align="center">
 
-A multicore archiver built on proven compression libraries (Zstandard, LZ4, LZMA2). This is
-**Phase 3 of 5** (built to roughly half of the Phase 3 spec, as requested): the documented,
-versioned `.kiln` container **v2** ([`docs/FORMAT.md`](docs/FORMAT.md)), compression profiles
-(`fastest`, `balanced`, `maximum`, `store`, `adaptive`), content classification that stores
-already-compressed data, parallel small-file extraction, resource limits, and measured
-benchmarks against Phase 2, 7-Zip and Info-ZIP in [`docs/PHASE3.md`](docs/PHASE3.md). In those
-benchmarks Kiln creates archives 9-250x faster than 7-Zip but **7-Zip's archives are smaller**
-(8-46 % at its default level). Phase 2 notes: [`docs/PHASE2.md`](docs/PHASE2.md).
+#  Kiln
 
-**Kiln archives are not ZIP, 7z or tar.** The container is Kiln's own documented format
-([`docs/FORMAT.md`](docs/FORMAT.md)); other tools cannot open it and Kiln cannot open theirs.
+**A fast, multicore archiver built on Zstandard, LZ4 and LZMA2.**
 
-## What this is rewriting
+Create archives up to 250× faster than 7-Zip, list them instantly, extract single folders without unpacking everything, and verify every file with a checksum.
 
-The supplied `kiln.7z` is an **Android app** (Java UI + Python 3.12 via Chaquopy) around a
-7,000-line Python/C engine that implements its own compressor and `.kln` format. It is not a Rust
-or C program. The audit is in [`docs/AUDIT.md`](docs/AUDIT.md); the original was left untouched.
+![Status: experimental](https://img.shields.io/badge/status-experimental-orange)
+![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-blue)
+![Tested on Linux](https://img.shields.io/badge/tested-Linux%20only-lightgrey)
 
-The main finding: the original has an excellent compression ratio (best on text, 2nd on binaries
-among the tools tested) but compresses at ~1.6 MiB/s, uses ~190 MiB of memory, and decodes at
-~26 MiB/s. See [`docs/BASELINE.md`](docs/BASELINE.md).
+[Install](#install) · [Quick start](#quick-start) · [Speed vs. size](#choosing-speed-vs-size) · [Safety](#safety-and-resource-controls) · [Limitations](#known-limitations) · [Docs](#documentation)
 
-## Build
+</div>
 
-Requirements: **Rust 1.85 or newer** (stable; developed on 1.91; the 1.85 minimum is declared in Cargo.toml but was not re-checked in Phase 2) and a **C compiler** (`gcc`,
-`clang` or MSVC) - the Zstandard and liblzma libraries are compiled from bundled C sources. No other
-system libraries are needed. The first build downloads crates from crates.io and takes a few minutes.
+---
+
+
+
+> [!NOTE]
+> **Kiln archives are not ZIP, 7z or tar.** The `.kiln` container is Kiln's own [documented format](docs/FORMAT.md). Other tools can't open it, and Kiln can't open theirs.
+
+## Is Kiln right for you?
+
+**Good fit**
+
+- You want archives created far faster than 7-Zip can. In our benchmarks Kiln was **9–250× faster** at creating archives.
+- You want to browse or partially extract an archive without decoding all of it.
+- You want built-in integrity checking and protection against hostile archives (path traversal, decompression bombs).
+
+**Not a good fit (yet)**
+
+- You need the smallest possible files. **7-Zip's archives were 8–46% smaller** at its default level.
+- You need to share archives with people who only have ZIP or 7z tools.
+- You need encryption, updating an existing archive, or archive repair. None of these exist yet.
+
+## Install
+
+**Requirements:** Rust 1.85 or newer, and a C compiler (`gcc`, `clang` or MSVC). The Zstandard and liblzma libraries are compiled from bundled sources, so no other system libraries are needed.
 
 ```sh
-cargo build --release          # binary: target/release/kiln
-cargo test --locked            # unit + integration tests (+ tests/hardening.rs on Unix)
-cargo test --release --locked --test large -- --ignored   # archives over 4 GiB (~5 GiB disk)
-cargo fmt --check && cargo clippy --all-targets -- -D warnings
+cargo build --release     # the program is target/release/kiln
 ```
 
-With `rustup`, `rust-toolchain.toml` selects stable with rustfmt and clippy automatically.
-`Cargo.lock` is committed; use `--locked` for reproducible builds.
+The first build downloads dependencies from crates.io and takes a few minutes. `Cargo.lock` is committed; add `--locked` for reproducible builds.
 
-## Use
+## Quick start
 
 ```sh
-kiln create  backup.kiln photos/ notes.txt        # zstd level 3, 4 MiB chunks, all cores
-kiln create  -p fastest|balanced|maximum|store|adaptive out.kiln data/   # named profiles
-kiln extract out.kiln -o dir/ --max-size 10GiB    # refuse to write more than this (bomb guard)
-kiln create  -c zstd:19 -b 32MiB big.kiln data/   # slower, smaller
-kiln create  -c lzma:6  -b 32MiB max.kiln data/   # best ratio currently available
-kiln list    -l backup.kiln                       # instant: reads only the index
-kiln info    backup.kiln                          # format, codec, sizes, counts, ratio
-kiln test    backup.kiln                          # verify every checksum, write nothing
-kiln extract backup.kiln --output restored/       # extract everything
-kiln extract backup.kiln photos/2024 -o out/      # extract a subtree (decodes only needed blocks)
-kiln create  --memory-limit 256MiB --progress big.kiln data/   # cap estimated peak memory, show progress
-kiln extract backup.kiln -o restored/ --memory-limit 64MiB      # same limit option on extract and test
-kiln create  --owner --xattrs backup.kiln /srv/data   # also record owner ids and extended attributes
-kiln extract backup.kiln -o out/ --same-owner         # restore owners (usually needs root); also --all-xattrs, --no-xattrs, --no-links
-kiln bench   data/ -c lz4 -c zstd:3 -c lzma:6 -b 4MiB -b 32MiB   # measure on YOUR data
+kiln create  backup.kiln photos/ notes.txt     # create an archive
+kiln list -l backup.kiln                       # see what's inside (instant)
+kiln info    backup.kiln                       # sizes, codec, ratio
+kiln test    backup.kiln                       # verify every checksum, write nothing
+kiln extract backup.kiln -o restored/          # extract everything
+kiln extract backup.kiln photos/2024 -o out/   # extract just one folder
 ```
 
-`pack`, `unpack`, `x` and `ls` remain as aliases of `create`, `extract`, `extract` and `list`.
-The `.kiln` extension is a convention, not enforced.
+Kiln uses all CPU cores by default and never overwrites existing files unless you pass `-f`.
 
-**Exit codes:** 0 success - 1 other error - 2 usage error - 3 I/O error (missing file, unwritable
-output) - 4 not a Kiln archive / unsupported version - 5 corrupt archive or checksum mismatch -
-6 request refused (output exists, unsafe path, bad option, no such member) - 7 completed with
-warnings (e.g. special files skipped, hard links extracted as copies; the archive is still valid).
+## Choosing speed vs. size
 
-`--memory-limit SIZE` lowers threads and the in-flight block window until an *estimate* of peak
-memory fits (it is a model checked against measured peak RSS, not an enforced cap); a limit too
-small for even one thread exits 6 and says what is needed. `--progress` draws a progress line on
-stderr. For slow codecs (zstd 10+, lzma) blocks that sampling shows to be incompressible are stored
-without being attempted (`--no-precheck` turns this off); this saves time and never changes the
-output size. `kiln info` reports how many blocks were stored versus compressed.
+### Profiles
 
-Codecs: `store`, `lz4`, `zstd[:-7..22]`, `lzma[:0..9]`. Block size: a power of two from 4 KiB to
-128 MiB (larger = better ratio, more memory). `-j N` sets threads (default: all cores). Existing
-files are never overwritten without `-f`. Archives are written to a temporary file and renamed
-into place, so a failed run leaves nothing behind. Extraction writes each file under a temporary
-name and renames it only after its BLAKE3 hash matches, so a failed run never leaves a truncated
-file under a real name (files completed before the failure remain).
+Pick one with `-p`:
 
-Library use:
+| Profile    | What it does                                                  |
+| ---------- | ------------------------------------------------------------- |
+| `fastest`  | Quickest, largest output                                      |
+| `balanced` | Sensible middle ground                                        |
+| `maximum`  | Smallest output, slowest                                      |
+| `store`    | No compression                                                |
+| `adaptive` | Skips data that's already compressed (JPEG, MP4, ZIP, etc.)   |
+
+```sh
+kiln create -p adaptive out.kiln data/
+```
+
+### Fine control
+
+Choose a codec with `-c` and a block size with `-b`. Larger blocks give a better ratio but use more memory.
+
+```sh
+kiln create -c zstd:19 -b 32MiB big.kiln data/   # slower, smaller
+kiln create -c lzma:6  -b 32MiB max.kiln data/   # best ratio available
+```
+
+- **Codecs:** `store`, `lz4`, `zstd` (levels -7 to 22), `lzma` (levels 0 to 9)
+- **Block sizes:** powers of two from 4 KiB to 128 MiB
+- **Threads:** `-j N` (default: all cores)
+
+### Not sure what's best for your data? Measure it
+
+```sh
+kiln bench data/ -c lz4 -c zstd:3 -c lzma:6 -b 4MiB -b 32MiB
+```
+
+## Safety and resource controls
+
+```sh
+kiln extract out.kiln -o dir/ --max-size 10GiB            # refuse to write more than 10 GiB (bomb guard)
+kiln create  --memory-limit 256MiB --progress big.kiln data/
+kiln extract backup.kiln -o restored/ --memory-limit 64MiB
+```
+
+- **`--memory-limit`** reduces threads and in-flight blocks until Kiln's *estimate* of peak memory fits. It is an estimate, not a hard cap. If the limit is too small even for one thread, Kiln exits with code 6 and tells you what it needs.
+- **`--progress`** draws a progress line on stderr.
+- **`--no-precheck`**: for slow codecs (zstd 10+, lzma), Kiln skips blocks that sampling shows to be incompressible. This saves time and never changes output size. Use this flag to turn it off.
+
+**Built-in protections**
+
+- Archives are written to a temporary file and renamed into place, so a failed run leaves nothing behind.
+- Extracted files are written under a temporary name and renamed only after their BLAKE3 hash matches, so you never get a truncated file under a real name. Files completed before a failure remain.
+- Path traversal and inconsistent archives are rejected.
+- On **Unix**, extraction won't follow a symbolic link below the destination, even one planted while it runs. On **Windows**, an older path-based check is used and that race is not closed.
+
+## What gets stored
+
+Kiln stores regular files, directories, symbolic links and hard links.
+
+| Option                        | Effect                                           |
+| ----------------------------- | ------------------------------------------------ |
+| `--owner`                     | Record numeric owner IDs when creating           |
+| `--xattrs`                    | Record extended attributes when creating         |
+| `--same-owner`                | Restore owners on extract (usually needs root)   |
+| `--all-xattrs`, `--no-xattrs` | Control which extended attributes are restored   |
+| `--no-links`                  | Don't recreate links on extract                  |
+
+Sockets, FIFOs and device files are skipped with a warning. File names containing a backslash are refused.
+
+## Exit codes
+
+| Code | Meaning                                                                  |
+| ---- | ------------------------------------------------------------------------ |
+| 0    | Success                                                                  |
+| 1    | Other error                                                              |
+| 2    | Usage error                                                              |
+| 3    | I/O error (missing file, unwritable output)                              |
+| 4    | Not a Kiln archive, or unsupported version                               |
+| 5    | Corrupt archive or checksum mismatch                                     |
+| 6    | Request refused (output exists, unsafe path, bad option, no such member) |
+| 7    | Completed with warnings (e.g. special files skipped); archive is valid   |
+
+`pack`, `unpack`, `x` and `ls` work as aliases for `create`, `extract`, `extract` and `list`. The `.kiln` extension is only a convention.
+
+## Using Kiln as a Rust library
 
 ```rust
 use std::path::{Path, PathBuf};
 use kiln::{Archive, ExtractOptions, PackOptions, extract, pack};
 
-let stats = pack(Path::new("out.kr"), &[PathBuf::from("my_dir")], &PackOptions::default())?;
-let archive = Archive::open(Path::new("out.kr"))?;
+let stats = pack(Path::new("out.kiln"), &[PathBuf::from("my_dir")], &PackOptions::default())?;
+let archive = Archive::open(Path::new("out.kiln"))?;
 extract(&archive, &ExtractOptions::new("restored"))?;
 ```
 
-## Layout
+## Known limitations
 
-```text
-src/            library (codec/, format/, archive/, secure, parallel, walk, path, integrity, fsutil, bench) + CLI
-tests/          integration tests: round trips, corruption/hostile archives, hostile destinations
-                (hardening.rs), >4 GiB archives (large.rs, ignored), CLI, write failures
-fuzz/           cargo-fuzz targets (open, index, record, header), dictionary and seed corpus
-android/        minimal Android shell that runs the CLI as libkiln.so (see below)
-docs/           AUDIT.md  BASELINE.md  ARCHITECTURE.md  FORMAT.md (v2)  PHASE2.md  PHASE3.md  ROADMAP.md
-                HARDENING.md (hostile destinations, fuzzing, >4 GiB)  SCALING.md (multicore curve)
-bench-results/  raw benchmark JSON/logs behind PHASE3.md
-tools/bench/    benchmark harness, dataset generator, 7-Zip comparison (see PHASE3.md section 8),
-                scaling.py (1/2/4/8/16-thread curve, see docs/SCALING.md)
-tools/baseline/ scripts and raw results behind BASELINE.md (Python 3; not needed to build)
-.github/        ci.yml, fuzz.yml, large.yml and android-apk.yml workflows (none has been run on a real runner)
+- **Never compiled or run.** See the warning at the top of this page.
+- **Linux only so far.** Windows and macOS code paths exist but are unverified.
+- **Compression ratio.** Worse than the original Kiln and 7-Zip on binaries (about 9.6% larger than the original), mainly because there is no x86 filter yet. Text is within 3.2% of the original.
+- **Multicore scaling is unmeasured.** All benchmarks used 2 vCPUs. A 4/8/16-thread curve hasn't been run (see [`docs/SCALING.md`](docs/SCALING.md)).
+- **Format compatibility.** `.kiln` v2 can't be read by earlier versions (Phase 2's `.kr` v1 or the original `.kln`), and vice versa.
+- **Large archives (over 4 GiB).** Tests exist but haven't been run, and a genuinely full disk is untested.
+- **Extraction is not transactional.** If it fails midway, files already completed stay on disk.
+- **Fuzzing.** Fuzz targets exist but have never been run. That means no findings, not proof the code is bug-free.
+- **Missing features:** encryption, append/update, archive repair.
+- **Android app.** An experimental shell app lives in [`android/`](android/), but it has never been built. Expect to adjust SDK, NDK and Gradle versions.
+
+## Documentation
+
+| Document                                  | Contents                                           |
+| ----------------------------------------- | -------------------------------------------------- |
+| [`docs/FORMAT.md`](docs/FORMAT.md)        | The `.kiln` v2 format specification                |
+| [`docs/PHASE3.md`](docs/PHASE3.md)        | Benchmarks against 7-Zip and Info-ZIP              |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How Kiln is put together                      |
+| [`docs/HARDENING.md`](docs/HARDENING.md)  | Hostile destinations, fuzzing, >4 GiB archives     |
+| [`docs/SCALING.md`](docs/SCALING.md)      | Method for the multicore speedup curve             |
+| [`docs/BASELINE.md`](docs/BASELINE.md)    | Measurements of the original implementation        |
+| [`docs/AUDIT.md`](docs/AUDIT.md)          | Analysis of the original Android app this rewrites |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md)      | What's planned next                                |
+
+## Development
+
+```sh
+cargo test --locked
+cargo fmt --check && cargo clippy --all-targets -- -D warnings
+cargo test --release --locked --test large -- --ignored   # archives over 4 GiB (~5 GiB disk)
 ```
 
-Reproduce the baseline: `python3 tools/baseline/make_corpus.py corpus`, then
-`python3 tools/baseline/compare.py --corpus corpus --kiln-rs target/release/kiln [--kiln-orig kiln_v14.py]`
-(needs `gzip bzip2 xz zstd lz4 zip 7z` for the reference rows).
+## License
 
-## Android APK (experimental, unverified)
-
-`android/` is a minimal app that runs a create / list / info / test / extract self-test with the
-Kiln binary shipped as `lib/<abi>/libkiln.so`. `.github/workflows/android-apk.yml` cross-compiles
-`kiln` with `cargo-ndk` (arm64-v8a, x86_64), builds a debug APK (and a release APK on tags or on
-request; signing needs the secrets listed in the workflow header) and checks the binaries are in
-the APK. **Nothing here has been built:** the authoring environment had no Android SDK/NDK or
-GitHub runner. The Java was only compile-checked against hand-written stubs, no Gradle wrapper is
-committed (the workflow installs Gradle 8.14.3), and cross-compiling the bundled zstd/lzma C code
-with the NDK is untested. Expect to adjust pinned SDK/NDK/AGP versions on the first real run.
-Android has no JNI integration; the app just executes the CLI binary.
-
-## Status and honest limitations
-
-What works and is tested: create / list / info / test / extract with four codecs; parallel, order-preserving,
-memory-bounded pipeline with byte-identical output for any thread count; random-access extraction;
-atomic output; detection of every single-byte corruption and truncation tried; rejection of path
-traversal and inconsistent archives.
-
-What it is **not** yet:
-
-* **Not ratio-competitive with the original or with 7-Zip on binaries** (9.6% larger than the
-  original on the binary corpus; the missing x86 filter alone accounts for ~8.6%). Text is within
-  3.2% of the original and 0.5% *better* than 7-Zip `-mx=5`. Details and plan: BASELINE, ROADMAP.
-* **Multicore speedup is not characterised** - all measurements are on 2 vCPUs, warm page cache. Correctness
-  under many threads is tested; a 4/8/16-thread speedup curve has **not been measured**. The harness
-  exists (`tools/bench/scaling.py`, method in `docs/SCALING.md`); it needs a run on a many-core machine.
-* **Format version 2** has a written compatibility policy and one golden test archive, but it is
-  **not compatible with Phase 2's `.kr` (v1) or the original `.kln`**. LZ4/LZMA2 chunks and
-  extensions have no golden files yet.
-* Stores regular files, directories, symbolic links and hard links; numeric ownership (`--owner`)
-  and extended attributes (`--xattrs`) are opt-in. Special files (sockets, FIFOs, devices) are
-  skipped with a warning. Names containing a backslash are refused.
-* No encryption, no append/update, no archive repair mode yet. Fuzz targets exist (`fuzz/`,
-  `docs/HARDENING.md`) but **have never been run**: no findings, and no claim of freedom from bugs.
-* Still open from the Phase 1 throughput plan: per-file hashing runs on the producer thread, no
-  buffer pool, no read-ahead. See `docs/PHASE2.md`.
-* Extraction is not transactional. On **Unix** it no longer follows a symbolic link below the
-  destination, even one planted while it runs (descriptor-relative, `docs/HARDENING.md`); on
-  **Windows** it keeps the older path-based check and the race is not closed. This code was written
-  without a compiler and has not been built or run: expect to fix compile errors first.
-* Archives larger than 4 GiB: Phase 2 tested one 4.25 GiB file on format v1. For v2 the 32-bit audit
-  found no narrowing of offsets or sizes, a no-I/O unit test covers the arithmetic and `tests/large.rs`
-  covers it end to end, but **those tests have not been run**. A genuinely full disk is untested.
-* Tested on Linux only. Windows/macOS code paths are written but unverified; neither CI workflow
-  has been run.
-* **License: none chosen.** The original repository contains no LICENSE file, so no license is
-  asserted here. Decide before distributing.
+**None chosen.** The original repository contains no license file, so none is asserted here. Decide on one before distributing.

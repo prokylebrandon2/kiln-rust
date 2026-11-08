@@ -185,8 +185,7 @@ pub fn seal_with(key: &[u8; 32], params: &Params, plaintext: &[u8]) -> Result<Ve
     } else {
         plaintext.chunks(chunk).collect()
     };
-    let mut out =
-        Vec::with_capacity(header.len() + plaintext.len() + pieces.len() * (4 + TAG_LEN));
+    let mut out = Vec::with_capacity(header.len() + plaintext.len() + pieces.len() * (4 + TAG_LEN));
     out.extend_from_slice(&header);
     let flag_at = header.len();
     let mut aad = header;
@@ -400,8 +399,10 @@ mod tests {
         let rec = 4 + 4096 + TAG_LEN;
         assert_eq!(f.len(), HEADER_LEN + 3 * rec);
         let mut bad = f.clone();
-        bad[HEADER_LEN..HEADER_LEN + rec].copy_from_slice(&f[HEADER_LEN + rec..HEADER_LEN + 2 * rec]);
-        bad[HEADER_LEN + rec..HEADER_LEN + 2 * rec].copy_from_slice(&f[HEADER_LEN..HEADER_LEN + rec]);
+        bad[HEADER_LEN..HEADER_LEN + rec]
+            .copy_from_slice(&f[HEADER_LEN + rec..HEADER_LEN + 2 * rec]);
+        bad[HEADER_LEN + rec..HEADER_LEN + 2 * rec]
+            .copy_from_slice(&f[HEADER_LEN..HEADER_LEN + rec]);
         assert!(open(&key(), &bad).is_err());
     }
 
@@ -423,7 +424,10 @@ mod tests {
         for v in [11u8, 25] {
             let mut bad = f.clone();
             bad[11] = v;
-            assert!(matches!(open(&key(), &bad), Err(Error::Corrupt)), "chunk_log2 {v}");
+            assert!(
+                matches!(open(&key(), &bad), Err(Error::Corrupt)),
+                "chunk_log2 {v}"
+            );
         }
         assert!(matches!(open(&key(), b""), Err(Error::NotSkln)));
         assert!(matches!(open(&key(), b"hello"), Err(Error::NotSkln)));

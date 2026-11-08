@@ -91,15 +91,22 @@ export component KFileList inherits Rectangle {
     property <length> room: 0px;
     property <length> row-h: root.rows-fit > 0 ? Math.max(24px, root.room / root.rows-fit) : probe.preferred-height;
     property <int> total: root.rows.length + (root.up-live ? 1 : 0);
-    property <int> first: Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 1);
-    property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
+    // The first row that is built: two above the top of the view. This is not a binding on the
+    // scroll position: a binding on `flick.content-y` is flagged as stale on every frame of a
+    // scroll, and with it the binding of every property of every row view (names, details, icons,
+    // previews and the measuring of each text below them), though only one row view changes at a
+    // row boundary. `sync-first` sets it instead, and only a changed row number notifies anyone.
+    property <int> first: 0;
+    property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 4));
     // How many row views are built: enough for the rows in view and a few over, and always the same
     // number while the list is scrolled. Row `at` is built by view `at mod slots`, so scrolling
     // by one row hands ONE view to the row that comes into view and leaves every other view as it
     // is. (If views were numbered from `first`, every view would get another row each time the
     // list moved by one row, and every one of them would lay its texts out again: that was a
     // stutter on every row boundary of a fast scroll.)
-    property <int> slots: Math.max(0, Math.min(root.total, Math.ceil(root.height / root.row-h) + 3));
+    // The rows built reach two above and two below the view: `first` follows the scroll position a
+    // moment after it, and the extra rows cover that moment.
+    property <int> slots: Math.max(0, Math.min(root.total, Math.ceil(root.height / root.row-h) + 5));
 
     // transparent: the info strip shows through above the rows while the list is pulled down
     clip: true;
@@ -117,6 +124,7 @@ export component KFileList inherits Rectangle {
 
     init => {
         flick.content-y = -root.slack;
+        root.sync-first();
         root.room = root.height;
         root.up-live = root.up-row;
     }
@@ -135,6 +143,15 @@ export component KFileList inherits Rectangle {
 
     changed width => {
         root.room = root.height;
+    }
+
+    changed row-h => {
+        root.sync-first();
+    }
+
+    /// Work out which row is the first one that is built (see `first`).
+    function sync-first() {
+        root.first = Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 2);
     }
 
     changed first => {
@@ -164,11 +181,13 @@ export component KFileList inherits Rectangle {
     /// Scroll to the very top (a new folder always starts there).
     public function scroll-top() {
         flick.content-y = -root.slack;
+        root.sync-first();
     }
 
     /// Scroll to `y` dp from the top (Back returns to where the folder was left).
     public function scroll-to(y: length) {
         flick.content-y = -(y + root.slack);
+        root.sync-first();
     }
 
     /// The finger let go (or has not moved for a while): hand the list back and say so.
@@ -241,6 +260,7 @@ export component KFileList inherits Rectangle {
                 easing: ease-out;
             }
             changed content-y => {
+                root.sync-first();
                 if (root.scroll-pos > 0.5px) {
                     root.top-rest = false;
                 }

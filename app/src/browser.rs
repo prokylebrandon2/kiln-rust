@@ -1,4 +1,4 @@
-//! The file browser's state and rules: what `MainActivity` keeps about the folder it shows (rows,
+//! The file browser's state and rules: what the app keeps about the folder it shows (rows,
 //! selection, sort, search, Back), with no view code in it. `lib.rs` and `browse_ui.rs` put the
 //! result on screen.
 
@@ -43,7 +43,7 @@ pub enum Tint {
     Rgb(u32),
 }
 
-/// One row of the list (`MainActivity.Row` and `Item` together).
+/// One row of the list.
 #[derive(Clone, Debug)]
 pub struct Row {
     /// The entry's name in the folder; selection is by this.
@@ -68,7 +68,7 @@ impl Row {
     }
 }
 
-/// `S_NAME`, `S_SIZE`, `S_DATE`, `S_TYPE`.
+/// `S_SIZE`, `S_DATE`, `S_TYPE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortKey {
     Name,
@@ -97,7 +97,7 @@ impl SortKey {
     }
 }
 
-/// What the top bar shows (`MainActivity.renderHeader`).
+/// What the top bar shows.
 pub struct Header {
     pub title: String,
     pub sub: String,
@@ -106,7 +106,7 @@ pub struct Header {
     pub left_icon: &'static str,
 }
 
-/// What a Back press did (`MainActivity.onBackPressed`).
+/// What a Back press did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BackAction {
     /// The selection was cleared, or search was left: redraw.
@@ -117,7 +117,7 @@ pub enum BackAction {
     ExitHint,
     /// Second Back at home: leave.
     Exit,
-    /// Back inside an archive: the folder of the archive to go up to (`arcBackTo`).
+    /// Back inside an archive: the folder of the archive to go up to.
     ArcUp(String),
     /// Back at the top of an archive: leave it (`guardLeave(closeArchive)`).
     ArcLeave,
@@ -131,7 +131,7 @@ pub struct Browser {
     /// The folder itself, kept while a search narrows `rows`.
     source: Vec<Row>,
     pub selected: Vec<String>,
-    /// What Copy or Move is holding to paste (`clip`), and whether Paste moves it (`clipMove`).
+    /// What Copy or Move is holding to paste (`clip`), and whether Paste moves it.
     pub clip: Vec<PathBuf>,
     pub clip_move: bool,
     pub sort_key: SortKey,
@@ -187,7 +187,7 @@ impl Browser {
         }
     }
 
-    /// `isStorageRoot`: the top of the phone's storage, or of a USB drive or SD card.
+    /// The top of the phone's storage, or of a USB drive or SD card.
     pub fn is_storage_root(&self, dir: &Path) -> bool {
         dir == self.root || self.volumes.iter().any(|v| v.path == dir)
     }
@@ -197,7 +197,7 @@ impl Browser {
         &self.root
     }
 
-    /// `storageName`: what a storage root is called.
+    /// What a storage root is called.
     pub fn storage_name(&self, dir: &Path) -> String {
         if dir == self.root {
             return "Internal storage".to_string();
@@ -217,7 +217,7 @@ impl Browser {
         !self.selected.is_empty()
     }
 
-    /// The ".." row shows when there is somewhere to go up to (`upShown`).
+    /// The ".." row shows when there is somewhere to go up to.
     pub fn up_shown(&self) -> bool {
         self.up_row_on
             && (self.arc.is_some() || !self.is_storage_root(&self.cwd))
@@ -359,7 +359,7 @@ impl Browser {
         }
     }
 
-    /// `toggle`: select a row, or unselect it.
+    /// Select a row, or unselect it.
     pub fn toggle(&mut self, key: &str) {
         if let Some(i) = self.selected.iter().position(|k| k == key) {
             self.selected.remove(i);
@@ -377,7 +377,7 @@ impl Browser {
         self.selected.clear();
     }
 
-    /// `M_SELECT_ALL`: select every row that is shown.
+    /// Select every row that is shown.
     pub fn select_all(&mut self) {
         for row in &self.rows {
             if !self.selected.contains(&row.key) {
@@ -394,7 +394,7 @@ impl Browser {
         }
     }
 
-    /// `saveSort` without the saving: re-sort what is shown and what it was narrowed from.
+    /// Without the saving: re-sort what is shown and what it was narrowed from.
     pub fn set_sort(&mut self, key: SortKey, asc: bool) {
         self.sort_key = key;
         self.sort_asc = asc;
@@ -402,13 +402,12 @@ impl Browser {
         sort_rows(&mut self.source, key, asc);
     }
 
-    /// `openSearch`.
     pub fn open_search(&mut self) {
         self.searching = true;
         self.query.clear();
     }
 
-    /// `closeSearch`: back to the plain list.
+    /// Back to the plain list.
     pub fn close_search(&mut self) {
         if !self.searching {
             return;
@@ -427,7 +426,7 @@ impl Browser {
         self.date_offset = seconds;
     }
 
-    /// Show the inside of `arc` (the end of `onOpened`).
+    /// Show the inside of `arc`.
     pub fn open_arc(&mut self, arc: ArcState) {
         self.arc = Some(arc);
         self.selected.clear();
@@ -435,7 +434,7 @@ impl Browser {
         self.arc_rebuild();
     }
 
-    /// `buildArcRows`: the rows of the archive's folder that is shown.
+    /// The rows of the archive's folder that is shown.
     pub fn arc_rebuild(&mut self) {
         let Some(arc) = &self.arc else {
             return;
@@ -446,7 +445,7 @@ impl Browser {
         self.show_source_or_hits();
     }
 
-    /// `onQueryChanged`: the words in the box changed.
+    /// The words in the box changed.
     pub fn set_query(&mut self, text: &str) {
         if !self.searching {
             return;
@@ -455,7 +454,7 @@ impl Browser {
         self.show_source_or_hits();
     }
 
-    /// `filterLocal`: the rows of the folder whose names contain every word of the query.
+    /// The rows of the folder whose names contain every word of the query.
     fn filter_local(&mut self) {
         let words: Vec<String> = self
             .query
@@ -476,7 +475,7 @@ impl Browser {
         self.rows = hits;
     }
 
-    /// `onBackPressed`, for the parts of it that exist so far.
+    /// For the parts of it that exist so far.
     pub fn back(&mut self) -> BackAction {
         if self.selecting() {
             self.selected.clear();
@@ -511,7 +510,7 @@ impl Browser {
     }
 }
 
-/// `sortList`: folders first, then the chosen key, ties by name.
+/// Folders first, then the chosen key, ties by name.
 pub fn sort_rows(rows: &mut [Row], key: SortKey, asc: bool) {
     rows.sort_by(|a, b| {
         let (fa, fb) = (a.folder(), b.folder());
@@ -537,7 +536,7 @@ pub fn sort_rows(rows: &mut [Row], key: SortKey, asc: bool) {
     });
 }
 
-/// `parseItems`: the rows of an engine `scan` result for folder `cwd`.
+/// The rows of an engine `scan` result for folder `cwd`.
 fn parse_rows(
     result: &Value,
     cwd: &Path,

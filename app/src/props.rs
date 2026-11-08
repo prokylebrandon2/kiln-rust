@@ -1,4 +1,4 @@
-//! The facts the Properties box shows (`Props.java`): sizes, dates, permissions, the mount a file
+//! The facts the Properties box shows: sizes, dates, permissions, the mount a file
 //! lives on, and the totals of a folder or a selection. No screen code lives here.
 
 use std::io::Read;
@@ -12,10 +12,10 @@ use serde_json::Value;
 
 use crate::{fmt, sniff};
 
-/// A walk reports at most this often while it counts (`Props.walk`).
+/// A walk reports at most this often while it counts.
 const REPORT_EVERY: Duration = Duration::from_millis(150);
 
-/// `Props.sizeText`: "512 B", or "1.50 MB (1572864 B)".
+/// "512 B", or "1.50 MB (1572864 B)".
 pub fn size_text(n: i64) -> String {
     if n < 1024 {
         format!("{n} B")
@@ -24,7 +24,7 @@ pub fn size_text(n: i64) -> String {
     }
 }
 
-/// `File.lastModified`, in epoch seconds (0 when the file cannot be read).
+/// In epoch seconds (0 when the file cannot be read).
 #[cfg(unix)]
 pub fn modified(path: &Path) -> i64 {
     std::fs::metadata(path).map_or(0, |m| m.mtime())
@@ -57,7 +57,7 @@ fn triple(bits: u32) -> String {
         .collect()
 }
 
-/// `Props.permissions`: "rw- rw- --- (660)", or `None` when the file cannot be read.
+/// "rw- rw- --- (660)", or `None` when the file cannot be read.
 pub fn permissions(path: &Path) -> Option<String> {
     let mode = mode_of(path)?;
     let [user, group, other] = [6, 3, 0].map(|shift| triple((mode >> shift) & 7));
@@ -74,7 +74,7 @@ fn mode_of(_path: &Path) -> Option<u32> {
     None
 }
 
-/// `Props.mountOf`: the mount point that holds `path` and its file system type, read from
+/// The mount point that holds `path` and its file system type, read from
 /// `/proc/mounts`. The longest mount point that contains the path wins, the later one on a tie.
 pub fn mount_of(path: &Path) -> Option<(String, String)> {
     let path = std::fs::canonicalize(path)
@@ -117,7 +117,7 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// `Props.walk`: count one entry and what is below it. False when `stop` was set meanwhile.
+    /// Count one entry and what is below it. False when `stop` was set meanwhile.
     fn visit(&mut self, path: &Path, top: bool) -> bool {
         if self.stop.load(Ordering::Relaxed) {
             return false;
@@ -146,7 +146,7 @@ impl Walk<'_> {
     }
 }
 
-/// `Props.totals`: walk the roots (links are counted as files, not followed) and call `report`
+/// Walk the roots (links are counted as files, not followed) and call `report`
 /// with the counts so far and `true` about every 150 ms, then once with the final counts and
 /// `false`. `folders_too` counts the roots that are folders as well (a selection of several, not
 /// a single folder). Returns false, without a final report, when `stop` was set.
@@ -249,7 +249,7 @@ pub fn mime_by_ext(ext: &str) -> Option<&'static str> {
     MIME_BY_EXT.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)
 }
 
-/// `Props.typeOf`: the "Type" row of a file. `kind` is how the file list knows it ("archive",
+/// The "Type" row of a file. `kind` is how the file list knows it ("archive",
 /// "set", "file", ...). By extension first, then by what the file starts with.
 pub fn type_of(path: &Path, kind: &str) -> String {
     if kind == "archive" || kind == "set" {
@@ -289,7 +289,7 @@ fn facts(encrypted: &str, files: &str, content: &str, ratio: &str) -> ArchiveFac
     }
 }
 
-/// What `Props.single` shows for an archive or a set, from the engine's `open_archive` answer
+/// What is shown for an archive or a set, from the engine's `open_archive` answer
 /// `r`. `file_len` stands in for `packed` when the answer has none.
 pub fn archive_facts(r: &Value, file_len: i64) -> ArchiveFacts {
     if r["need_password"].as_bool() == Some(true) {
@@ -326,7 +326,7 @@ pub fn archive_facts(r: &Value, file_len: i64) -> ArchiveFacts {
     )
 }
 
-/// `Box.text`: what Copy puts on the clipboard. A line with no value is a heading.
+/// What Copy puts on the clipboard. A line with no value is a heading.
 pub fn copy_text(lines: &[(String, Option<String>)]) -> String {
     let mut out = String::new();
     for (label, value) in lines {

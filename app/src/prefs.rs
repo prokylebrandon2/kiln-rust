@@ -1,10 +1,7 @@
-//! Kiln's settings file, shared with the Java build.
-//!
-//! The Java app kept its settings in Android's `SharedPreferences` file `kiln`
-//! (`<app data>/shared_prefs/kiln.xml`). The Rust app reads and writes that very file, in the same
-//! format, so every setting survives a switch from one build to the other. A change is made in
-//! place: only the one element of the key is replaced or added, so values this code does not know
-//! (a `<set>`, say) are left exactly as they were.
+//! Kiln's settings file: Android's `SharedPreferences` file `kiln`
+//! (`<app data>/shared_prefs/kiln.xml`). A change is made in place: only the one element of the key
+//! is replaced or added, so values this code does not know (a `<set>`, say) are left exactly as
+//! they were.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,11 +9,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-/// `Defaults.PREFIX`: a default app is stored per extension as `def_<ext>`.
+/// A default app is stored per extension as `def_<ext>`.
 const OPEN_PREFIX: &str = "def_";
 
 /// The settings that go into a backup, and their type: b boolean, i int, s string. Root and
-/// Shizuku access are never exported or imported (`Defaults.BACKUP_KEYS`).
+/// Shizuku access are never exported or imported.
 const BACKUP_KEYS: &[(&str, char)] = &[
     ("up_row", 'b'),
     ("previews", 'b'),
@@ -40,7 +37,7 @@ const BACKUP_KEYS: &[(&str, char)] = &[
     ("folder_colors", 's'),
 ];
 
-/// `Defaults.labelOf`: what a stored "open with" value shows as.
+/// What a stored "open with" value shows as.
 pub fn open_with_label(value: &str) -> String {
     match value {
         "kiln:view" => "Kiln (view)".to_string(),
@@ -61,7 +58,7 @@ pub struct Prefs {
 
 impl Prefs {
     /// Read the file. A missing or unreadable file is the same as an empty one, which is what
-    /// `SharedPreferences` does too.
+    /// Does too.
     pub fn load(file: &Path) -> Self {
         let values = match std::fs::read_to_string(file) {
             Ok(text) => parse_values(&text),
@@ -121,7 +118,7 @@ impl Prefs {
         self.put("string", key, value);
     }
 
-    /// `Defaults.bookmarks`: the folder paths, in the order they were added. They are kept as a
+    /// The folder paths, in the order they were added. They are kept as a
     /// JSON array of strings under `bookmarks`.
     pub fn bookmarks(&self) -> Vec<String> {
         let text = self.string("bookmarks", "[]");
@@ -137,7 +134,6 @@ impl Prefs {
         out
     }
 
-    /// `Defaults.addBookmark`.
     pub fn add_bookmark(&self, path: &str) {
         let mut list = self.bookmarks();
         if !list.iter().any(|p| p == path) {
@@ -146,7 +142,6 @@ impl Prefs {
         }
     }
 
-    /// `Defaults.removeBookmark`.
     pub fn remove_bookmark(&self, path: &str) {
         let mut list = self.bookmarks();
         let before = list.len();
@@ -162,7 +157,7 @@ impl Prefs {
         self.set_string("bookmarks", &text.replace('/', "\\/"));
     }
 
-    /// `Defaults.folderIcon`: the icon key a person picked for a folder (`folder_icons` holds a
+    /// The icon key a person picked for a folder (`folder_icons` holds a
     /// JSON object of path to key), if any.
     pub fn folder_icon(&self, path: &str) -> Option<String> {
         let text = self.string("folder_icons", "{}");
@@ -175,7 +170,7 @@ impl Prefs {
         }
     }
 
-    /// `Defaults.setFolderIcon`: remember the icon `key` for a folder. An empty key goes back to
+    /// Remember the icon `key` for a folder. An empty key goes back to
     /// the standard look. The JSON object is written the way Android writes it, with "\/" for "/".
     pub fn set_folder_icon(&self, path: &str, key: &str) {
         let mut icons = self.folder_icon_map();
@@ -210,15 +205,15 @@ impl Prefs {
             .collect()
     }
 
-    /// `Defaults.folderColor`: the ARGB colour picked for a folder's icon, or 0 for none.
+    /// The ARGB colour picked for a folder's icon, or 0 for none.
     pub fn folder_color(&self, path: &str) -> u32 {
         let colors = self.folder_color_map();
         let value = colors.get(path).and_then(Value::as_i64);
         value.map_or(0, |c| c as u32)
     }
 
-    /// `Defaults.setFolderColor`: remember a colour for a folder; 0 goes back to the accent. The
-    /// number is written as the Java `int` it was (ARGB, so negative), with "\/" for "/".
+    /// Remember a colour for a folder; 0 goes back to the accent. The
+    /// number is written, so negative), with "\/" for "/".
     pub fn set_folder_color(&self, path: &str, color: u32) {
         let mut colors = self.folder_color_map();
         if color == 0 {
@@ -230,18 +225,17 @@ impl Prefs {
         self.set_string("folder_colors", &text.replace('/', "\\/"));
     }
 
-    /// `Defaults.defaultFolderColor`: the ARGB colour every folder gets unless it has its own, or
+    /// The ARGB colour every folder gets unless it has its own, or
     /// 0 for the normal accent. Set in Settings.
     pub fn default_folder_color(&self) -> u32 {
         self.int("folder_color_default", 0) as u32
     }
 
-    /// `Defaults.setDefaultFolderColor`.
     pub fn set_default_folder_color(&self, color: u32) {
         self.set_int("folder_color_default", color as i32);
     }
 
-    /// `Defaults.folderColorOrDefault`: a folder's own colour, else the default, else 0.
+    /// A folder's own colour, else the default, else 0.
     pub fn folder_color_or_default(&self, path: &str) -> u32 {
         match self.folder_color(path) {
             0 => self.default_folder_color(),
@@ -249,17 +243,17 @@ impl Prefs {
         }
     }
 
-    /// `Defaults.customFolderColors`: how many folders have a colour of their own.
+    /// How many folders have a colour of their own.
     pub fn custom_folder_colors(&self) -> usize {
         self.folder_color_map().len()
     }
 
-    /// `Defaults.clearFolderColors`: every folder follows the default again.
+    /// Every folder follows the default again.
     pub fn clear_folder_colors(&self) {
         self.set_string("folder_colors", "{}");
     }
 
-    /// `Defaults.all`: the "always open with" choices, `(extension, stored value)`, sorted by
+    /// The "always open with" choices, `(extension, stored value)`, sorted by
     /// extension.
     pub fn open_with_all(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self
@@ -275,7 +269,7 @@ impl Prefs {
         out
     }
 
-    /// `Defaults.clear`: forget the app chosen for one extension.
+    /// Forget the app chosen for one extension.
     pub fn clear_open_with(&self, ext: &str) {
         self.remove(&format!("{OPEN_PREFIX}{ext}"));
     }
@@ -287,7 +281,7 @@ impl Prefs {
         }
     }
 
-    /// Remove a setting (`Editor.remove(..).apply()`).
+    /// Remove a setting.
     pub fn remove(&self, key: &str) {
         if self.values.borrow_mut().remove(key).is_none() || self.file.as_os_str().is_empty() {
             return;
@@ -300,7 +294,7 @@ impl Prefs {
         }
     }
 
-    /// `Defaults.exportSettings`: every backed-up setting that has been set, plus the "always
+    /// Every backed-up setting that has been set, plus the "always
     /// open with" choices, as JSON text. Root and Shizuku access are never part of it.
     pub fn export_settings(&self) -> String {
         let mut settings = Map::new();
@@ -338,7 +332,7 @@ impl Prefs {
         serde_json::to_string_pretty(&root).unwrap_or_default()
     }
 
-    /// `Defaults.importSettings`: apply a backup made by [`Prefs::export_settings`]. Unknown keys
+    /// Apply a backup made by [`Prefs::export_settings`]. Unknown keys
     /// and values of the wrong type are skipped. Returns how many settings were applied.
     pub fn import_settings(&self, text: &str) -> Result<usize, String> {
         let root: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
@@ -379,7 +373,7 @@ impl Prefs {
         Ok(n)
     }
 
-    /// `Defaults.moveFolderIcons`: a folder was renamed or moved, so its icon and colour (and
+    /// A folder was renamed or moved, so its icon and colour (and
     /// those of its subfolders) follow it.
     pub fn move_folder_icons(&self, from: &str, to: &str) {
         self.move_paths("folder_icons", from, to);

@@ -53,7 +53,7 @@ use crate::browser::{Browser, SortKey};
 pub use crate::host::{Event, Host, Incoming, Look, OpenApp, OpenWith, Volume};
 use crate::prefs::Prefs;
 
-/// `Defaults.ANIM_SCALE`: Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
+/// Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
 const ANIM_SCALE: [f32; 4] = [0.0, 0.6, 0.85, 1.2];
 
 /// What the UI is waiting for before it can show the first folder.
@@ -188,14 +188,13 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
     app.ui.run()
 }
 
-/// Where the Java app kept its settings, which this app reads and writes too
-/// (`SharedPreferences` "kiln").
+/// The settings file (`SharedPreferences` "kiln").
 fn prefs_file(files_dir: &Path) -> PathBuf {
     let data = files_dir.parent().unwrap_or(files_dir);
     data.join("shared_prefs").join("kiln.xml")
 }
 
-/// `MainActivity.startEngine()`: get the engine ready off the UI thread, then tell the UI.
+/// Get the engine ready off the UI thread, then tell the UI.
 fn start_engine(cache: PathBuf) {
     std::thread::spawn(move || {
         let result = engine::init(&cache);
@@ -207,7 +206,7 @@ fn start_engine(cache: PathBuf) {
 }
 
 impl App {
-    /// `onCreate`: the settings the browser starts with.
+    /// The settings the browser starts with.
     fn read_settings(&self) {
         let mut b = self.browser.borrow_mut();
         b.sort_key = SortKey::from_code(self.prefs.int("sort_key", 0));
@@ -272,7 +271,7 @@ impl App {
         }
     }
 
-    /// `MainActivity.refreshPermission()`: show or hide the permission view, and load the first
+    /// Show or hide the permission view, and load the first
     /// folder once there is both access and an engine.
     fn refresh_permission(&self) {
         let ok = self.host.has_all_files_access();

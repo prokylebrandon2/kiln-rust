@@ -1,4 +1,4 @@
-//! The bookmarks drop-down under the title (`MainActivity.showBookmarks`, `markRow`, `goTo`), and
+//! The bookmarks drop-down under the title, and
 //! the list of USB drives and SD cards it shares with the rest of the browser.
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ impl App {
         self.browser.borrow_mut().volumes = volumes;
     }
 
-    /// `showBookmarks`: open the drop-down (or close it if it is open). It needs access to the
+    /// Open the drop-down (or close it if it is open). It needs access to the
     /// files and nothing selected.
     pub(crate) fn marks_clicked(&self) {
         if self.ui.get_marks_shown() {
@@ -121,7 +121,7 @@ impl App {
         }
     }
 
-    /// The icon of a folder: the one a person picked, else its standard one (`Icons.forDir`).
+    /// The icon of a folder: the one a person picked, else its standard one.
     fn dir_icon(&self, b: &Browser, dir: &Path) -> &'static str {
         if let Some(key) = self.prefs.folder_icon(&dir.to_string_lossy()) {
             return icons::by_key(&key);
@@ -146,7 +146,7 @@ impl App {
         }
     }
 
-    /// `goTo`: open a folder, unless it is gone or already open.
+    /// Open a folder, unless it is gone or already open.
     fn go_to(&self, path: &str) {
         let dir = PathBuf::from(path);
         if !dir.is_dir() {

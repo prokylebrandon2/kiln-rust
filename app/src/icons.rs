@@ -1,4 +1,4 @@
-//! `Icons.java`: which icon and colour a file or folder gets.
+//! Which icon and colour a file or folder gets.
 //!
 //! Icons are named as in `ui/ui/icons.slint` (the Android drawable without its `ic_` prefix).
 
@@ -60,7 +60,7 @@ pub fn for_file(name: &str) -> (&'static str, Option<u32>) {
     }
 }
 
-/// The icon of an icon key (the plain folder for an unknown key); `Icons.byKey`.
+/// The icon of an icon key (the plain folder for an unknown key).
 pub fn by_key(key: &str) -> &'static str {
     match key {
         "download" => "d_download",
@@ -84,7 +84,7 @@ pub fn by_key(key: &str) -> &'static str {
     }
 }
 
-/// `Icons.defaultKey`: the key Android's standard folders get. `name` and `parent` are the
+/// The key Android's standard folders get. `name` and `parent` are the
 /// folder's own name and its parent's, and `at_storage_root` says the folder sits directly in the
 /// top of a storage.
 pub fn default_key(name: &str, parent: &str, at_storage_root: bool) -> Option<&'static str> {
@@ -112,7 +112,7 @@ pub fn default_key(name: &str, parent: &str, at_storage_root: bool) -> Option<&'
     None
 }
 
-/// `Icons.forDir`: a folder's standard icon (the plain folder if it has none).
+/// A folder's standard icon (the plain folder if it has none).
 pub fn for_dir(name: &str, parent: &str, at_storage_root: bool) -> &'static str {
     match default_key(name, parent, at_storage_root) {
         Some(key) => by_key(key),

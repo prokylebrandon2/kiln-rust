@@ -2,7 +2,7 @@
 """Multicore scaling curve for kiln: create, test and extract at 1, 2, 4, 8, 16 ... threads.
 
 Closes the Phase 2 roadmap item "measure scaling on a multicore machine (1/2/4/8/16 threads) for
-lz4, zstd:3, zstd:19, lzma:6" (docs/ROADMAP.md, docs/SCALING.md). Python 3.8+, standard library
+lz4, zstd:3, zstd:19, lzma:6" (docs/SCALING.md). Python 3.8+, standard library
 only, Linux or macOS. Needs no helper binary: CPU time and peak RSS come from wait4's rusage.
 
     cargo build --release

@@ -1,4 +1,4 @@
-//! Thumbnail previews on screen (`Thumbs.bind`): which rows want one, asking the workers for the
+//! Thumbnail previews on screen: which rows want one, asking the workers for the
 //! ones in view, and putting the results into the list. The rules, the cache and the workers are
 //! in [`crate::thumbs`]; the decoding is the phone's ([`crate::Host::thumb_decoder`]).
 //!
@@ -17,7 +17,7 @@ use crate::browser::{Browser, Kind, Row};
 use crate::thumbs::{self, Cache, Done, Job, Key, Pixels, Pool, ThumbKind};
 use crate::{App, app_do};
 
-/// What the cache may hold, in bytes of pixels (the Java's is a tenth of the heap).
+/// What the cache may hold, in bytes of pixels.
 const CACHE_BYTES: usize = 32 * 1024 * 1024;
 const CACHE_ENTRIES: usize = 2048;
 /// What an entry costs besides its pixels, so that a long run of failures is bounded too.
@@ -29,7 +29,7 @@ const FIRST_SLOTS: i32 = 24;
 pub(crate) struct ThumbUi {
     /// Absent when the phone cannot decode: then no row has a preview.
     pool: Option<Pool>,
-    /// `None` is a file that has no preview (the Java's `NONE`).
+    /// Is a file that has no preview.
     cache: Cache<Option<Image>>,
     /// Asked for and not back yet: a file is never asked for twice at the same time.
     in_flight: HashSet<Key>,

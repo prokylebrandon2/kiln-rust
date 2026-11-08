@@ -1,9 +1,8 @@
-//! The recycle bin (`Trash.java`). Each storage (Internal storage, an SD card or a flash drive)
+//! The recycle bin. Each storage (Internal storage, an SD card or a flash drive)
 //! keeps its own bin in a hidden folder at its top, so putting something in is a rename on the
 //! same volume: instant, whatever the size, and it needs no extra space. An item is stored as
 //! "<id>" (the file or folder itself, renamed) plus "<id>.json" saying what it was called, where
-//! it came from and when it was deleted. Bins made by the Java app are read and written the same
-//! way.
+//! it came from and when it was deleted.
 
 use std::fs;
 use std::io::Read;
@@ -15,10 +14,10 @@ use serde_json::{Value, json};
 
 use crate::browse_ui::io_text;
 
-/// The bin's folder, at the top of a storage (`Trash.DIR`).
+/// The bin's folder, at the top of a storage.
 pub(crate) const DIR: &str = ".KilnTrash";
 
-/// One thing in a bin (`Trash.Entry`).
+/// One thing in a bin.
 #[derive(Clone)]
 pub(crate) struct Entry {
     /// The item itself, inside the bin.
@@ -40,7 +39,7 @@ pub(crate) struct Entry {
 
 // ---- where an item can go -----------------------------------------------------------------
 
-/// `Trash.rootOf`: the storage (one of `roots`) that holds `path`, or `None` if none does or
+/// The storage (one of `roots`) that holds `path`, or `None` if none does or
 /// `path` is a bin or a storage itself.
 pub(crate) fn root_of(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     let p = path.to_string_lossy();
@@ -69,7 +68,7 @@ pub(crate) fn root_of(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
 
 // ---- put in -------------------------------------------------------------------------------
 
-/// `Trash.put`: move `path` into the bin of `root`. `Err` says what went wrong.
+/// Move `path` into the bin of `root`. `Err` says what went wrong.
 pub(crate) fn put(path: &Path, root: &Path) -> Result<(), String> {
     let bin = root.join(DIR);
     if !bin.is_dir() && fs::create_dir_all(&bin).is_err() {
@@ -108,7 +107,7 @@ fn free_slot(bin: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-/// The time in base 36 followed by a random number in base 36 (`Trash.put`'s id).
+/// The time in base 36 followed by a random number in base 36.
 fn new_id() -> String {
     static COUNT: AtomicU32 = AtomicU32::new(0);
     let now = since_epoch();
@@ -142,7 +141,7 @@ fn base36(mut n: u64) -> String {
 
 // ---- look inside --------------------------------------------------------------------------
 
-/// `Trash.list`: everything in the bin of `root`, newest first. Sizes are not counted yet.
+/// Everything in the bin of `root`, newest first. Sizes are not counted yet.
 pub(crate) fn list(root: &Path) -> Vec<Entry> {
     let bin = root.join(DIR);
     let Ok(kids) = fs::read_dir(&bin) else {
@@ -192,7 +191,7 @@ fn read_entry(root: &Path, data: PathBuf, meta: PathBuf) -> Option<Entry> {
     })
 }
 
-/// `Trash.size`: total bytes of a file or folder (links are not followed).
+/// Total bytes of a file or folder (links are not followed).
 pub(crate) fn size(path: &Path) -> u64 {
     let Ok(meta) = fs::symlink_metadata(path) else {
         return 0;
@@ -211,7 +210,7 @@ pub(crate) fn size(path: &Path) -> u64 {
 
 // ---- take out -----------------------------------------------------------------------------
 
-/// `Trash.restore`: put an item back where it came from, under a new name if that is taken.
+/// Put an item back where it came from, under a new name if that is taken.
 /// Returns the new path, or `None` on failure.
 pub(crate) fn restore(entry: &Entry) -> Option<PathBuf> {
     let mut target = PathBuf::from(&entry.orig);
@@ -249,7 +248,7 @@ pub(crate) fn restore(entry: &Entry) -> Option<PathBuf> {
     Some(target)
 }
 
-/// `Trash.purge`: delete an item for good.
+/// Delete an item for good.
 pub(crate) fn purge(entry: &Entry) -> bool {
     let ok = delete_tree(&entry.data);
     if ok {
@@ -258,7 +257,7 @@ pub(crate) fn purge(entry: &Entry) -> bool {
     ok
 }
 
-/// `Trash.deleteTree`: a folder and everything in it; a link is removed, not followed.
+/// A folder and everything in it; a link is removed, not followed.
 fn delete_tree(path: &Path) -> bool {
     let is_dir = fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
     if is_dir {

@@ -1,4 +1,4 @@
-//! Folder browsing: `scan`, `search` and `scan_params` (what Java needs to recognise archives).
+//! Folder browsing: `scan` and `search`.
 
 use std::fs;
 use std::io::Read;
@@ -23,23 +23,6 @@ pub const SNIFF_LEN: usize = 16;
 pub const MIN_ARCHIVE: u64 = (kiln::format::HEADER_LEN + kiln::format::FOOTER_LEN) as u64;
 
 const SEARCH_LIMIT: usize = 1000;
-
-/// What the Java side needs to recognise archives while it lists folders itself.
-pub fn scan_params() -> Value {
-    let mut sig = String::new();
-    for b in kiln::format::MAGIC.iter() {
-        sig.push_str(&format!("{b:02x}"));
-    }
-    json!({
-        "sig": sig,
-        "min": MIN_ARCHIVE,
-        "builtin": true,
-        "enc": ENC_FLAG,
-        "index": INDEX_NAME,
-        "len": SNIFF_LEN,
-        "flagbyte": FLAG_BYTE,
-    })
-}
 
 /// `Some(encrypted)` when the file starts like a Kiln archive.
 fn sniff(path: &Path, size: u64) -> Option<bool> {

@@ -58,10 +58,11 @@ rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 xattr = "1"
 
 [profile.release]
-opt-level = 3
+# Size first, speed where it is felt: everything that is not on the hot path (fonts, text, images,
+# SVG, JSON, the Android glue) is optimised for size, and the packages below stay at full speed.
+opt-level = "s"
 # "fat" LTO lets the linker drop everything the app never calls (clap's CLI code, unused helpers
-# of the codecs, unused parts of Slint) across all crates, not only inside each one; the library
-# is smaller and a little faster. It makes the build slower.
+# of the codecs, unused parts of Slint) across all crates, not only inside each one.
 lto = "fat"
 codegen-units = 1
 debug = false
@@ -69,6 +70,49 @@ debug = false
 # is several MB. (A crash report then shows addresses instead of function names.)
 strip = "symbols"
 # panic = "unwind" (the default) is deliberate: temp-file guards must run on a panic.
+
+# The engine, the codecs and the ciphers decide how fast packing and unpacking are.
+[profile.release.package.kiln]
+opt-level = 3
+[profile.release.package.kiln-bridge]
+opt-level = 3
+[profile.release.package.kiln-skln]
+opt-level = 3
+[profile.release.package.zstd]
+opt-level = 3
+[profile.release.package.zstd-safe]
+opt-level = 3
+[profile.release.package.zstd-sys]
+opt-level = 3
+[profile.release.package.liblzma]
+opt-level = 3
+[profile.release.package.liblzma-sys]
+opt-level = 3
+[profile.release.package.lz4_flex]
+opt-level = 3
+[profile.release.package.blake3]
+opt-level = 3
+[profile.release.package.crc32fast]
+opt-level = 3
+[profile.release.package.chacha20]
+opt-level = 3
+[profile.release.package.chacha20poly1305]
+opt-level = 3
+[profile.release.package.poly1305]
+opt-level = 3
+[profile.release.package.scrypt]
+opt-level = 3
+[profile.release.package.salsa20]
+opt-level = 3
+[profile.release.package.pbkdf2]
+opt-level = 3
+[profile.release.package.sha2]
+opt-level = 3
+# Every frame goes through these: the property system and the generated UI code.
+[profile.release.package.i-slint-core]
+opt-level = 3
+[profile.release.package.kiln-ui]
+opt-level = 3
 
 [profile.dev]
 # Compression is unusably slow at opt-level 0; keep tests fast.

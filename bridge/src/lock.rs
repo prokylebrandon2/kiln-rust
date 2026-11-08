@@ -4,7 +4,7 @@
 //! authenticated envelope, so the engine itself never sees a password:
 //!
 //! ```text
-//! 0..24    an ordinary Kiln header (same magic) whose incompatible-feature bit 0 is set. The Java
+//! 0..24    an ordinary Kiln header (same magic) whose incompatible-feature bit 0 is set. The
 //!          file browser recognises "encrypted" from that bit alone, and the plain engine refuses
 //!          the file as "unsupported" instead of misreading it.
 //! 24..59   kind u8 (0 archive, 1 set index) | log_n u8 | r u32 | p u32 | salt[16]
@@ -204,7 +204,7 @@ pub struct Lock {
 }
 
 impl Lock {
-    /// `KIND_ARCHIVE` or `KIND_INDEX`.
+    /// Or `KIND_INDEX`.
     pub fn kind(&self) -> u8 {
         self.kind
     }

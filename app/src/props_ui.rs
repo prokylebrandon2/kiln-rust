@@ -1,4 +1,4 @@
-//! The Properties sheet (`Props.show`): the rows come from `props.rs`. The slow ones (a folder's
+//! The Properties sheet: the rows come from `props.rs`. The slow ones (a folder's
 //! totals, the MD5, the archive's table) say "Calculating..." and are filled in from worker threads
 //! as they finish; closing the sheet stops them.
 
@@ -49,7 +49,7 @@ fn heading(rows: &mut Vec<PropRow>, text: &str) {
     });
 }
 
-/// `Box.row`: add a "label  value" row and return its index, so a worker can fill it in later.
+/// Add a "label  value" row and return its index, so a worker can fill it in later.
 fn row(rows: &mut Vec<PropRow>, label: &str, value: &str) -> usize {
     rows.push(PropRow {
         label: label.into(),
@@ -59,7 +59,7 @@ fn row(rows: &mut Vec<PropRow>, label: &str, value: &str) -> usize {
     rows.len() - 1
 }
 
-/// `Box.set`, from a worker thread: change one value. Nothing happens once the sheet is closed.
+/// From a worker thread: change one value. Nothing happens once the sheet is closed.
 fn post(stop: &Arc<AtomicBool>, index: usize, text: String) {
     let stop = stop.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -69,7 +69,7 @@ fn post(stop: &Arc<AtomicBool>, index: usize, text: String) {
     });
 }
 
-/// `Props.totals`: count a folder, or the selection, and show the counts as they grow.
+/// Count a folder, or the selection, and show the counts as they grow.
 fn spawn_totals(
     stop: &Arc<AtomicBool>,
     roots: Vec<PathBuf>,
@@ -124,7 +124,7 @@ fn spawn_probe(stop: &Arc<AtomicBool>, path: PathBuf, first: usize) {
 }
 
 impl App {
-    /// `propertiesSelected`, for files and folders: the sheet for what is selected.
+    /// For files and folders: the sheet for what is selected.
     pub(crate) fn props_selected(&self) {
         let picked: Vec<(PathBuf, Kind)> = {
             let b = self.browser.borrow();
@@ -167,7 +167,7 @@ impl App {
         ui.set_props_shown(true);
     }
 
-    /// `Props.single`. Returns the folder when it is one (the check box is for folders).
+    /// Returns the folder when it is one (the check box is for folders).
     fn single_rows(
         &self,
         rows: &mut Vec<PropRow>,
@@ -260,7 +260,7 @@ impl App {
         }
     }
 
-    /// `Box.text`: the lines as they are now, to the clipboard.
+    /// The lines as they are now, to the clipboard.
     fn props_copy(&self) {
         let lines: Vec<(String, Option<String>)> = {
             let open = self.props.borrow();
@@ -318,7 +318,7 @@ fn entry_path(key: &str) -> &str {
 }
 
 impl App {
-    /// `Props.showInArchive`: the sheet for what is selected inside the open archive. Nothing here
+    /// The sheet for what is selected inside the open archive. Nothing here
     /// is slow, so there are no workers; Copy and OK work as in `props_selected`.
     pub(crate) fn props_in_archive(&self) {
         let (archive, picked, offset) = {
@@ -394,7 +394,7 @@ impl App {
         ui.set_props_shown(true);
     }
 }
-/// `Props.several`: what a selection of more than one adds up to.
+/// What a selection of more than one adds up to.
 fn several_rows(rows: &mut Vec<PropRow>, stop: &Arc<AtomicBool>, picked: &[(PathBuf, Kind)]) {
     heading(rows, "General information");
     row(rows, "Items", &format!("{} selected", picked.len()));

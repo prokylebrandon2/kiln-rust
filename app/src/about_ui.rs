@@ -1,5 +1,5 @@
-//! The About sheet (`MainActivity.aboutDialog`, `showAbout`): the version, and what the engine says
-//! about itself, asked on a worker thread as in the Java.
+//! The About sheet: the version, and what the engine says
+//! about itself, asked on a worker thread.
 
 use kiln_ui::DetailRow;
 use serde_json::{Value, json};
@@ -21,7 +21,7 @@ impl App {
             .on_about_dismissed(|| app_do(|app| app.ui.set_about_shown(false)));
     }
 
-    /// `aboutDialog`: ask the engine for its version off the UI thread, then show the sheet.
+    /// Ask the engine for its version off the UI thread, then show the sheet.
     pub(crate) fn about(&self) {
         let version = self.host.version_name();
         let build = self.host.version_code();
@@ -34,7 +34,7 @@ impl App {
         });
     }
 
-    /// `showAbout`: the chip and the detail rows.
+    /// The chip and the detail rows.
     fn show_about(&self, version: &str, build: i64, info: Option<&Value>) {
         let kiln = info.and_then(|v| v["kiln"].as_str()).unwrap_or_default();
         let helper = info.and_then(|v| v["helper"].as_str()).unwrap_or_default();

@@ -57,7 +57,9 @@ jobs:
       - name: Build libkiln_android.so with the NDK
         shell: bash
         env:
-          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
+          # 16 KB pages for newer phones; --pack-dyn-relocs=android stores the relocation table
+          # (hundreds of thousands of entries in a library this big) in a compact form.
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--pack-dyn-relocs=android"
         run: |
           cargo install cargo-ndk --locked
           targets=()

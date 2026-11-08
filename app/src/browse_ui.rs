@@ -1,28 +1,30 @@
 //! The file browser on screen: what the Slint window shows of a [`Browser`](crate::browser), and
-//! what its taps do (`MainActivity.redraw`, `renderHeader`, `onRowClick`, `loadDir`, ...).
+//! what its taps do.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use kiln_ui::{PickIcon, RowData};
+use kiln_ui::{PickIcon, RowData, Theme};
 use serde_json::{Value, json};
-use slint::{Color, Model, ModelRc, Timer, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, Timer, VecModel};
 
 use crate::browser::{BackAction, Kind, Row, SortKey, Tint};
 use crate::dialog::{Btn, BtnKind, Click, Opt, Spec};
 use crate::trash;
 use crate::{App, app_do};
 
-/// `MainActivity.toast`: `Toast.LENGTH_SHORT` is two seconds.
+/// `Toast.LENGTH_SHORT` is two seconds.
 const TOAST_MS: u64 = 2000;
 /// A folder that takes longer than this shows "Loading...".
 const LOADING_MS: u64 = 700;
+/// How long the rows take to fade out before they are replaced (the `70ms` in browser.slint).
+const SWAP_OUT_MS: f32 = 70.0;
 /// The "+ New" button hides while the list moves this far down, and shows when it moves up.
 const SCROLL_STEP_DP: f32 = 6.0;
 
-/// The colours a folder can be given (`MainActivity.FOLDER_COLORS`). The picker's first swatch,
+/// The colours a folder can be given. The picker's first swatch,
 /// "default", is the accent colour and saves 0.
 pub(crate) const FOLDER_COLORS: [u32; 10] = [
     0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0, 0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3,
@@ -51,7 +53,7 @@ const PICK_ICONS: [(&str, &str); 18] = [
     ("usb", "USB drive"),
 ];
 
-/// What runs after the picker changed something (`done` in `iconPicker`).
+/// What runs after the picker changed something.
 type Done = Rc<dyn Fn(&App)>;
 
 /// A colour saved as an ARGB number.
@@ -95,7 +97,7 @@ fn row_data(row: &Row, selected: bool, where_line: &str, preview: Option<slint::
     }
 }
 
-/// A menu row that does something (`Sheet.option`).
+/// A menu row that does something.
 pub(crate) fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'static) -> Opt {
     Opt {
         icon,
@@ -158,7 +160,7 @@ impl App {
         let b = self.browser.borrow();
         let hits = b.searching && !b.query.is_empty();
         let where_line = if hits { "This folder" } else { "" };
-        // A folder's picked icon and colour (`dirIcon`, and `Defaults.folderColor` in the row).
+        // A folder's picked icon and colour.
         let picked_icons = self.prefs.folder_icon_map();
         let picked_colors = self.prefs.folder_color_map();
         let default_color = self.prefs.default_folder_color();
@@ -176,7 +178,7 @@ impl App {
                 if let Some(key) = picked_icons.get(&path).and_then(Value::as_str) {
                     r.icon = crate::icons::by_key(key);
                 }
-                // the folder's own colour, else the Settings default (`folderColorOrDefault`)
+                // the folder's own colour, else the Settings default
                 if let Some(color) = picked_colors.get(&path).and_then(Value::as_i64) {
                     r.tint = Tint::Rgb(color as u32 & 0x00FF_FFFF);
                 } else if default_color != 0 {
@@ -305,7 +307,6 @@ impl App {
             && b.arc.is_none()
     }
 
-    /// `toast`.
     pub(crate) fn toast(&self, text: &str) {
         let id = self.toast_gen.get() + 1;
         self.toast_gen.set(id);
@@ -322,11 +323,17 @@ impl App {
 
     // ---- loading ------------------------------------------------------------------------------
 
-    /// `loadDir`: show `dir`. The engine lists it on a worker thread.
+    /// Show `dir`. The engine lists it on a worker thread.
     pub(crate) fn load_dir(&self, dir: PathBuf, keep_selection: bool) {
-        // Leaving an archive by any route closes its editing session (Java loadDir).
+        // Leaving an archive by any route closes its editing session.
         let in_archive = self.browser.borrow().arc.is_some();
-        let moving = in_archive || self.browser.borrow().cwd != dir;
+        let (moving, back) = {
+            let b = self.browser.borrow();
+            (
+                in_archive || b.cwd != dir,
+                in_archive || b.cwd.starts_with(&dir),
+            )
+        };
         if in_archive {
             self.close_session();
             self.ui.set_arc_bar_shown(false);
@@ -343,7 +350,7 @@ impl App {
             // Another folder: the rows on screen fade out while it is read, and are replaced out
             // of sight in `scan_done`. (Drawing the old rows again here, and the new folder's
             // ".." row over them, is what made opening a folder jump twice.)
-            self.ui.invoke_list_fade_out();
+            self.ui.invoke_list_fade_out(if back { -1 } else { 1 });
         } else {
             self.render_rows();
         }
@@ -355,6 +362,25 @@ impl App {
             let result = kiln_bridge::call("scan", &json!([path, all, hidden]), 0);
             let _ = slint::invoke_from_event_loop(move || {
                 app_do(|app| app.scan_done(generation, &result));
+            });
+        });
+    }
+
+    /// Move the list to other rows with the same fade and slide as a folder change: the rows on
+    /// screen fade out toward `dir` (1 deeper, -1 back), `show` swaps in the new ones out of sight,
+    /// and they fade in from that side. With animations off it simply runs `show`.
+    pub(crate) fn swap_rows(&self, dir: i32, show: impl FnOnce(&App) + 'static) {
+        let scale = self.ui.global::<Theme>().get_anim_scale();
+        if scale <= 0.0 {
+            show(self);
+            return;
+        }
+        self.ui.invoke_list_fade_out(dir);
+        let wait = Duration::from_millis((SWAP_OUT_MS * scale) as u64 + 15);
+        Timer::single_shot(wait, move || {
+            app_do(|app| {
+                show(app);
+                app.ui.invoke_list_fade_in();
             });
         });
     }
@@ -397,7 +423,7 @@ impl App {
 
     // ---- what taps do -------------------------------------------------------------------------
 
-    /// `onRowClick`. The index is into the rows, or -1 for the ".." row.
+    /// The index is into the rows, or -1 for the ".." row.
     fn row_clicked(&self, index: i32) {
         let (key, kind, selecting, pending) = {
             let b = self.browser.borrow();
@@ -433,7 +459,7 @@ impl App {
         }
     }
 
-    /// A long press selects a row (`setOnItemLongClickListener`).
+    /// A long press selects a row.
     fn row_long_pressed(&self, index: i32) {
         let key = {
             let b = self.browser.borrow();
@@ -458,14 +484,14 @@ impl App {
 
     // ---- the "more" menu ---------------------------------------------------------------------
 
-    /// `showMenu`: a dialog with no title and one option row per entry.
+    /// A dialog with no title and one option row per entry.
     pub(crate) fn show_menu(&self) {
         let mut spec = Spec::new("");
         spec.options = self.menu_options();
         self.show_dialog(spec);
     }
 
-    /// The rows `showMenu` builds for a folder: with something selected, or without.
+    /// The menu rows for a folder: with something selected, or without.
     fn menu_options(&self) -> Vec<Opt> {
         let b = self.browser.borrow();
         if b.arc.is_some() {
@@ -523,7 +549,7 @@ impl App {
         out
     }
 
-    /// `M_ALL_FILES` and `M_HIDDEN`: flip the setting, keep it, read the folder again.
+    /// And `M_HIDDEN`: flip the setting, keep it, read the folder again.
     fn menu_toggle(&self, hidden: bool) {
         let (key, on, cwd) = {
             let mut b = self.browser.borrow_mut();
@@ -540,13 +566,13 @@ impl App {
         self.load_dir(cwd, false);
     }
 
-    /// `M_REFRESH`: read the folder again, keeping the selection.
+    /// Read the folder again, keeping the selection.
     fn menu_refresh(&self) {
         let cwd = self.browser.borrow().cwd.clone();
         self.load_dir(cwd, true);
     }
 
-    /// `M_PLAIN`: open the selected encrypted set as an ordinary folder.
+    /// Open the selected encrypted set as an ordinary folder.
     fn menu_plain_set(&self) {
         let dir = {
             let b = self.browser.borrow();
@@ -557,7 +583,7 @@ impl App {
         }
     }
 
-    /// `onLeft`: leave selection, or go back; at home the mark only pulses (About comes later).
+    /// Leave selection, or go back; at home the mark only pulses (About comes later).
     fn left_clicked(&self) {
         let (selecting, home) = {
             let b = self.browser.borrow();
@@ -575,9 +601,8 @@ impl App {
         }
     }
 
-    /// `onBackPressed`.
     pub(crate) fn on_back(&self) {
-        // A dialog is a window of its own in the Java: Back closes it first.
+        // A dialog is closed by Back first.
         // The progress sheet is modal: Back does nothing while it is up.
         if self.ui.get_prog_shown() {
             return;
@@ -618,7 +643,7 @@ impl App {
             self.close_settings();
             return;
         }
-        // The bookmarks drop-down is a window of its own in the Java: Back closes it first.
+        // The bookmarks drop-down is closed by Back first.
         if self.ui.get_marks_shown() {
             self.ui.set_marks_shown(false);
             return;
@@ -679,7 +704,6 @@ impl App {
         self.set_sort(key, asc);
     }
 
-    /// `saveSort`.
     fn set_sort(&self, key: SortKey, asc: bool) {
         self.prefs.set_int("sort_key", key.code());
         self.prefs.set_bool("sort_asc", asc);
@@ -689,7 +713,7 @@ impl App {
         self.render_chrome();
     }
 
-    /// "+ New" hides while the list scrolls down and shows again on the way up (`onScroll`).
+    /// "+ New" hides while the list scrolls down and shows again on the way up.
     fn list_scrolled(&self, y: f32) {
         let last = self.scroll_last.get();
         let hide = if y <= 0.0 {
@@ -709,7 +733,7 @@ impl App {
     }
 }
 
-/// An I/O error as the Java shows it: the system's text, without Rust's " (os error N)".
+/// An I/O error, without Rust's " (os error N)".
 pub(crate) fn io_text(e: &std::io::Error) -> String {
     let mut text = e.to_string();
     if let Some(i) = text.find(" (os error") {
@@ -719,7 +743,7 @@ pub(crate) fn io_text(e: &std::io::Error) -> String {
 }
 
 impl App {
-    /// `newSheet`: what the "+ New" button opens.
+    /// What the "+ New" button opens.
     pub(crate) fn show_new_sheet(&self) {
         let mut spec = Spec::new("New");
         spec.options = vec![
@@ -734,7 +758,6 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `newFolderHere` (the Priv branch for protected folders comes with Phase C).
     fn new_folder_here(&self) {
         self.name_sheet("New folder", "", "Create", |app, name| {
             let target = app.browser.borrow().cwd.join(name);
@@ -749,7 +772,7 @@ impl App {
         });
     }
 
-    /// The "Text file" row of `newSheet`.
+    /// The "Text file" row of the New sheet.
     fn new_text_file(&self) {
         self.name_sheet("New text file", "untitled.txt", "Create", |app, name| {
             let target = app.browser.borrow().cwd.join(name);
@@ -764,7 +787,6 @@ impl App {
         });
     }
 
-    /// `renameSheet` (the Priv branch for protected folders comes with Phase C).
     fn rename_selected(&self) {
         let old = {
             let b = self.browser.borrow();
@@ -793,8 +815,8 @@ impl App {
         });
     }
 
-    /// `M_ICON`: pick the icon and colour of the one selected folder. The selection is cleared
-    /// first, as in the Java.
+    /// Pick the icon and colour of the one selected folder. The selection is cleared
+    /// first.
     fn pick_selected_icon(&self) {
         let (path, name) = {
             let b = self.browser.borrow();
@@ -810,7 +832,7 @@ impl App {
         self.icon_picker(&path, &name, true, App::render_rows);
     }
 
-    /// `MainActivity.iconPicker`: open the folder icon sheet for `path`. With `colors` a row of
+    /// Open the folder icon sheet for `path`. With `colors` a row of
     /// colour swatches comes first (folders in the list, not bookmarks). `done` runs after a
     /// change, so the list behind the sheet can follow.
     pub(crate) fn icon_picker(
@@ -907,7 +929,7 @@ impl App {
         self.ui.set_pick_shown(false);
     }
 
-    /// The selection bar (`MainActivity.buildUi`): 0 Copy, 1 Move, 2 Delete, 3 Pack.
+    /// The selection bar: 0 Copy, 1 Move, 2 Delete, 3 Pack.
     fn bar_clicked(&self, index: i32) {
         match index {
             0 => self.set_clip(false),
@@ -917,7 +939,7 @@ impl App {
         }
     }
 
-    /// `setClip`: hold the selected items, to paste them in another folder.
+    /// Hold the selected items, to paste them in another folder.
     fn set_clip(&self, mv: bool) {
         {
             let mut b = self.browser.borrow_mut();
@@ -1004,7 +1026,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `runTransfer`: copy or move under the chosen policy, with a progress sheet and Cancel.
+    /// Copy or move under the chosen policy, with a progress sheet and Cancel.
     fn run_transfer(&self, srcs: Vec<String>, dest: String, mv: bool, policy: &'static str) {
         let heading = if mv { "Moving..." } else { "Copying..." };
         let jobs = self.jobs();
@@ -1019,7 +1041,7 @@ impl App {
         );
     }
 
-    /// The end of `runTransfer`: say what happened, let go of the items, read the folder again.
+    /// Say what happened, let go of the items, read the folder again.
     fn transfer_done(&self, mv: bool, result: &Value) {
         self.browser.borrow_mut().clip.clear();
         let text = result["message"].as_str().unwrap_or_default();
@@ -1035,8 +1057,8 @@ impl App {
         self.reload_here();
     }
 
-    /// `deleteSelected`: into the recycle bin or for good, as the Delete setting and the files
-    /// allow (the Priv branch for protected folders comes with Phase C).
+    /// Into the recycle bin or for good, as the Delete setting and the files
+    /// allow.
     fn delete_selected(&self) {
         let (cwd, keys) = {
             let b = self.browser.borrow();
@@ -1086,7 +1108,7 @@ impl App {
         }
     }
 
-    /// `deleteForGood`: confirm, then delete.
+    /// Confirm, then delete.
     fn delete_for_good(&self, victims: Vec<PathBuf>, what: &str, warning: &str) {
         let paths: Vec<String> = victims
             .iter()
@@ -1111,7 +1133,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `binRoots`: the storages that each keep a recycle bin, Internal storage and any mounted
+    /// The storages that each keep a recycle bin, Internal storage and any mounted
     /// SD card or drive.
     fn bin_roots(&self) -> Vec<PathBuf> {
         self.refresh_volumes(false);
@@ -1121,7 +1143,7 @@ impl App {
         roots
     }
 
-    /// `toBin`: move the items into their storage's recycle bin, with a progress sheet and Cancel
+    /// Move the items into their storage's recycle bin, with a progress sheet and Cancel
     /// (it stops before the next item).
     fn to_bin(&self, victims: Vec<PathBuf>) {
         let roots = self.bin_roots();
@@ -1165,7 +1187,7 @@ impl App {
         );
     }
 
-    /// The end of `toBin`: a toast, or why not everything moved; then read the folder again.
+    /// A toast, or why not everything moved; then read the folder again.
     fn to_bin_done(&self, result: &Value) {
         let moved = result["moved"].as_i64().unwrap_or(0);
         if result["cancelled"].as_bool().unwrap_or(false) {
@@ -1187,7 +1209,7 @@ impl App {
         self.reload_here();
     }
 
-    /// `deleteForGood`'s job: `fs_delete` with a progress sheet and Cancel.
+    /// Delete for good: `fs_delete` with a progress sheet and Cancel.
     fn delete_paths(&self, paths: Vec<String>) {
         self.run_op(
             "Deleting...",
@@ -1197,7 +1219,7 @@ impl App {
         );
     }
 
-    /// The end of `deleteForGood`: say what happened, then read the folder again.
+    /// Say what happened, then read the folder again.
     fn delete_done(&self, result: &Value) {
         if result["cancelled"].as_bool().unwrap_or(false) {
             self.toast("Cancelled");
@@ -1223,7 +1245,7 @@ impl App {
 
     // ---- the recycle bin ------------------------------------------------------------------
 
-    /// `binSheet`: read every bin and count what is in it on a worker thread, then show the list.
+    /// Read every bin and count what is in it on a worker thread, then show the list.
     pub(crate) fn bin_sheet(&self) {
         let roots = self.bin_roots();
         std::thread::spawn(move || {
@@ -1241,7 +1263,7 @@ impl App {
         });
     }
 
-    /// `showBin`: one row per item, then Close and Empty. Tapping a row opens that item.
+    /// One row per item, then Close and Empty. Tapping a row opens that item.
     fn show_bin(&self, all: Vec<trash::Entry>, total: u64) {
         let mut spec = Spec::new("Recycle bin");
         if all.is_empty() {
@@ -1300,7 +1322,7 @@ impl App {
         (!text.is_empty()).then(|| text.into_owned())
     }
 
-    /// `Fmt.size` of a byte count.
+    /// Of a byte count.
     fn bytes(n: u64) -> String {
         crate::fmt::size(i64::try_from(n).unwrap_or(i64::MAX))
     }
@@ -1310,7 +1332,7 @@ impl App {
         crate::fmt::plural(i64::try_from(n).unwrap_or(i64::MAX), "item", "items")
     }
 
-    /// `binItem`: restore one item or delete it for good. Back and Cancel return to the list.
+    /// Restore one item or delete it for good. Back and Cancel return to the list.
     fn bin_item(&self, entry: trash::Entry) {
         let size = Self::bytes(entry.size.unwrap_or(0));
         let when = crate::fmt::date(entry.when, self.offset_at(entry.when));
@@ -1336,7 +1358,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `Trash.restore` on a worker thread, its result back on the UI thread.
+    /// On a worker thread, its result back on the UI thread.
     fn restore_entry(entry: trash::Entry) {
         std::thread::spawn(move || {
             let to = trash::restore(&entry);
@@ -1383,7 +1405,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `Trash.purge` with the "Deleting..." sheet. As in the Java, Cancel is offered but the one
+    /// With the "Deleting..." sheet. Cancel is offered but the one
     /// purge is not interrupted.
     fn purge_entry(&self, entry: trash::Entry) {
         self.run_op(
@@ -1426,7 +1448,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// Empty the bin: `Trash.purge` for each item, with a progress sheet and Cancel (it stops
+    /// Empty the bin: purge each item, with a progress sheet and Cancel (it stops
     /// before the next item).
     fn empty_bin(&self, all: Vec<trash::Entry>) {
         self.run_op(

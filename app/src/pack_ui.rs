@@ -1,4 +1,4 @@
-//! The Pack sheets (`MainActivity.packDialog`, `runPack`, `packResult`): the form, the run behind
+//! The Pack sheets: the form, the run behind
 //! the progress sheet, and the result sheet. The engine's result line is read by hand, because the
 //! app crate has no regex.
 
@@ -18,7 +18,7 @@ pub(crate) struct Open {
     sources: Vec<PathBuf>,
 }
 
-/// One pack to run (the arguments of `runPack`).
+/// One pack to run.
 #[derive(Clone)]
 struct PackJob {
     sources: Vec<PathBuf>,
@@ -38,7 +38,6 @@ fn file_name(path: &Path) -> String {
         .into_owned()
 }
 
-/// `Fmt.stripExt`.
 fn strip_ext(name: &str) -> String {
     match name.rfind('.') {
         Some(i) if i > 0 => name[..i].to_string(),
@@ -66,7 +65,7 @@ impl App {
         });
     }
 
-    /// `packDialog`: the form for the selected items.
+    /// The form for the selected items.
     pub(crate) fn pack_selected(&self) {
         let (cwd, sources, base) = {
             let b = self.browser.borrow();
@@ -93,7 +92,7 @@ impl App {
         ui.set_pack_where_error(SharedString::new());
         ui.set_pack_pw1_error(SharedString::new());
         ui.set_pack_pw2_error(SharedString::new());
-        ui.set_pack_enc(true);
+        ui.set_pack_enc(false);
         ui.set_pack_show_pw(false);
         ui.set_pack_store(false);
         ui.set_pack_each(false);
@@ -103,8 +102,8 @@ impl App {
         ui.set_pack_shown(true);
     }
 
-    /// The `sync` runnable of `packDialog`: the name's ".kiln" and the note follow the boxes. (The
-    /// Java cuts four characters, so "x.kiln" becomes "x." there; it is ported as is.)
+    /// The name's ".kiln" and the note follow the boxes. (It cuts four characters, so "x.kiln"
+    /// becomes "x.".)
     fn pack_options_changed(&self) {
         let ui = &self.ui;
         let (each, enc) = (ui.get_pack_each(), ui.get_pack_enc());
@@ -146,7 +145,7 @@ impl App {
         self.ui.set_pack_res_shown(false);
     }
 
-    /// "Create": check the fields in the Java's order, then ask about an existing name or run.
+    /// "Create": check the fields, then ask about an existing name or run.
     fn pack_create(&self) {
         let ui = &self.ui;
         let name = ui.get_pack_name().trim().to_string();
@@ -214,7 +213,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `runPack`: the engine's `pack` behind the progress sheet.
+    /// The engine's `pack` behind the progress sheet.
     fn run_pack(&self, job: PackJob) {
         let items: Vec<String> = job
             .sources
@@ -240,7 +239,6 @@ impl App {
         );
     }
 
-    /// The end of `runPack`.
     fn pack_done(&self, job: &PackJob, result: &Value) {
         let message = result["message"].as_str().unwrap_or_default();
         if result["ok"].as_bool().unwrap_or(false) {
@@ -257,7 +255,7 @@ impl App {
     }
 }
 impl App {
-    /// `packResult`: the head, the numbers read from the engine's line, and the detail rows.
+    /// The head, the numbers read from the engine's line, and the detail rows.
     fn show_pack_result(&self, job: &PackJob, msg: &str, deleted: Option<i64>, failed: i64) {
         let ui = &self.ui;
         let icon = if job.separate {
@@ -361,7 +359,7 @@ struct Stats {
     seconds: String,
 }
 
-/// The regex of `packResult`, by hand.
+/// The numbers of the engine's result line, read by hand (the app has no regex crate).
 fn parse_stats(msg: &str) -> Option<Stats> {
     let digits = msg.chars().take_while(char::is_ascii_digit).count();
     let count: u64 = msg[..digits].parse().ok()?;

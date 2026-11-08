@@ -524,7 +524,7 @@ fn relax_file_uri_policy(env: &mut JNIEnv<'_>) -> JniResult<()> {
 }
 
 /// A URI for the file that other apps can read: `content://media/external/file/<id>` from
-/// `MediaStore.Files`, found by `_data`. When the media scanner has no row for it (or the query
+/// Found by `_data`. When the media scanner has no row for it (or the query
 /// fails) it is `file://` instead, after relaxing StrictMode; some receiving apps cannot read that.
 /// The result is a local reference: use it inside the same `with_env` call.
 
@@ -602,7 +602,7 @@ fn mime_of(env: &mut JNIEnv<'_>, ext: &str) -> JniResult<Option<String>> {
     char_seq(env, &mime).map(Some)
 }
 
-/// `viewIntent`: `ACTION_VIEW` (or `ACTION_EDIT`) for the file's URI and type, with the read grant
+/// `ACTION_VIEW` (or `ACTION_EDIT`) for the file's URI and type, with the read grant
 /// (and the write grant for edit) also given through the `ClipData`.
 fn view_intent<'a>(
     env: &mut JNIEnv<'a>,
@@ -656,7 +656,7 @@ fn view_intent<'a>(
 }
 
 /// `pm.queryIntentActivities(viewIntent, MATCH_DEFAULT_ONLY)`, without Kiln itself and without
-/// repeated packages (the loop of `appChooser`).
+/// repeated packages.
 fn apps_for(
     env: &mut JNIEnv<'_>,
     activity: &GlobalRef,
@@ -723,7 +723,7 @@ fn apps_for(
     Ok(apps)
 }
 
-/// `launch` (one app, `setPackage`) or the "More options..." row (`Intent.createChooser`).
+/// `launch` (one app, `setPackage`) or the "More options..." row.
 /// An `ActivityNotFoundException` comes back as an error.
 fn launch(
     env: &mut JNIEnv<'_>,
@@ -1136,7 +1136,7 @@ impl Host for AndroidHost {
     }
 }
 
-// ---- thumbnails (`Thumbs.load`) ----------------------------------------------------------------
+// ---- thumbnails ----------------------------------------------------------------
 
 const FILE_SIG: &str =
     "(Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;";
@@ -1218,8 +1218,8 @@ fn sample_for(env: &mut JNIEnv<'_>, bounds: &JObject<'_>, px: i32) -> JniResult<
     Ok(sample_size(width, height, px))
 }
 
-/// `MediaMetadataRetriever`: the cover art of a song, or a frame one second into a video. The
-/// retriever is always released, as the Java does in `finally`.
+/// The cover art of a song, or a frame one second into a video. The
+/// retriever is always released in `finally`.
 fn retriever_pixels(
     env: &mut JNIEnv<'_>,
     path: &str,

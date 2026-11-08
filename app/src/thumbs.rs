@@ -1,8 +1,8 @@
-//! Thumbnail previews without any view code (`Thumbs.java`): which files get one, the size to
+//! Thumbnail previews without any view code: which files get one, the size to
 //! decode at, a bounded cache of the results and the two worker threads that decode them.
 //!
 //! The phone does the decoding ([`ThumbDecoder`], implemented in the platform crate with
-//! `BitmapFactory` and `MediaMetadataRetriever`); everything else here runs anywhere, so it is
+//! And `MediaMetadataRetriever`); everything else here runs anywhere, so it is
 //! tested here. `thumbs_ui.rs` puts the results on screen.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -10,7 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
-/// `Thumbs.IMAGE_MAX`: a picture bigger than this (in bytes) gets no preview.
+/// A picture bigger than this (in bytes) gets no preview.
 pub const IMAGE_MAX: i64 = 15_000_000;
 /// The size a preview is decoded at, in dp (`Ui.dp(c, 96)`).
 const PREVIEW_DP: f32 = 96.0;
@@ -23,7 +23,7 @@ const AUDIO_EXT: &[&str] = &[
 ];
 const VIDEO_EXT: &[&str] = &["mp4", "mkv", "webm", "3gp", "mov", "avi", "m4v", "ts"];
 
-/// The kinds of file that get a preview (`Thumbs.previewable`): code and other files only get icons.
+/// The kinds of file that get a preview: code and other files only get icons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThumbKind {
     /// The picture itself.
@@ -34,7 +34,7 @@ pub enum ThumbKind {
     Video,
 }
 
-/// `Thumbs.kindOf`, for the kinds that can be previewed. `ext` is the extension without the dot.
+/// For the kinds that can be previewed. `ext` is the extension without the dot.
 pub fn kind_of(ext: &str) -> Option<ThumbKind> {
     let is = |list: &[&str]| list.iter().any(|e| e.eq_ignore_ascii_case(ext));
     if is(IMAGE_EXT) {
@@ -59,8 +59,8 @@ pub fn px_for(density: f32) -> u32 {
     (PREVIEW_DP * density).round().max(1.0) as u32
 }
 
-/// `inSampleSize` for a picture of `width` x `height`: halve while both sides stay at least `px`
-/// (as `Thumbs.load` does), and further while the result would still be over [`MAX_PIXELS`].
+/// For a picture of `width` x `height`: halve while both sides stay at least `px`
+/// and further while the result would still be over [`MAX_PIXELS`].
 pub fn sample_size(width: i32, height: i32, px: i32) -> i32 {
     let px = px.max(1);
     let mut s: i32 = 1;
@@ -89,7 +89,7 @@ pub trait ThumbDecoder: Send + Sync {
 }
 
 /// What a preview belongs to. The time and size are the ones the folder scan saw, so a file that
-/// changed is a different key (the Java's `path|lastModified`), and so is another decode size.
+/// changed is a different key, and so is another decode size.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
     pub path: PathBuf,
@@ -261,7 +261,7 @@ impl Pool {
     }
 
     /// Say what is wanted now: the jobs that have not started and whose key is not in `visible`
-    /// are dropped (their rows were scrolled away; the Java skips a job whose row was reused), and
+    /// are dropped, and
     /// `fresh` is queued. Returns the keys that were dropped.
     pub fn retarget(&self, visible: &HashSet<Key>, fresh: Vec<Job>) -> Vec<Key> {
         let mut queue = self

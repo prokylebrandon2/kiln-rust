@@ -2,11 +2,11 @@ import { ArcTile } from "components.slint";
 import { FcRow } from "components.slint";
 export { ArcTile, FcRow }
 
-// The main window (MainActivity.buildUi()): the top bar, the search row, the rule under them, the
+// The main window: the top bar, the search row, the rule under them, the
 // warning banner, the body (the info strip behind the file list, the file list, the refresh
 // circle, the empty-folder line, the "+ New" button, the selection bar and the opaque permission
 // view), the bookmarks drop-down, the sort sheet, a message sheet and a toast layer. The menus come
-// in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
+//
 
 import { Theme } from "theme.slint";
 import { DetailRow, Icon, KButton, KCheck, KDetailCard, KFab, KMeter, KProgressBar, KSheet, KSheetOption, KSheetRadio, KSheetText, KStatTile, KTextField, KTile, KToast, KTopBar, PressArea, KMark } from "components.slint";
@@ -130,7 +130,7 @@ component KPickCell inherits Rectangle {
 export { BenchRow, CheckRow, DetailRow, MarkRow, OpenWithRow, RowData, SettingsState, Theme }
 
 
-/// A text field with the red line under it that `EditText.setError` gives in the Java. Typing
+/// A text field with the red line under it that marks an invalid entry. Typing
 /// clears the line.
 component KFormField inherits VerticalLayout {
     in property <string> placeholder;
@@ -154,7 +154,7 @@ component KFormField inherits VerticalLayout {
     }
 }
 
-/// One option row of the dialog sheet (`Sheet.option`); an empty icon means no tile.
+/// One option row of the dialog sheet; an empty icon means no tile.
 export struct DlgOption {
     icon: string,
     label: string,
@@ -214,11 +214,11 @@ export component MainWindow inherits Window {
     in property <bool> fab-shown: false;
     in property <string> toast-text;
     in property <bool> toast-shown: false;
-    /// MainActivity.message(heading, body): a sheet with the text and one filled "OK" button.
+    /// A sheet with the text and one filled "OK" button.
     in property <bool> sheet-shown: false;
     in property <string> sheet-title;
     in property <string> sheet-body;
-    /// The dialog sheet (Sheet.java): a title, a line of text, an optional text field, buttons.
+    /// The dialog sheet: a title, a line of text, an optional text field, buttons.
     in property <bool> dlg-shown: false;
     in property <string> dlg-title;
     in property <string> dlg-body;
@@ -237,7 +237,7 @@ export component MainWindow inherits Window {
     in property <[DlgOption]> dlg-options;
     /// The options are radio rows (Sheet.radio) instead of tiles.
     in property <bool> dlg-radio: false;
-    /// The progress sheet (MainActivity.ProgressUi): a title, the file line, the percent and a bar.
+    /// The progress sheet: a title, the file line, the percent and a bar.
     /// The percent is empty and the bar indeterminate until the first report; Cancel is left out
     /// when `prog-cancellable` is false and greys out when `prog-cancel-enabled` is false.
     in property <bool> prog-shown: false;
@@ -249,7 +249,7 @@ export component MainWindow inherits Window {
     in property <bool> prog-cancellable: true;
     in property <bool> prog-cancel-enabled: true;
     property <[string]> prog-no-buttons: [];
-    /// The folder icon picker (MainActivity.iconPicker): a title, an optional row of colour swatches
+    /// The folder icon picker: a title, an optional row of colour swatches
     /// (folders in the list, not bookmarks), then the icons, 4 to a row.
     in property <bool> pick-shown: false;
     in property <string> pick-title;
@@ -267,7 +267,7 @@ export component MainWindow inherits Window {
     in property <[PropRow]> props-rows;
     in property <bool> props-has-nomedia: false;
     in-out property <bool> props-nomedia: false;
-    /// The Pack sheet (MainActivity.packDialog): the title, the fields (Rust sets the start text
+    /// The Pack sheet: the title, the fields (Rust sets the start text
     /// and reads them when Create is tapped), a red line under each field, the boxes and a note.
     in property <bool> pack-shown: false;
     in property <string> pack-title;
@@ -279,7 +279,7 @@ export component MainWindow inherits Window {
     in-out property <string> pack-where-error;
     in-out property <string> pack-pw1-error;
     in-out property <string> pack-pw2-error;
-    in-out property <bool> pack-enc: true;
+    in-out property <bool> pack-enc: false;
     in-out property <bool> pack-show-pw: false;
     in-out property <bool> pack-store: false;
     in-out property <bool> pack-each: false;
@@ -331,7 +331,7 @@ export component MainWindow inherits Window {
     in property <bool> fc-naming: false;
     in-out property <string> fc-name;
     in-out property <string> fc-name-error;
-    /// The Pack result sheet (MainActivity.packResult): the head, three number tiles and the
+    /// The Pack result sheet: the head, three number tiles and the
     /// compression card (only when `pack-res-has-stats`), then the detail rows.
     in property <bool> pack-res-shown: false;
     in property <string> pack-res-icon: "archive";
@@ -346,7 +346,7 @@ export component MainWindow inherits Window {
     in property <float> pack-res-frac: 0;
     in property <string> pack-res-caption;
     in property <[DetailRow]> pack-res-rows;
-    /// The About sheet (MainActivity.showAbout): the chip's text and the detail rows.
+    /// The About sheet: the chip's text and the detail rows.
     in property <bool> about-shown: false;
     in property <string> about-version;
     in property <[DetailRow]> about-rows;
@@ -482,7 +482,7 @@ export component MainWindow inherits Window {
     callback dc-cancelled();
     callback bn-dismissed();
     callback stt-dismissed();
-    /// The Back key or gesture (MainActivity.onBackPressed).
+    /// The Back key or gesture.
     callback back-pressed();
 
     /// Scroll the file list to the top, or to `y` dp from it.
@@ -492,9 +492,10 @@ export component MainWindow inherits Window {
     public function scroll-list-to(y: length) {
         list.scroll-to(y);
     }
-    /// Another folder is being opened: the rows fade out; and fade in again when it is read.
-    public function list-fade-out() {
-        list.fade-out();
+    /// Another folder is opened (`dir` 1) or left (`dir` -1): the rows fade out, and fade in again
+    /// from that side when the new ones are ready.
+    public function list-fade-out(dir: int) {
+        list.fade-out(dir);
     }
     public function list-fade-in() {
         list.fade-in();
@@ -529,7 +530,7 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
-            // Not edge-to-edge: the system bars are k_bg in the Java theme, so the page starts below
+            // Not edge-to-edge: the system bars are k_bg in the theme, so the page starts below
             // them. Slint reports the bars as the safe area.
             padding-top: root.safe-area-insets.top;
             padding-bottom: root.safe-area-insets.bottom;
@@ -601,7 +602,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // body: a FrameLayout in the Java; children are stacked, the last one is on top
+            // body: the children are stacked, the last one is on top
             Rectangle {
                 vertical-stretch: 1;
                 clip: true;
@@ -1169,8 +1170,8 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Pack sheet (MainActivity.packDialog): above the dialog sheet. Name, folder and Browse, the
-    // encryption box with the password fields (only while it is ticked, like the Java), the
+    // The Pack sheet: above the dialog sheet. Name, folder and Browse, the
+    // encryption box with the password fields, the
     // options and a note. A bad field gets a red line and the sheet stays open (Rust decides).
     KSheet {
         width: 100%;
@@ -1264,7 +1265,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Extract sheet (MainActivity.extractDialog): above the Pack sheet. A line of text, the
+    // The Extract sheet: above the Pack sheet. A line of text, the
     // folder with Browse, and the box "Replace files that already exist".
     KSheet {
         width: 100%;
@@ -1308,7 +1309,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Extract result sheet (MainActivity.extractResult): above the Extract sheet. A 54 dp
+    // The Extract result sheet: above the Extract sheet. A 54 dp
     // tile with the icon, the heading and the archive's name; the numbers read from kiln's line
     // (two or three tiles); then the detail rows. OK closes it, "Open folder" goes to the folder.
     KSheet {
@@ -1389,7 +1390,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Check result sheet (MainActivity.checkResult): above the Extract result sheet. The tone is
+    // The Check result sheet: above the Extract result sheet. The tone is
     // the accent when the archive is intact and the danger colour when it is not.
     KSheet {
         width: 100%;
@@ -1480,7 +1481,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Archive info sheet (MainActivity.infoDialog): above the Check result sheet. An icon tile,
+    // The Archive info sheet: above the Check result sheet. An icon tile,
     // the name and whether it is locked; three numbers; how much the packing saved; the details.
     KSheet {
         width: 100%;
@@ -1601,7 +1602,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The folder chooser (MainActivity.pickFolder): above the Pack and Extract sheets. The path,
+    // The folder chooser: above the Pack and Extract sheets. The path,
     // then a 320 dp list. "New folder..." swaps the list for a name field (the dialog sheet lies
     // below this one), and Cancel there goes back to the list.
     KSheet {
@@ -1653,7 +1654,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The Pack result sheet (MainActivity.packResult): above the Pack sheet. A 54 dp tile with the
+    // The Pack result sheet: above the Pack sheet. A 54 dp tile with the
     // icon, the heading and the archive's name; then, when kiln's line could be read, three number
     // tiles and the compression card; then the details and OK.
     KSheet {
@@ -1829,7 +1830,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The progress sheet (MainActivity.ProgressUi): above the dialog sheet, below the toast. Back
+    // The progress sheet: above the dialog sheet, below the toast. Back
     // and a tap outside do nothing; only Cancel acts, when there is one.
     KSheet {
         width: 100%;
@@ -1877,7 +1878,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The About sheet (MainActivity.showAbout): the mark in a 72 dp tile, "Kiln", the version chip
+    // The About sheet: the mark in a 72 dp tile, "Kiln", the version chip
     // and the tagline, then the detail card and OK.
     KSheet {
         width: 100%;

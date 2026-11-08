@@ -1,7 +1,6 @@
-//! An archive on screen (`MainActivity.openItem`, `doOpen`, `onOpened`, `guardLeave`,
-//! `saveArchive`, `discardArchive`, `withSession`, `arcTransfer`, `arcRename`, the archive menu and
-//! bottom bar). The state is in [`crate::arc`]; Extract, Check and Info are in `extract_ui.rs`.
-//!
+//! An archive on screen: opening it, editing it in a session, saving or discarding the changes,
+//! the archive menu and the bottom bar. The state is in [`crate::arc`]; Extract, Check and Info
+//! are in `extract_ui.rs`.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -79,12 +78,12 @@ impl App {
         self.offset_at(now)
     }
 
-    /// `openItem`: ask for the password of a set or an encrypted archive, then open it.
+    /// Ask for the password of a set or an encrypted archive, then open it.
     pub(crate) fn open_row(&self, key: &str) {
         self.open_row_then(key, None);
     }
 
-    /// `M_EXTRACT`: open the one selected archive, then show its Extract form.
+    /// Open the one selected archive, then show its Extract form.
     pub(crate) fn menu_extract_selected(&self) {
         let key = {
             let b = self.browser.borrow();
@@ -114,7 +113,7 @@ impl App {
         }
     }
 
-    /// `askPassword`: a sheet with the password field and "Show password".
+    /// A sheet with the password field and "Show password".
     pub(crate) fn ask_password(&self, name: &str, done: impl FnOnce(&App, String) + 'static) {
         let done = Rc::new(RefCell::new(Some(done)));
         let mut spec = Spec::new(&format!("Unlock {name}"));
@@ -222,7 +221,7 @@ impl App {
             }
         }
     }
-    /// `doOpen`: read the archive's table of contents behind the progress sheet.
+    /// Read the archive's table of contents behind the progress sheet.
     pub(crate) fn do_open(&self, file: PathBuf, pw: String, after: Option<After>) {
         let heading = if pw.is_empty() {
             "Opening..."
@@ -238,7 +237,6 @@ impl App {
         );
     }
 
-    /// `onOpened`.
     fn on_opened(&self, file: PathBuf, pw: String, r: &Value, after: Option<After>) {
         if !r["ok"].as_bool().unwrap_or(false) {
             let name = file_name(&file);
@@ -275,15 +273,17 @@ impl App {
             b.set_date_offset(offset);
             b.open_arc(arc);
         }
-        self.render_rows();
         self.render_chrome();
-        self.ui.invoke_scroll_list_top();
+        self.swap_rows(1, |app| {
+            app.render_rows();
+            app.ui.invoke_scroll_list_top();
+        });
         if let Some(after) = after {
             after(self);
         }
     }
 
-    /// `closeSession`: forget the editing session of the open archive.
+    /// Forget the editing session of the open archive.
     pub(crate) fn close_session(&self) {
         let sid = {
             let mut b = self.browser.borrow_mut();
@@ -300,7 +300,7 @@ impl App {
         }
     }
 
-    /// `closeArchive`: leave the archive for the folder it was opened from.
+    /// Leave the archive for the folder it was opened from.
     pub(crate) fn close_archive(&self) {
         let current = self
             .browser
@@ -336,7 +336,7 @@ impl App {
 }
 
 impl App {
-    /// `onRowClick` inside an archive: a folder is entered, a file gets its sheet. False when no
+    /// Inside an archive: a folder is entered, a file gets its sheet. False when no
     /// archive is open.
     pub(crate) fn arc_row_clicked(&self, key: &str, kind: Option<Kind>) -> bool {
         if self.browser.borrow().arc.is_none() {
@@ -350,7 +350,7 @@ impl App {
         true
     }
 
-    /// `arcEnter`: open a folder of the archive; the one left is remembered where it was scrolled.
+    /// Open a folder of the archive; the one left is remembered where it was scrolled.
     fn arc_enter(&self, prefix: &str) {
         let y = self.ui.get_list_pos();
         {
@@ -364,12 +364,14 @@ impl App {
             }
             b.arc_rebuild();
         }
-        self.render_rows();
         self.render_chrome();
-        self.ui.invoke_scroll_list_top();
+        self.swap_rows(1, |app| {
+            app.render_rows();
+            app.ui.invoke_scroll_list_top();
+        });
     }
 
-    /// `arcBackTo`: Back to a folder of the archive, at the spot it was left.
+    /// Back to a folder of the archive, at the spot it was left.
     pub(crate) fn arc_back_to(&self, prefix: &str) {
         let y = {
             let mut b = self.browser.borrow_mut();
@@ -383,9 +385,11 @@ impl App {
             b.arc_rebuild();
             y
         };
-        self.render_rows();
         self.render_chrome();
-        self.ui.invoke_scroll_list_to(y);
+        self.swap_rows(-1, move |app| {
+            app.render_rows();
+            app.ui.invoke_scroll_list_to(y);
+        });
     }
 }
 
@@ -398,7 +402,7 @@ impl App {
             .and_then(|a| a.sid.clone())
     }
 
-    /// `applyEdit`: take what an editing call answered, and show it.
+    /// Take what an editing call answered, and show it.
     pub(crate) fn apply_edit(&self, r: &Value) {
         {
             let mut b = self.browser.borrow_mut();
@@ -428,7 +432,7 @@ impl App {
         }
     }
 
-    /// `withSession`: make sure the archive has an editing session (`begin`), then run `then`.
+    /// Make sure the archive has an editing session (`begin`), then run `then`.
     pub(crate) fn with_session(&self, then: After) {
         let (file, pw, has) = {
             let b = self.browser.borrow();
@@ -480,7 +484,7 @@ impl App {
         );
     }
 
-    /// `arcTransfer`: move or copy items inside the archive (Rename is a move with a new name).
+    /// Move or copy items inside the archive (Rename is a move with a new name).
     pub(crate) fn arc_transfer(
         &self,
         keys: Vec<String>,
@@ -507,7 +511,7 @@ impl App {
             move |_| kiln_bridge::call("transfer", &args, 0),
             move |app, r| {
                 if r["ok"].as_bool().unwrap_or(false) {
-                    // NOTE: Copy and Move inside an archive are not built, so the archive's clip (`arcClip`) is cleared here.
+                    // NOTE: Copy and Move inside an archive are not built, so the archive's clip is cleared here.
                     app.apply_edit(r);
                     return;
                 }
@@ -549,7 +553,7 @@ impl App {
         );
     }
 
-    /// `arcRename`: rename the one selected item inside the archive.
+    /// Rename the one selected item inside the archive.
     pub(crate) fn arc_rename(&self) {
         let key = {
             let b = self.browser.borrow();
@@ -591,7 +595,7 @@ impl App {
         }
     }
 
-    /// `guardLeave`: runs `then` now, or after asking what to do with unsaved changes.
+    /// Runs `then` now, or after asking what to do with unsaved changes.
     pub(crate) fn guard_leave(&self, then: After) {
         if !self.arc_dirty() {
             then(self);
@@ -632,7 +636,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `confirm`: a sheet with Cancel and one button that runs `action`.
+    /// A sheet with Cancel and one button that runs `action`.
     pub(crate) fn confirm_sheet(
         &self,
         title: &str,
@@ -660,7 +664,6 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `saveArchive`. (`Priv` is not in this build, so nothing is written back to a real place.)
     pub(crate) fn save_archive(&self, after: Option<After>) {
         let (file, sid) = self.arc_file_and_sid();
         let Some(sid) = sid else {
@@ -691,7 +694,6 @@ impl App {
         );
     }
 
-    /// `discardArchive`.
     pub(crate) fn discard_archive(&self, after: Option<After>) {
         let (file, sid) = self.arc_file_and_sid();
         let Some(sid) = sid else {
@@ -706,7 +708,7 @@ impl App {
             "Discard",
             BtnKind::Danger,
             Box::new(move |app| {
-                // NOTE: Copy and Move inside an archive are not built, so the archive's clip (`arcClip`) is cleared here.
+                // NOTE: Copy and Move inside an archive are not built, so the archive's clip is cleared here.
                 let args = json!([sid]);
                 app.run_op(
                     "Discarding...",
@@ -736,8 +738,7 @@ impl App {
         ui.on_arc_discard_clicked(|| app_do(|app| app.discard_archive(None)));
     }
 
-    /// `showMenu`, with an archive open. (`Priv` is not in this build, so no archive is a locked
-    /// copy and Rename is always offered.)
+    /// The menu with an archive open.
     pub(crate) fn arc_menu(&self, b: &Browser) -> Vec<Opt> {
         let Some(arc) = b.arc.as_ref() else {
             return Vec::new();
@@ -786,7 +787,7 @@ impl App {
         out
     }
 
-    /// The archive's bottom bar (`renderBars` with an archive open): the "Unsaved changes" row
+    /// The archive's bottom bar: the "Unsaved changes" row
     /// and four tiles, drawn by `main.slint` over the page.
     pub(crate) fn render_arc_bar(&self, b: &Browser) {
         let ui = &self.ui;
@@ -846,7 +847,7 @@ impl App {
 }
 
 impl App {
-    /// `M_PLAIN` inside an archive: leave it and show the set as an ordinary folder. The scan
+    /// Inside an archive: leave it and show the set as an ordinary folder. The scan
     /// sets `plain_set`, which brings the banner.
     fn arc_plain(&self) {
         let dir = self.browser.borrow().arc.as_ref().map(|a| a.file.clone());

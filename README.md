@@ -156,7 +156,6 @@ extract(&archive, &ExtractOptions::new("restored"))?;
 
 ## Known limitations
 
-- **Never compiled or run.** See the warning at the top of this page.
 - **Linux only so far.** Windows and macOS code paths exist but are unverified.
 - **Compression ratio.** Worse than the original Kiln and 7-Zip on binaries (about 9.6% larger than the original), mainly because there is no x86 filter yet. Text is within 3.2% of the original.
 - **Multicore scaling is unmeasured.** All benchmarks used 2 vCPUs. A 4/8/16-thread curve hasn't been run (see [`docs/SCALING.md`](docs/SCALING.md)).
@@ -165,7 +164,7 @@ extract(&archive, &ExtractOptions::new("restored"))?;
 - **Extraction is not transactional.** If it fails midway, files already completed stay on disk.
 - **Fuzzing.** Fuzz targets exist but have never been run. That means no findings, not proof the code is bug-free.
 - **Missing features:** encryption, append/update, archive repair.
-- **Android app.** An experimental shell app lives in [`android/`](android/), but it has never been built. Expect to adjust SDK, NDK and Gradle versions.
+- **Android app.** The file manager in [`app/`](app/) (Slint UI) is built by `.github/workflows/build.yml`.
 
 ## Documentation
 
@@ -178,7 +177,6 @@ extract(&archive, &ExtractOptions::new("restored"))?;
 | [`docs/SCALING.md`](docs/SCALING.md)      | Method for the multicore speedup curve             |
 | [`docs/BASELINE.md`](docs/BASELINE.md)    | Measurements of the original implementation        |
 | [`docs/AUDIT.md`](docs/AUDIT.md)          | Analysis of the original Android app this rewrites |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md)      | What's planned next                                |
 
 ## Development
 

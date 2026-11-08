@@ -1,8 +1,7 @@
 //! `tool(name, arg)`: the benchmark and the self-test that Settings offers.
 //!
 //! Both answer `{ok, text, view}` (or `{ok:false, cancelled:true}`): `text` is a plain report and
-//! `view` is the same thing as data for the result sheets in `SettingsActivity`
-//! (`showBench`, `showSelfTest`). Progress events carry `{frac, done, total, file}`.
+//! `view` is the same thing as data for the result sheets. Progress events carry `{frac, done, total, file}`.
 //!
 //! * `bench`: packs and verifies the chosen file or folder with a few codecs and reports size,
 //!   ratio and time for each (the engine's own `kiln::bench`).

@@ -14,18 +14,18 @@ use crate::thumbs::ThumbDecoder;
 /// What the system tells the UI about how to look: the colour scheme and the two user scales.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
-    /// The system is in dark mode (`res/values-night` in the Java app).
+    /// The system is in dark mode.
     pub dark: bool,
-    /// Display density, 1.0 at 160 dpi (`DisplayMetrics.density`).
+    /// Display density, 1.0 at 160 dpi.
     pub density: f32,
-    /// Settings > Display > Font size (`Configuration.fontScale`); sp = dp * font_scale.
+    /// Settings > Display > Font size; sp = dp * font_scale.
     pub font_scale: f32,
 }
 
 /// A mounted removable volume: a USB drive or an SD card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Volume {
-    /// Where it is mounted (`StorageVolume.getDirectory()`).
+    /// Where it is mounted.
     pub path: PathBuf,
     /// What the phone calls it (`StorageVolume.getDescription()`, or the folder's name).
     pub label: String,
@@ -34,9 +34,9 @@ pub struct Volume {
 /// Things that happen to the app while it runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// The app came to the front (`onResume`): the right moment to look at permissions again.
+    /// The app came to the front: the right moment to look at permissions again.
     Resumed,
-    /// The app left the front (`onPause`).
+    /// The app left the front.
     Paused,
     /// Dark mode, font size, density or the like changed: read [`Host::look`] again.
     ConfigChanged,
@@ -49,7 +49,7 @@ pub enum Event {
 pub struct OpenApp {
     /// The package name, e.g. `com.example.viewer`.
     pub package: String,
-    /// What the phone calls it (`ResolveInfo.loadLabel`).
+    /// What the phone calls it.
     pub label: String,
 }
 
@@ -67,23 +67,23 @@ pub enum Incoming {
 /// Where [`Host::open_file`] sends a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenWith {
-    /// Straight to one app (`Intent.setPackage`).
+    /// Straight to one app.
     Package(String),
-    /// The system's own "Open with" list (`Intent.createChooser`, the "More options..." row).
+    /// The system's own "Open with" list (the "More options..." row).
     Chooser,
 }
 
 /// The phone, as far as the app is concerned.
 pub trait Host {
-    /// The app's cache folder (`Context.getCacheDir()`).
+    /// The app's cache folder.
     fn cache_dir(&self) -> PathBuf;
-    /// The app's private files folder (`Context.getFilesDir()`).
+    /// The app's private files folder.
     fn files_dir(&self) -> PathBuf;
-    /// The top of the phone's own storage (`Environment.getExternalStorageDirectory()`), where
+    /// The top of the phone's own storage, where
     /// the file browser starts.
     fn storage_root(&self) -> PathBuf;
-    /// How many seconds the phone's time zone is ahead of UTC at a time given in epoch seconds
-    /// (`TimeZone.getDefault().getOffset(ms)`), for the dates in the file list.
+    /// How many seconds the phone's time zone is ahead of UTC at a time given in epoch seconds,
+    /// for the dates in the file list.
     fn utc_offset(&self, epoch_seconds: i64) -> i32;
     /// The USB drives and SD cards that are plugged in and mounted, as the file browser lists them.
     /// Empty when the phone cannot say.
@@ -93,7 +93,7 @@ pub trait Host {
     fn space(&self, path: &Path) -> Option<(u64, u64)>;
     /// The version shown in crash reports and About.
     fn version_name(&self) -> String;
-    /// The build number shown in About (`PackageInfo.getLongVersionCode()`), 0 when unknown.
+    /// The build number shown in About, 0 when unknown.
     fn version_code(&self) -> i64;
     /// The current colour scheme, density and font scale.
     fn look(&self) -> Look;
@@ -101,9 +101,9 @@ pub trait Host {
     fn has_all_files_access(&self) -> bool;
     /// Open the system page where the user grants "All files access" to Kiln.
     fn open_all_files_settings(&self);
-    /// Put `text` on the system clipboard (`ClipboardManager.setPrimaryClip`).
+    /// Put `text` on the system clipboard.
     fn set_clipboard(&self, text: &str);
-    /// Close the app's screen (`Activity.finish()`).
+    /// Close the app's screen.
     fn finish(&self);
     /// Replace the handler that is told about [`Event`]s. It runs on the UI thread.
     fn set_event_handler(&self, handler: Box<dyn Fn(Event)>);
@@ -127,8 +127,8 @@ pub trait Host {
 
     // ---- opening files in other apps (the defaults are the non-Android stub) ----------------
 
-    /// The MIME type Android knows for a file extension, without the dot
-    /// (`MimeTypeMap.getMimeTypeFromExtension`), or `None` when it does not know one.
+    /// The MIME type Android knows for a file extension, without the dot, or
+    /// `None` when it does not know one.
     fn mime_for_extension(&self, _ext: &str) -> Option<String> {
         None
     }

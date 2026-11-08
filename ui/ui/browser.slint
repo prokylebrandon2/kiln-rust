@@ -1,4 +1,4 @@
-// The file list of the main screen (MainActivity's ListView, RowView and RowAdapter).
+// The file list of the main screen.
 //
 // Only the rows that are on screen are built: the list is a Flickable whose content is as tall as
 // all the rows together, and a `for` over the few rows in view places each one at its slot. Every
@@ -26,11 +26,11 @@ export struct RowData {
 
 export component KFileList inherits Rectangle {
     in property <[RowData]> rows;
-    /// The ".." row above the first row (`upShown`).
+    /// The ".." row above the first row.
     in property <bool> up-row: false;
     /// Search hits show the folder they live in on a third line.
     in property <bool> has-where: false;
-    /// Room under the last row: 10 dp, more while the bottom bar covers it (`padList`).
+    /// Room under the last row: 10 dp, more while the bottom bar covers it.
     in property <length> bottom-pad: 10px;
     /// The info strip behind the list may be pulled into view (nothing selected, access granted).
     in property <bool> pull-enabled: false;
@@ -80,10 +80,14 @@ export component KFileList inherits Rectangle {
     // rows on screen have it: it only follows `up-row` while the list is not faded out, so the
     // old rows do not jump by a row when the top bar already shows the new folder.
     in-out property <bool> faded: false;
+    // Which way the move goes: 1 deeper (a folder or an archive is opened), -1 back out. The new
+    // rows come in from that side.
+    in-out property <int> nav-dir: 1;
     property <bool> up-live: false;
-    property <length> enter-dy: root.faded ? 10px : 0px;
+    property <length> enter-dy: root.faded ? 8px : 0px;
+    property <length> enter-dx: root.faded ? root.nav-dir * 24px : 0px;
     // The biggest height the list has had, so opening the search row or a banner does not resize
-    // the rows (`listRoom`); a new width (a rotation) starts again.
+    // the rows; a new width (a rotation) starts again.
     property <length> room: 0px;
     property <length> row-h: root.rows-fit > 0 ? Math.max(24px, root.room / root.rows-fit) : probe.preferred-height;
     property <int> total: root.rows.length + (root.up-live ? 1 : 0);
@@ -106,8 +110,8 @@ export component KFileList inherits Rectangle {
         easing: ease-in-out-sine;
     }
 
-    animate enter-dy {
-        duration: root.faded ? Theme.dur(70ms) : Theme.dur(200ms);
+    animate enter-dy, enter-dx {
+        duration: root.faded ? Theme.dur(70ms) : Theme.dur(220ms);
         easing: ease-out;
     }
 
@@ -141,8 +145,9 @@ export component KFileList inherits Rectangle {
         root.visible-changed(root.first, root.shown);
     }
 
-    /// Another folder is being opened: let the rows on screen fade out.
-    public function fade-out() {
+    /// Another folder is being opened (`dir` 1) or left (`dir` -1): let the rows on screen fade out.
+    public function fade-out(dir: int) {
+        root.nav-dir = dir;
         root.faded = true;
     }
 
@@ -270,7 +275,7 @@ export component KFileList inherits Rectangle {
                 property <int> idx: self.at - (root.up-live ? 1 : 0);
                 property <bool> is-up: root.up-live && self.at == 0;
                 property <RowData> d: root.rows[self.idx];
-                x: 0px;
+                x: root.enter-dx;
                 y: root.slack + root.shift - root.over + self.at * root.row-h + root.enter-dy;
                 width: root.width;
                 height: root.row-h;

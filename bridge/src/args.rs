@@ -41,7 +41,7 @@ impl Args {
         }
     }
 
-    /// Argument `i` as a list of text. Java passes these as a JSON string like `["/a","/b"]`;
+    /// Argument `i` as a list of text. The app passes these as a JSON string like `["/a","/b"]`;
     /// a real array is accepted too.
     pub fn list(&self, i: usize) -> Vec<String> {
         let v = match self.items.get(i) {

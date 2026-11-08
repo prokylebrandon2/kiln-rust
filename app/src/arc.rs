@@ -1,6 +1,5 @@
-//! An open archive: what the file browser keeps about it while it shows the archive's inside
-//! (`MainActivity.Arc`, `Ent`, `buildArcRows`, `arcSearchRow`, `countFor`, `membersJson`), and the
-//! hand-made readers of the engine's result lines (the app crate has no regex). No view code.
+//! An open archive: what the file browser keeps about it while it shows the archive's inside, and
+//! the hand-made readers of the engine's result lines (the app crate has no regex). No view code.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,7 +9,7 @@ use serde_json::{Value, json};
 use crate::browser::{Kind, Row, Tint};
 use crate::{fmt, icons};
 
-/// One file of the archive (`MainActivity.Ent`). `k` is "+" for a new file and "~" for a renamed one.
+/// One file of the archive. `k` is "+" for a new file and "~" for a renamed one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ent {
     pub p: String,
@@ -19,7 +18,7 @@ pub struct Ent {
     pub k: String,
 }
 
-/// An archive that is open (`MainActivity.Arc`).
+/// An archive that is open.
 #[derive(Debug)]
 pub struct ArcState {
     pub file: PathBuf,
@@ -56,7 +55,7 @@ fn entries(v: &Value) -> Vec<Ent> {
 }
 
 impl ArcState {
-    /// `onOpened`: the archive an `open_archive` result describes.
+    /// The archive an `open_archive` result describes.
     pub fn from_open(file: PathBuf, password: String, home: Option<PathBuf>, r: &Value) -> Self {
         Self {
             file,
@@ -73,7 +72,7 @@ impl ArcState {
         }
     }
 
-    /// `applyEdit`: take the entries and the dirty flag of an editing call's result.
+    /// Take the entries and the dirty flag of an editing call's result.
     pub fn apply_edit(&mut self, r: &Value) {
         if r["entries"].is_array() {
             self.ents = entries(r);
@@ -103,7 +102,7 @@ impl ArcState {
 }
 
 impl ArcState {
-    /// `buildArcRows`: the folders and files directly inside `prefix`. Folders add up what is
+    /// The folders and files directly inside `prefix`. Folders add up what is
     /// below them. Dates use `offset` seconds from UTC.
     pub fn rows(&self, offset: i32) -> Vec<Row> {
         let mut dirs: HashMap<&str, (i64, i64, i64)> = HashMap::new();
@@ -140,8 +139,8 @@ impl ArcState {
         rows
     }
 
-    /// `filterLocal` inside an archive: every file whose name holds all the words (lower case),
-    /// at most 1000, each with the folder it lives in (`arcSearchRow`, the relative labels).
+    /// Inside an archive: every file whose name holds all the words (lower case),
+    /// at most 1000, each with the folder it lives in.
     pub fn search_rows(&self, words: &[String], offset: i32) -> Vec<Row> {
         let mut out = Vec::new();
         for e in &self.ents {
@@ -176,7 +175,7 @@ impl ArcState {
         out
     }
 
-    /// `arcWhere` (the relative form): where a hit lives, seen from the folder being shown.
+    /// Where a hit lives, in its relative form, seen from the folder being shown.
     fn where_label(&self, dir: &str) -> String {
         let d = format!("{dir}/");
         if !self.prefix.is_empty() && d.starts_with(self.prefix.as_str()) {
@@ -212,7 +211,7 @@ impl ArcState {
         (size, files, newest)
     }
 
-    /// `countFor`: how many files the keys cover; no keys means all of them.
+    /// How many files the keys cover; no keys means all of them.
     pub fn count_for(&self, keys: &[String]) -> usize {
         if keys.is_empty() {
             return self.ents.len();
@@ -231,7 +230,7 @@ impl ArcState {
             .count()
     }
 
-    /// The size of all files together, and how many folders hold them (`infoDialog`).
+    /// The size of all files together, and how many folders hold them.
     pub fn raw_and_folders(&self) -> (i64, usize) {
         let mut raw = 0;
         let mut folders: HashSet<&str> = HashSet::new();
@@ -276,7 +275,7 @@ fn file_row(e: &Ent, title: &str, offset: i32) -> Row {
     }
 }
 
-/// `membersJson`: the keys as the engine wants them (`[{"p": path, "dir": bool}]`).
+/// The keys as the engine wants them (`[{"p": path, "dir": bool}]`).
 pub fn members_json(keys: &[String]) -> String {
     let list: Vec<Value> = keys
         .iter()
@@ -289,7 +288,7 @@ pub fn members_json(keys: &[String]) -> String {
     Value::Array(list).to_string()
 }
 
-/// `Fmt.stripExt`: "a.kiln" is "a"; a name that starts with its only dot keeps it.
+/// "a.kiln" is "a"; a name that starts with its only dot keeps it.
 pub fn strip_ext(name: &str) -> String {
     match name.rfind('.') {
         Some(i) if i > 0 => name[..i].to_string(),
@@ -335,7 +334,7 @@ fn number_before(msg: &str, at: usize) -> Option<u64> {
     msg[digits..at].parse().ok()
 }
 
-/// `extractResult`'s regex, `(\d+) file\(s\)(?: from [^\n]+?)?(?:, ([^\n]+?))? in ([\d.]+)s`:
+/// The engine's extract result line, `(\d+) file\(s\)(?: from [^\n]+?)?(?:, ([^\n]+?))? in ([\d.]+)s`:
 /// "extracted 2 file(s), 88 B in 0.0s - ..." or "extracted 5 file(s) from /p in 0.4s - ...".
 pub fn parse_extract(msg: &str) -> Option<Line> {
     const KEY: &str = " file(s)";
@@ -376,7 +375,7 @@ fn check_with_size(msg: &str) -> Option<Line> {
     })
 }
 
-/// `checkResult`'s two regexes: "12 file(s), 3.4 MB in 0.8s" (with a size), and "14 file(s) from
+/// The two forms of the check result line: "12 file(s), 3.4 MB in 0.8s" (with a size), and "14 file(s) from
 /// <path> in 5.5s" (no size: `size` is `None`).
 pub fn parse_check(msg: &str) -> Option<Line> {
     const FROM: &str = " file(s) from ";

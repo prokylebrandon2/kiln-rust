@@ -41,12 +41,12 @@ const ST_CHECK: i32 = 17;
 const ST_JOBS: i32 = 18;
 const ST_CACHE: i32 = 19;
 
-/// `Defaults.ROWS_MIN`, `ROWS_MAX` and `ROWS_DEFAULT`.
+/// `ROWS_MAX` and `ROWS_DEFAULT`.
 const ROWS_MIN: i32 = 10;
 const ROWS_MAX: i32 = 24;
 const ROWS_DEFAULT: i32 = 16;
 
-/// `Defaults.ANIM_NAMES`, `DELETE_NAMES` and `PATH_NAMES`.
+/// `DELETE_NAMES` and `PATH_NAMES`.
 const ANIM_NAMES: [&str; 4] = ["Off", "Fast", "Normal", "Relaxed"];
 const DELETE_NAMES: [&str; 3] = ["Ask", "Recycle bin", "Permanently"];
 const PATH_NAMES: [&str; 2] = ["Relative", "Absolute"];
@@ -61,11 +61,11 @@ const MAX_BACKUP: u64 = 4 << 20;
 /// What the Settings screen remembers between taps.
 #[derive(Default)]
 pub(crate) struct Open {
-    /// Bytes in the cache, once counted (`cacheBytes`).
+    /// Bytes in the cache, once counted.
     cache: Option<u64>,
     /// The folder the last backup was saved to or loaded from.
     last_dir: Option<PathBuf>,
-    /// How the last root check went: `Ok` or the reason (`Priv.rootOk`, `rootNote`).
+    /// How the last root check went: `Ok` or the reason.
     root: Option<Result<(), String>>,
 }
 
@@ -82,7 +82,7 @@ impl App {
         ui.on_stt_dismissed(|| app_do(|app| app.ui.set_stt_shown(false)));
     }
 
-    /// `Defaults.jobs`: how many workers the heavy calls may use, 0 for every core.
+    /// How many workers the heavy calls may use, 0 for every core.
     pub(crate) fn jobs(&self) -> usize {
         self.prefs.int("jobs", 0).clamp(0, 8) as usize
     }
@@ -141,7 +141,7 @@ impl App {
 
     // ---- drawing the page --------------------------------------------------------------------
 
-    /// `render`: the page from the settings.
+    /// The page from the settings.
     fn render_settings(&self) {
         let p = &self.prefs;
         let mode = p.int("priv_mode", 0).clamp(0, 2);
@@ -243,7 +243,7 @@ impl App {
         self.render_settings();
     }
 
-    /// One "open with" choice (`Defaults.clear`), or all of them with -1 (`clearAll`).
+    /// One "open with" choice, or all of them with -1.
     fn st_reset(&self, index: i32) {
         match usize::try_from(index) {
             Ok(i) => {
@@ -258,7 +258,7 @@ impl App {
 
     // ---- choices -----------------------------------------------------------------------------
 
-    /// A sheet of radio rows (`Sheet.radio`) with Cancel. `pick` stores the row that was tapped.
+    /// A sheet of radio rows with Cancel. `pick` stores the row that was tapped.
     fn radio_sheet(
         &self,
         title: &str,
@@ -401,7 +401,7 @@ impl App {
 
     // ---- default folder colour ---------------------------------------------------------------
 
-    /// `pickDefaultFolderColor`: the swatches; the first is the app's own colour.
+    /// The swatches; the first is the app's own colour.
     fn color_sheet(&self) {
         let swatches: Vec<Color> = FOLDER_COLORS.iter().map(|c| argb(*c)).collect();
         let ui = &self.ui;
@@ -423,7 +423,7 @@ impl App {
         self.apply_default_folder_color(color);
     }
 
-    /// `applyDefaultFolderColor`: set the default; when some folders have their own colour, ask
+    /// Set the default; when some folders have their own colour, ask
     /// whether they change as well.
     fn apply_default_folder_color(&self, color: u32) {
         let custom = self.prefs.custom_folder_colors();
@@ -474,7 +474,7 @@ impl App {
         last.unwrap_or_else(|| self.browser.borrow().cwd.clone())
     }
 
-    /// `exportSettings`: choose a folder, name the file, save.
+    /// Choose a folder, name the file, save.
     fn export_settings(&self) {
         self.pick_folder(self.backup_start(), |app, dir| {
             app.settings.borrow_mut().last_dir = Some(dir.clone());
@@ -523,7 +523,7 @@ impl App {
         }
     }
 
-    /// `importSettings`: choose a file, confirm, load.
+    /// Choose a file, confirm, load.
     fn import_settings(&self) {
         self.pick_file("Load settings", self.backup_start(), |app, file| {
             if let Some(dir) = file.parent() {
@@ -576,7 +576,7 @@ impl App {
 
     // ---- protected folders -------------------------------------------------------------------
 
-    /// `accessSheet`: Off, Root or Shizuku.
+    /// Off, Root or Shizuku.
     fn access_sheet(&self) {
         let items = [
             ("Off".to_string(), "Normal access only"),
@@ -626,7 +626,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `checkAccess`: try the chosen way in. Root runs `su -c id`; a superuser prompt may appear.
+    /// Try the chosen way in. Root runs `su -c id`; a superuser prompt may appear.
     fn check_access(&self) {
         match self.prefs.int("priv_mode", 0) {
             1 => {
@@ -660,7 +660,7 @@ impl App {
 
     // ---- cache -------------------------------------------------------------------------------
 
-    /// `loadCacheSize`: count the cache folder off the UI thread.
+    /// Count the cache folder off the UI thread.
     fn load_cache_size(&self) {
         let dir = self.host.cache_dir();
         std::thread::spawn(move || {
@@ -715,7 +715,7 @@ impl App {
         });
     }
 
-    /// `runTool`: run the engine's `selftest` or `bench` with a progress sheet and Cancel, then
+    /// Run the engine's `selftest` or `bench` with a progress sheet and Cancel, then
     /// show the result.
     fn run_tool(&self, title: &'static str, tool: &'static str, arg: String) {
         let jobs = self.jobs();
@@ -746,7 +746,7 @@ impl App {
         }
     }
 
-    /// `showBench`: a bar for each codec's packed size, with a tag on the smallest and the fastest.
+    /// A bar for each codec's packed size, with a tag on the smallest and the fastest.
     fn show_bench(&self, view: &Value) {
         let rows = view["rows"].as_array().cloned().unwrap_or_default();
         let sizes: Vec<i64> = rows
@@ -789,7 +789,7 @@ impl App {
         ui.set_bn_shown(true);
     }
 
-    /// `showSelfTest`: the verdict, three tiles, the checks that failed first.
+    /// The verdict, three tiles, the checks that failed first.
     fn show_selftest(&self, view: &Value) {
         let checks = view["checks"].as_array().cloned().unwrap_or_default();
         let total = view["total"].as_u64().unwrap_or(checks.len() as u64);
@@ -857,7 +857,7 @@ impl App {
     }
 }
 
-/// `Priv.probeRoot`: ask `su` for `id` and look for uid 0. May block while a superuser prompt is
+/// Ask `su` for `id` and look for uid 0. May block while a superuser prompt is
 /// up, so it runs on a worker thread. The `Err` is what Settings shows.
 fn probe_root() -> Result<(), String> {
     let out = Command::new("su")

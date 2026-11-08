@@ -50,7 +50,6 @@ fn version() -> Value {
 fn dispatch(name: &str, a: &Args, jobs: usize) -> Value {
     match name {
         "version" => version(),
-        "scan_params" => browse::scan_params(),
         "scan" => browse::scan(&a.str(0), a.bool(1), a.bool(2)),
         "search" => browse::search(&a.str(0), &a.str(1), a.bool(2), a.bool(3)),
         "trim_cache" => {

@@ -1,5 +1,5 @@
-//! Opening a file in another app: the options sheet (`fileSheet`), the app chooser
-//! (`appChooser`) and the saved default app (`Defaults.get`, `openFile`).
+//! Opening a file in another app: the options sheet, the app chooser
+//! and the saved default app.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -13,10 +13,10 @@ use crate::dialog::{Btn, BtnKind, Spec};
 use crate::host::{OpenApp, OpenWith};
 use crate::{App, fmt, sniff};
 
-/// `Defaults.PREFIX`: a default app is stored per extension as `def_<ext>`.
+/// A default app is stored per extension as `def_<ext>`.
 const DEFAULT_PREFIX: &str = "def_";
 
-/// An archive file that was handed to an editor (`editFile`, `editMember`, `editStamp`).
+/// An archive file that was handed to an editor.
 struct Staged {
     archive: PathBuf,
     member: String,
@@ -52,7 +52,7 @@ pub(crate) fn default_key(ext: &str) -> String {
     format!("{DEFAULT_PREFIX}{ext}")
 }
 
-/// `Defaults.pkgOf`: a stored value is `package|label`, or just the package.
+/// A stored value is `package|label`, or just the package.
 pub(crate) fn pkg_of(value: &str) -> &str {
     value.split_once('|').map_or(value, |(package, _)| package)
 }
@@ -64,7 +64,7 @@ fn file_name(path: &Path) -> String {
 }
 
 impl App {
-    /// `mimeOf`: the type Android knows for the extension, else what the content says.
+    /// The type Android knows for the extension, else what the content says.
     pub(crate) fn mime_of(&self, path: &Path) -> String {
         let ext = fmt::ext(&file_name(path));
         self.host
@@ -72,7 +72,7 @@ impl App {
             .unwrap_or_else(|| sniff::mime(path).to_string())
     }
 
-    /// `openFile`: a tap on a plain file. The app saved for its extension opens it at once; with
+    /// A tap on a plain file. The app saved for its extension opens it at once; with
     /// none (or one that is gone) the options sheet is shown.
     pub(crate) fn open_file_row(&self, key: &str) {
         let (path, size, time) = {
@@ -96,15 +96,15 @@ impl App {
         let mime = self.mime_of(&path);
         let with = OpenWith::Package(pkg_of(&saved).to_string());
         if !self.host.open_file(&path, &mime, false, &with) {
-            // The app is gone: forget it (Defaults.clear).
+            // The app is gone: forget it.
             self.prefs.set_string(&default_key(&ext), "");
             self.toast("That app isn't available any more");
             self.file_sheet(path, size, time);
         }
     }
 
-    /// `M_OPTIONS`: the options sheet for the one selected plain file. The selection is cleared
-    /// first, as the Java does.
+    /// The options sheet for the one selected plain file. The selection is cleared
+    /// first.
     pub(crate) fn menu_open_options(&self) {
         let (path, size, time) = {
             let b = self.browser.borrow();
@@ -119,7 +119,7 @@ impl App {
         self.file_sheet(path, size, time);
     }
 
-    /// `fileSheet`: size and date, then "Open with..." and "Edit with...". The "in Kiln" rows
+    /// Size and date, then "Open with..." and "Edit with...". The "in Kiln" rows
     /// wait for the viewer and editor of Phase C.
     pub(crate) fn file_sheet(&self, path: PathBuf, size: i64, time: i64) {
         let mut spec = Spec::new(&file_name(&path));
@@ -143,7 +143,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `arcFileSheet`: size and date, then "Open with...", "Edit with..." and, when nothing is
+    /// Size and date, then "Open with...", "Edit with..." and, when nothing is
     /// waiting to be saved, "Extract...". The "in Kiln" rows wait for Phase C.
     pub(crate) fn arc_file_sheet(&self, key: &str) {
         let (name, ent, dirty) = {
@@ -187,7 +187,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `previewFile`, the "Open with..." mode: extract one file to the cache (or find it there
+    /// The "Open with..." mode: extract one file to the cache (or find it there
     /// already), then hand it to another app. It can be cancelled; nothing partial stays.
     fn preview_file(&self, member: &str) {
         let (file, password, sid, size) = {
@@ -228,7 +228,7 @@ impl App {
             },
         );
     }
-    /// `editExternalFile` / `stageForEdit`: copy the file out of the archive's editing session and
+    /// Copy the file out of the archive's editing session and
     /// open it in another app. When we are back and it changed, `check_edited_file` offers to
     /// put the new version in.
     pub(crate) fn edit_external(&self, member: &str) {
@@ -278,7 +278,7 @@ impl App {
         );
     }
 
-    /// `checkEditedFile`, run when the app comes back to the front: if the copy that went to an
+    /// Run when the app comes back to the front: if the copy that went to an
     /// editor changed, ask whether to put it in the archive.
     pub(crate) fn check_edited_file(&self) {
         let sid = self
@@ -341,7 +341,7 @@ impl App {
             },
         );
     }
-    /// `appChooser`: the apps that can open (or edit) the file, "More options..." for the
+    /// The apps that can open (or edit) the file, "More options..." for the
     /// system's own list, and for Open a choice to remember the app for this extension.
     pub(crate) fn app_chooser(&self, path: PathBuf, edit: bool) {
         let mime = self.mime_of(&path);

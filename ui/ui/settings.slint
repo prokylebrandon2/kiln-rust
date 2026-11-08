@@ -8,7 +8,7 @@
 import { Theme } from "theme.slint";
 import { Icon, KButton, KIconButton, KMeter, KSwitch, PressArea } from "components.slint";
 
-/// One "always open .ext files with ..." choice (`Defaults.all`): the extension and the app.
+/// One "always open .ext files with ..." choice: the extension and the app.
 export struct OpenWithRow {
     ext: string,
     label: string,
@@ -40,7 +40,7 @@ export struct SettingsState {
     cache: string,
 }
 
-/// One codec of the benchmark result (`showBench`).
+/// One codec of the benchmark result.
 export struct BenchRow {
     name: string,
     /// "42.5%": the packed size as a share of the input.
@@ -53,7 +53,7 @@ export struct BenchRow {
     fastest: bool,
 }
 
-/// One check of the self-test result (`checkRow`).
+/// One check of the self-test result.
 export struct CheckRow {
     name: string,
     secs: string,
@@ -713,7 +713,7 @@ export component KTag inherits Rectangle {
     }
 }
 
-/// The benchmark card (`showBench`): a k_chip card, one block per codec with its name, the tags,
+/// The benchmark card: a k_chip card, one block per codec with its name, the tags,
 /// the share, a bar and the size and time, 1 px rules between the blocks.
 export component KBenchList inherits Rectangle {
     in property <[BenchRow]> rows;
@@ -788,7 +788,7 @@ export component KBenchList inherits Rectangle {
     }
 }
 
-/// A list of self-test checks (`checkRow`): a mark, the name, the time, and the note under it.
+/// A list of self-test checks: a mark, the name, the time, and the note under it.
 /// `failed` makes the names bold and the notes `tone`; the box is `fill`.
 export component KCheckList inherits Rectangle {
     in property <[CheckRow]> rows;

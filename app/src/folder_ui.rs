@@ -1,6 +1,6 @@
-//! The folder chooser (`MainActivity.pickFolder`): a sheet with the path, the folders of one
+//! The folder chooser: a sheet with the path, the folders of one
 //! directory, "New folder..." and the other storages. "Select this folder" hands the folder to
-//! whoever asked. (`Priv` is not in this build, so no folder is read through it.)
+//! whoever asked.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +12,8 @@ use crate::{App, app_do};
 /// What the chooser does with the folder that was picked (`OnFile`).
 type Picked = Box<dyn FnOnce(&App, PathBuf)>;
 
-// `Pick` types: "New folder...", "..", a folder, a file (dimmed), another storage, and a file
-// that can be picked (`pickFile`).
+// Types: "New folder...", "..", a folder, a file (dimmed), another storage, and a file
+// that can be picked.
 const NEW: i32 = 0;
 const UP: i32 = 1;
 const FILE: i32 = 3;
@@ -25,7 +25,7 @@ const PICKABLE: i32 = 5;
 pub(crate) struct Chooser {
     /// The folder that is shown (`cur[0]`).
     cur: PathBuf,
-    /// The chooser picks a file (`FilePicker.open`) instead of a folder.
+    /// The chooser picks a file instead of a folder.
     files: bool,
     /// What each row is: its type and the folder or file it leads to.
     entries: Vec<(i32, PathBuf)>,
@@ -55,12 +55,12 @@ impl App {
         ui.on_fc_cancelled(|| app_do(|app| app.fc_cancelled()));
     }
 
-    /// `pickFolder`: start at `start` (or the nearest folder above it, or the storage root).
+    /// Start at `start` (or the nearest folder above it, or the storage root).
     pub(crate) fn pick_folder(&self, start: PathBuf, done: impl FnOnce(&App, PathBuf) + 'static) {
         self.open_chooser("Choose a folder", false, start, Box::new(done));
     }
 
-    /// `FilePicker.open`: the same sheet, but a tap on a file picks it. There is no "New folder..."
+    /// The same sheet, but a tap on a file picks it. There is no "New folder..."
     /// row and no "Select this folder" button.
     pub(crate) fn pick_file(
         &self,
@@ -149,7 +149,7 @@ impl App {
             let parent_name = file_name(&cur);
             for path in dirs {
                 let name = file_name(&path);
-                // `dirIcon`: the picked icon, else the folder's standard one
+                // The picked icon, else the folder's standard one
                 let icon = match self.prefs.folder_icon(&path.to_string_lossy()) {
                     Some(key) => crate::icons::by_key(&key),
                     None => crate::icons::for_dir(&name, &parent_name, at_root),

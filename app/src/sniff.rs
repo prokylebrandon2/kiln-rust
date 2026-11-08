@@ -1,13 +1,10 @@
-//! `Sniff.java`: what a file is, from its first bytes.
+//! What a file is, from its first bytes.
 
 use std::io::Read;
 use std::path::Path;
 
-/// `Sniff.TEXT`.
 pub const TEXT: i32 = 0;
-/// `Sniff.IMAGE`.
 pub const IMAGE: i32 = 2;
-/// `Sniff.BINARY`.
 pub const BINARY: i32 = -1;
 
 const HEAD: usize = 8192;

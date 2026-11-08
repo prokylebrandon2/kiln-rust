@@ -1,8 +1,8 @@
-//! `Fmt.java`: how sizes, dates and names are written in the lists.
+//! How sizes, dates and names are written in the lists.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// `Fmt.decimal`: count 1000 bytes to a kB instead of 1024 to a KB (Settings > File sizes).
+/// Count 1000 bytes to a kB instead of 1024 to a KB (Settings > File sizes).
 static DECIMAL: AtomicBool = AtomicBool::new(false);
 
 /// Choose decimal (1000) or binary (1024) sizes.
@@ -10,8 +10,8 @@ pub fn set_decimal(on: bool) {
     DECIMAL.store(on, Ordering::Relaxed);
 }
 
-/// `Fmt.size`: "?" when unknown, bytes below 1 KB, then KB, MB, GB and TB with two decimals under
-/// 10 and one decimal from 10 up, rounded half up as `String.format` does. Decimal sizes count
+/// "?" when unknown, bytes below 1 KB, then KB, MB, GB and TB with two decimals under
+/// 10 and one decimal from 10 up, rounded half up. Decimal sizes count
 /// 1000 and write kB.
 pub fn size(n: i64) -> String {
     let decimal = DECIMAL.load(Ordering::Relaxed);
@@ -44,7 +44,7 @@ fn fixed(v: f64, digits: u32) -> String {
     format!("{}.{:0width$}", scaled / scale, scaled % scale)
 }
 
-/// `Fmt.date`: "yyyy-MM-dd HH:mm" for a time in epoch seconds, in the zone whose offset from UTC
+/// "yyyy-MM-dd HH:mm" for a time in epoch seconds, in the zone whose offset from UTC
 /// is `utc_offset` seconds; empty for no time.
 pub fn date(epoch_seconds: i64, utc_offset: i32) -> String {
     if epoch_seconds <= 0 {
@@ -72,7 +72,7 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (y, m, d)
 }
 
-/// `Fmt.ext`: the lower-case text after the last dot, or "".
+/// The lower-case text after the last dot, or "".
 pub fn ext(name: &str) -> String {
     match name.rfind('.') {
         Some(i) => name[i + 1..].to_lowercase(),
@@ -80,7 +80,7 @@ pub fn ext(name: &str) -> String {
     }
 }
 
-/// `MainActivity.plural`: "1 item", "3 items".
+/// "1 item", "3 items".
 pub fn plural(n: i64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }

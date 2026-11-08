@@ -1,4 +1,4 @@
-//! The Extract form (`MainActivity.extractDialog`): the folder, Browse and "Replace files that
+//! The Extract form: the folder, Browse and "Replace files that
 //! already exist". Running the extraction comes in `run_extract`.
 
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ impl App {
         ui.on_inf_dismissed(|| app_do(|app| app.ui.set_inf_shown(false)));
     }
 
-    /// `extractDialog`: the form for the given members (empty is all of them).
+    /// The form for the given members (empty is all of them).
     pub(crate) fn extract_dialog(&self, keys: Vec<String>) {
         let form = {
             let b = self.browser.borrow();
@@ -109,8 +109,7 @@ impl App {
         self.ui.set_ext_shown(false);
     }
 
-    /// `runExtract`: the engine's `extract` behind the progress sheet. (`Priv` is not in this
-    /// build, so no destination counts as protected.)
+    /// The engine's `extract` behind the progress sheet.
     fn run_extract(&self, keys: Vec<String>, dest: String, overwrite: bool) {
         let (file, password, name, total) = {
             let b = self.browser.borrow();
@@ -132,7 +131,6 @@ impl App {
         );
     }
 
-    /// The end of `runExtract`.
     fn extract_done(
         &self,
         keys: Vec<String>,
@@ -177,7 +175,7 @@ impl App {
         self.show_dialog(spec);
     }
 
-    /// `extractResult`: the numbers from kiln's line, then the detail rows.
+    /// The numbers from kiln's line, then the detail rows.
     fn show_extract_result(&self, name: &str, dest: &str, msg: &str, overwrite: bool) {
         let ui = &self.ui;
         let mut rows = Vec::new();
@@ -225,7 +223,7 @@ impl App {
 }
 
 impl App {
-    /// `runTest`: the engine's `test` behind the progress sheet.
+    /// The engine's `test` behind the progress sheet.
     pub(crate) fn run_check(&self) {
         let (file, password, dirty) = {
             let b = self.browser.borrow();
@@ -253,7 +251,6 @@ impl App {
         );
     }
 
-    /// The end of `runTest`.
     fn check_done(&self, result: &Value) {
         let msg = result["message"].as_str().unwrap_or_default();
         if result["ok"].as_bool().unwrap_or(false) {
@@ -265,7 +262,7 @@ impl App {
         }
     }
 
-    /// `checkResult`: a verdict, the numbers as tiles, and the details underneath.
+    /// A verdict, the numbers as tiles, and the details underneath.
     fn show_check_result(&self, ok: bool, msg: &str) {
         let (name, encrypted, count, raw) = {
             let b = self.browser.borrow();
@@ -341,7 +338,7 @@ impl App {
     }
 }
 impl App {
-    /// `infoDialog`: the Archive info sheet.
+    /// The Archive info sheet.
     pub(crate) fn info_dialog(&self) {
         let (file, name, is_set, encrypted, packed, count, raw, folders, offset) = {
             let b = self.browser.borrow();
@@ -439,7 +436,7 @@ fn detail(label: &str, value: &str, stack: bool) -> DetailRow {
 }
 
 impl App {
-    /// `decryptInPlace`: the confirm sheet. Decrypt runs `run_decrypt`.
+    /// The confirm sheet. Decrypt runs `run_decrypt`.
     pub(crate) fn decrypt_dialog(&self) {
         let name = {
             let b = self.browser.borrow();
@@ -488,7 +485,7 @@ impl App {
         );
     }
 
-    /// The end of `decryptInPlace`: "Decrypted" and the archive is closed.
+    /// "Decrypted" and the archive is closed.
     fn decrypt_done(&self, result: &Value) {
         if result["ok"].as_bool().unwrap_or(false) {
             self.toast("Decrypted");

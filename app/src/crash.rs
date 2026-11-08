@@ -1,8 +1,7 @@
 //! "If Kiln ever stops with an error, the details are kept and shown on the next start."
 //!
-//! The Java app wrote `files/last-crash.txt` from its uncaught-exception handler and showed the
-//! first 2500 bytes in a sheet next time. This is the same, from a panic hook. Only a panic on the
-//! UI thread counts: the engine's own panics are caught by the bridge and reported as an ordinary
+//! A panic hook writes `files/last-crash.txt`, and the first 2500 bytes are shown in a sheet next
+//! time. Only a panic on the UI thread counts: the engine's own panics are caught by the bridge and reported as an ordinary
 //! error result, and the app does not stop because of them.
 
 use std::backtrace::Backtrace;

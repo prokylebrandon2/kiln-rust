@@ -1,4 +1,4 @@
-// Kiln's building blocks, written to reproduce Ui.java / Sheet.java exactly (see docs/UI-SPEC.md).
+// Kiln's building blocks.
 // No std-widgets: nothing here has a Material, Fluent or Cupertino look.
 //
 // Easing curves are cubic-bezier fits of Android's interpolators (maximum error 0.002):
@@ -513,7 +513,7 @@ export component KProgressBar inherits Rectangle {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Top bar (MainActivity.buildUi)
+// Top bar
 // ---------------------------------------------------------------------------------------------
 
 /// Padding 4 / 6, a 48 dp button on each side, the title block in between (pressable, radius 12).
@@ -624,7 +624,7 @@ export component KTopBar inherits Rectangle {
 }
 
 // ---------------------------------------------------------------------------------------------
-// List row (MainActivity.RowView) and bottom-bar tile (MainActivity.tile), floating button
+// List row and bottom-bar tile, floating button
 // ---------------------------------------------------------------------------------------------
 
 /// One row: a 40 dp tile (radius 10, k_chip) with a 22 dp icon, the name (16 sp, middle), a date
@@ -926,7 +926,7 @@ export component KFab inherits Rectangle {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Sheet: a bordered, rounded card in the middle of the screen (Sheet.java)
+// Sheet: a bordered, rounded card in the middle of the screen
 // ---------------------------------------------------------------------------------------------
 
 /// Content of a Sheet: put these (or anything else) inside a KSheet.

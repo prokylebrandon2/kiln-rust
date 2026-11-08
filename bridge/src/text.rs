@@ -1,5 +1,5 @@
-//! Wording and result shapes shared by the archive functions. The texts match what the Python app
-//! layer (`kiln_app.py`) showed, because the Java side parses some of them.
+//! Wording and result shapes shared by the archive functions. The app reads some of these texts
+//! back, so their wording is part of the interface.
 
 use std::time::Duration;
 

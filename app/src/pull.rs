@@ -1,5 +1,4 @@
-//! The pull-down info strip and pull-to-refresh (`MainActivity.fillPull`, `walkSize`, `pullEnd`
-//! and the `onPull` refresh). The strip's look and the way the list is pulled down are in
+//! The pull-down info strip and pull-to-refresh. The strip's look and the way the list is pulled down are in
 //! `ui/ui/browser.slint` and `ui/ui/pull.slint`; this is what fills the strip and what a pull does.
 
 use std::path::{Path, PathBuf};
@@ -11,9 +10,9 @@ use slint::Timer;
 
 use crate::{App, app_do, fmt};
 
-/// `walkSize` shows how far it has counted at most this often.
+/// Shows how far it has counted at most this often.
 const POST_EVERY: Duration = Duration::from_millis(120);
-/// Folders nested deeper than this are not counted (`walkSize`).
+/// Folders nested deeper than this are not counted.
 const MAX_DEPTH: u32 = 40;
 /// The strip goes on counting while it slides back, which takes at most 250 + 220 ms.
 const LINGER: Duration = Duration::from_millis(500);
@@ -29,7 +28,7 @@ struct Counter {
 }
 
 impl Counter {
-    /// `walkSize`: add up the sizes of the files under `dir`.
+    /// Add up the sizes of the files under `dir`.
     fn walk(&mut self, dir: &Path, depth: u32) {
         if depth > MAX_DEPTH {
             return;
@@ -91,7 +90,7 @@ impl App {
         ui.on_refresh_requested(|| app_do(|app| app.refresh_requested()));
     }
 
-    /// `fillPull`: the list has been pulled down from the top, so write the strip for this folder.
+    /// The list has been pulled down from the top, so write the strip for this folder.
     fn pull_started(&self) {
         let stop = Arc::new(AtomicBool::new(false));
         let old = self.pull_stop.replace(stop.clone());
@@ -160,13 +159,13 @@ impl App {
         });
     }
 
-    /// `pullEnd`: the finger let go. The strip slides back; the count stops once it is gone.
+    /// The finger let go. The strip slides back; the count stops once it is gone.
     fn pull_ended(&self) {
         let stop = self.pull_stop.borrow().clone();
         Timer::single_shot(LINGER, move || stop.store(true, Ordering::Relaxed));
     }
 
-    /// `onPull`: a long pull reads the folder again, keeping the selection.
+    /// A long pull reads the folder again, keeping the selection.
     fn refresh_requested(&self) {
         let ready = self.status.borrow().engine_up && self.browser.borrow().storage_ok;
         if !ready {

@@ -1,4 +1,4 @@
-//! The dialog sheet (`Sheet.java`): a title, a line of text, an optional text field and buttons.
+//! The dialog sheet: a title, a line of text, an optional text field and buttons.
 //! The window has one such sheet. [`App::show_dialog`] fills it and shows it, and what a button
 //! does is a closure that the caller hands in.
 
@@ -13,18 +13,17 @@ use slint::{ModelRc, SharedString, Timer, VecModel};
 use crate::{App, app_do};
 
 /// What a button does, given the text in the field (empty when there is none). Return true to
-/// close the sheet, false to keep it open, for example after a bad input (`Sheet.Click`).
+/// close the sheet, false to keep it open, for example after a bad input.
 pub(crate) type Click = Rc<dyn Fn(&App, &str) -> bool>;
 
-/// Runs when the person backs out: Back, a tap outside, or a button with no action
-/// (`Sheet.nextBack`).
+/// Runs when the person backs out: Back, a tap outside, or a button with no action.
 pub(crate) type Back = Box<dyn FnOnce(&App)>;
 
-/// What a menu row does (`Sheet.option`'s action). The sheet closes after it, unless the action
+/// What a menu row does. The sheet closes after it, unless the action
 /// showed another dialog.
 pub(crate) type Action = Rc<dyn Fn(&App)>;
 
-/// `Ui.button` kinds: filled, outline, text, danger, tonal.
+/// Kinds: filled, outline, text, danger, tonal.
 #[derive(Clone, Copy)]
 pub(crate) enum BtnKind {
     Filled,
@@ -50,7 +49,7 @@ impl BtnKind {
 pub(crate) struct Btn {
     pub label: String,
     pub kind: BtnKind,
-    /// `None` is a button with no action (Cancel, OK): it only closes the sheet, as a back-out.
+    /// Is a button with no action (Cancel, OK): it only closes the sheet, as a back-out.
     pub click: Option<Click>,
 }
 
@@ -80,11 +79,11 @@ pub(crate) struct Spec {
     pub options: Vec<Opt>,
     pub field: Option<Field>,
     pub buttons: Vec<Btn>,
-    /// Back and a tap outside close it (`Sheet.cancelable`).
+    /// Back and a tap outside close it.
     pub cancelable: bool,
-    /// What a back-out does, for example bringing the previous menu back (`Sheet.nextBack`).
+    /// What a back-out does, for example bringing the previous menu back.
     pub back: Option<Back>,
-    /// The options are radio rows (`Sheet.radio`): a ring, the label and the `sub` line.
+    /// The options are radio rows: a ring, the label and the `sub` line.
     pub radio: bool,
 }
 
@@ -118,7 +117,7 @@ pub(crate) struct Dialog {
 /// What an operation does when it ends, with the engine's result.
 type OnDone = Box<dyn FnOnce(&App, &Value)>;
 
-/// A running operation (`MainActivity.runOp`): the way to stop it, and what to do when it ends.
+/// A running operation: the way to stop it, and what to do when it ends.
 pub(crate) struct Running {
     id: u64,
     job: Job,
@@ -130,7 +129,7 @@ pub(crate) struct Running {
 const SHOW_AFTER_MS: u64 = 250;
 
 impl App {
-    /// `runOp`: run `work` on a worker thread with a [`Job`] that reports its progress to the
+    /// Run `work` on a worker thread with a [`Job`] that reports its progress to the
     /// sheet and is cancelled from it; the sheet shows only if the work lasts. `done` then runs
     /// on the UI thread with the result. An operation started while another runs is ignored.
     pub(crate) fn run_op(
@@ -184,7 +183,7 @@ impl App {
     }
 
     /// A progress event, `{"frac": 0..1 or -1, "file": name}`: the file line, the percent and the
-    /// bar. The Java eases the bar between reports; here it jumps to each one.
+    /// bar.
     fn op_progress(&self, id: u64, event: &Value) {
         let cancelling = match self.op.borrow().as_ref() {
             Some(op) if op.id == id => op.cancelling,
@@ -311,7 +310,7 @@ impl App {
         }
     }
 
-    /// An option row was tapped (`Sheet.option`): run its action, then close the sheet unless the
+    /// An option row was tapped: run its action, then close the sheet unless the
     /// action showed another dialog. Choosing a row is not a back-out, so `back` does not run.
     fn dialog_option(&self, index: i32) {
         let (action, serial) = {
@@ -330,7 +329,7 @@ impl App {
         }
     }
 
-    /// The person backed out: close, then run the "go back" action (`userCancel`).
+    /// The person backed out: close, then run the "go back" action.
     fn cancel_dialog(&self) {
         let back = self.dialog.borrow_mut().back.take();
         self.close_dialog();
@@ -358,7 +357,7 @@ impl App {
 }
 
 impl App {
-    /// `MainActivity.nameSheet`: a sheet with a name field, Cancel and an `ok` button. `make` gets
+    /// A sheet with a name field, Cancel and an `ok` button. `make` gets
     /// the trimmed name and returns the line to show under the field when it failed, or `None`
     /// when it worked (the sheet then closes).
     pub(crate) fn name_sheet(

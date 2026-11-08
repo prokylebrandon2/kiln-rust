@@ -1,6 +1,4 @@
-// Theme: every colour, size, font and timing the Android app used, in one place.
-// Values come from docs/UI-SPEC.md, which was extracted from Ui.java, Sheet.java, MainActivity.java
-// and res/values(-night)/colors.xml. Nothing here is invented.
+// Theme: every colour, size, font and timing of the app, in one place.
 //
 // Colours: Android writes #AARRGGBB, Slint writes #RRGGBBAA. The conversion is done once, here.
 
@@ -12,7 +10,7 @@ export global Theme {
     in-out property <float> density: 2.625;
     /// Settings > font size (Configuration.fontScale). sp = dp * font-scale.
     in-out property <float> font-scale: 1.0;
-    /// Settings > Animation speed: Off 0, Fast 0.6, Normal 0.85, Relaxed 1.2 (Defaults.ANIM_SCALE).
+    /// Settings > Animation speed: Off 0, Fast 0.6, Normal 0.85, Relaxed 1.2.
     in-out property <float> anim-scale: 0.85;
 
     // ---- colours (res/values/colors.xml and res/values-night/colors.xml) -----------------------
@@ -45,17 +43,17 @@ export global Theme {
     pure public function sp(v: length) -> length {
         v * font-scale
     }
-    /// dp(1) as the Java computes it: Math.round(density) physical pixels.
+    /// dp(1).round(density) physical pixels.
     out property <length> hair: Math.max(1, Math.round(density)) / density * 1px;
     /// Ui.rule(): a separator that is exactly one physical pixel.
     out property <length> hair-px: 1px / density;
 
-    /// A base duration scaled by the animation speed (Defaults.anim).
+    /// A base duration scaled by the animation speed.
     pure public function dur(v: duration) -> duration {
         v * anim-scale
     }
 
-    /// System Roboto, as the Java UI uses (Typeface.DEFAULT / DEFAULT_BOLD).
+    /// System Roboto.DEFAULT / DEFAULT_BOLD).
     out property <string> font: "Roboto";
     out property <int> bold: 700;
 }

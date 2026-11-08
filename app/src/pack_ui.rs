@@ -231,10 +231,11 @@ impl App {
             job.password,
             job.wipe
         ]);
+        let jobs = self.jobs();
         self.run_op(
             "Packing...",
             true,
-            move |worker| kiln_bridge::call_job("pack", &args, 0, worker),
+            move |worker| kiln_bridge::call_job("pack", &args, jobs, worker),
             move |app, result| app.pack_done(&job, result),
         );
     }

@@ -84,6 +84,8 @@ pub(crate) struct Spec {
     pub cancelable: bool,
     /// What a back-out does, for example bringing the previous menu back (`Sheet.nextBack`).
     pub back: Option<Back>,
+    /// The options are radio rows (`Sheet.radio`): a ring, the label and the `sub` line.
+    pub radio: bool,
 }
 
 impl Spec {
@@ -97,6 +99,7 @@ impl Spec {
             buttons: Vec::new(),
             cancelable: true,
             back: None,
+            radio: false,
         }
     }
 }
@@ -274,6 +277,7 @@ impl App {
         ui.set_dlg_kinds(ModelRc::new(VecModel::from(kinds)));
         ui.set_dlg_options(ModelRc::new(VecModel::from(rows)));
         ui.set_dlg_cancelable(spec.cancelable);
+        ui.set_dlg_radio(spec.radio);
         {
             let mut d = self.dialog.borrow_mut();
             d.serial += 1;

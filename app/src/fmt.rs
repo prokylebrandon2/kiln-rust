@@ -1,23 +1,40 @@
 //! `Fmt.java`: how sizes, dates and names are written in the lists.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `Fmt.decimal`: count 1000 bytes to a kB instead of 1024 to a KB (Settings > File sizes).
+static DECIMAL: AtomicBool = AtomicBool::new(false);
+
+/// Choose decimal (1000) or binary (1024) sizes.
+pub fn set_decimal(on: bool) {
+    DECIMAL.store(on, Ordering::Relaxed);
+}
+
 /// `Fmt.size`: "?" when unknown, bytes below 1 KB, then KB, MB, GB and TB with two decimals under
-/// 10 and one decimal from 10 up, rounded half up as `String.format` does.
+/// 10 and one decimal from 10 up, rounded half up as `String.format` does. Decimal sizes count
+/// 1000 and write kB.
 pub fn size(n: i64) -> String {
-    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    let decimal = DECIMAL.load(Ordering::Relaxed);
+    let units: [&str; 4] = if decimal {
+        ["kB", "MB", "GB", "TB"]
+    } else {
+        ["KB", "MB", "GB", "TB"]
+    };
+    let base = if decimal { 1000.0 } else { 1024.0 };
     if n < 0 {
         return "?".to_string();
     }
-    if n < 1024 {
+    if (n as f64) < base {
         return format!("{n} B");
     }
-    let mut v = n as f64 / 1024.0;
+    let mut v = n as f64 / base;
     let mut u = 0;
-    while v >= 1024.0 && u < UNITS.len() - 1 {
-        v /= 1024.0;
+    while v >= base && u < units.len() - 1 {
+        v /= base;
         u += 1;
     }
     let digits = if v < 10.0 { 2 } else { 1 };
-    format!("{} {}", fixed(v, digits), UNITS[u])
+    format!("{} {}", fixed(v, digits), units[u])
 }
 
 fn fixed(v: f64, digits: u32) -> String {

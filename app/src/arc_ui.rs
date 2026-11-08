@@ -442,10 +442,11 @@ impl App {
             return;
         }
         let args = json!([file.to_string_lossy(), pw]);
+        let jobs = self.jobs();
         self.run_op(
             "Preparing...",
             true,
-            move |job| kiln_bridge::call_job("begin", &args, 0, job),
+            move |job| kiln_bridge::call_job("begin", &args, jobs, job),
             move |app, r| {
                 if r["cancelled"].as_bool().unwrap_or(false) {
                     app.toast("Cancelled");
@@ -669,10 +670,11 @@ impl App {
             return;
         };
         let args = json!([sid]);
+        let jobs = self.jobs();
         self.run_op(
             "Saving...",
             true,
-            move |job| kiln_bridge::call_job("save", &args, 0, job),
+            move |job| kiln_bridge::call_job("save", &args, jobs, job),
             move |app, r| {
                 if r["cancelled"].as_bool().unwrap_or(false) {
                     app.toast("Cancelled");

@@ -1,0 +1,856 @@
+// The Settings screen (SettingsActivity) and the small parts of its sheets: the rows-on-screen
+// wheel, the benchmark result and the self-test result.
+//
+// The page shows what Rust gives it (`SettingsState`) and reports a tap through `act(id, on)`; it
+// never changes a setting by itself, so Rust can refuse a change (the "Allow changes" confirm).
+// The ids are the `ST_*` constants of app/src/settings_ui.rs.
+
+import { Theme } from "theme.slint";
+import { Icon, KButton, KIconButton, KMeter, KSwitch, PressArea } from "components.slint";
+
+/// One "always open .ext files with ..." choice (`Defaults.all`): the extension and the app.
+export struct OpenWithRow {
+    ext: string,
+    label: string,
+}
+
+/// Everything the page shows, as text and flags ready to draw.
+export struct SettingsState {
+    up-row: bool,
+    previews: bool,
+    rows: string,
+    /// No colour of its own: the dot shows the accent.
+    folder-default: bool,
+    folder-color: color,
+    anim: string,
+    units: string,
+    deep: bool,
+    search-path: string,
+    deleting: string,
+    wipe: bool,
+    access: string,
+    /// Root or Shizuku is chosen: the status line and the check button show.
+    access-on: bool,
+    /// Root is chosen (it has "Allow changes"); with Shizuku a read-only note shows instead.
+    access-root: bool,
+    access-status: string,
+    access-unsafe: bool,
+    access-check: string,
+    jobs: string,
+    cache: string,
+}
+
+/// One codec of the benchmark result (`showBench`).
+export struct BenchRow {
+    name: string,
+    /// "42.5%": the packed size as a share of the input.
+    ratio: string,
+    /// The bar: this size against the biggest, 0..1.
+    value: float,
+    /// "1.2 MB  ·  0.4 s".
+    sub: string,
+    smallest: bool,
+    fastest: bool,
+}
+
+/// One check of the self-test result (`checkRow`).
+export struct CheckRow {
+    name: string,
+    secs: string,
+    msg: string,
+    ok: bool,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parts of the page
+// ---------------------------------------------------------------------------------------------
+
+/// `heading()`: 13 sp, bold, muted, padding 4 / 4 / 0 / 8.
+component KSetHeading inherits Rectangle {
+    in property <string> text;
+    preferred-height: label.preferred-height + 12px;
+    label := Text {
+        x: 4px;
+        y: 4px;
+        width: parent.width - 4px;
+        text: root.text;
+        color: Theme.text2;
+        font-size: Theme.sp(13px);
+        font-weight: Theme.bold;
+        wrap: no-wrap;
+    }
+}
+
+/// `card()`: the k_surface card with a 1 dp k_line outline, radius 16, padding 16 / 8, and the
+/// 16 dp that separates it from the next heading.
+component KSetCard inherits VerticalLayout {
+    padding-bottom: 16px;
+    Rectangle {
+        background: Theme.surface;
+        border-radius: 16px;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+        preferred-height: inner.preferred-height;
+        inner := VerticalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            @children
+        }
+    }
+}
+
+/// A line of muted text inside a card (the status, the Shizuku note, "No defaults yet").
+component KSetText inherits VerticalLayout {
+    in property <string> text;
+    in property <length> size: 12px;
+    in property <length> pad-top: 0px;
+    in property <length> pad-bottom: 0px;
+    padding-top: root.pad-top;
+    padding-bottom: root.pad-bottom;
+    Text {
+        text: root.text;
+        color: Theme.text2;
+        font-size: Theme.sp(root.size);
+        wrap: word-wrap;
+    }
+}
+
+/// `toggle()`: the title (16 sp), the detail under it (12 sp, muted) and a switch, padding 10.
+component KSetToggle inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> checked: false;
+    callback toggled(bool);
+    preferred-height: row.preferred-height;
+    row := HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 8px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.sp(16px);
+                wrap: word-wrap;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            KSwitch {
+                controlled: true;
+                checked: root.checked;
+                toggled(on) => {
+                    root.toggled(on);
+                }
+            }
+        }
+    }
+}
+
+/// `choiceRow()` and `colorRow()`: the title and detail on the left; on the right the current
+/// choice in bold accent text, or a 26 dp dot in that colour. Tapping the row opens the choice.
+component KSetChoice inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> value;
+    in property <bool> dot: false;
+    in property <color> dot-color: Theme.accent;
+    callback clicked();
+    preferred-height: row.preferred-height;
+    row := HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.sp(16px);
+                wrap: word-wrap;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: word-wrap;
+            }
+        }
+        if !root.dot: Text {
+            text: root.value;
+            color: Theme.accent;
+            font-size: Theme.sp(14px);
+            font-weight: Theme.bold;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+        if root.dot: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 13px;
+                background: root.dot-color;
+                border-width: Theme.hair;
+                border-color: Theme.line;
+            }
+        }
+    }
+    PressArea {
+        width: 100%;
+        height: 100%;
+        radius: 10px;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The page
+// ---------------------------------------------------------------------------------------------
+
+/// Ids sent through `act`: 0 back, 1 ".." row, 2 previews, 3 rows on screen, 4 default folder
+/// colour, 5 animation speed, 6 file sizes, 7 search subfolders, 8 path in results, 9 when
+/// deleting, 10 delete after packing, 11 export, 12 import, 13 self-test, 14 benchmark,
+/// 15 protected folders, 16 allow changes, 17 check access, 18 parallel jobs, 19 cache.
+/// `on` is the state a switch was asked to go to. `reset(i)` is one "open with" choice, -1 all.
+export component KSettingsPage inherits Rectangle {
+    in property <bool> shown: false;
+    in property <SettingsState> st;
+    in property <[OpenWithRow]> open-rows;
+    in property <length> inset-top: 0px;
+    in property <length> inset-bottom: 0px;
+    callback act(int, bool);
+    callback reset(int);
+
+    // The slide of k_enter_right / k_exit_right: 12 % of the width and a fade, 215 ms in and
+    // 185 ms out.
+    property <float> t: 0;
+    background: Theme.bg;
+    visible: root.t > 0.001;
+    opacity: root.t;
+    x: (1 - root.t) * root.width * 0.12;
+
+    // nothing under the page may be touched
+    TouchArea { }
+
+    VerticalLayout {
+        padding-top: root.inset-top;
+        padding-bottom: root.inset-bottom;
+
+        // the bar: padding 4 / 6 / 8 / 6, the up button, the title 8 dp from it
+        HorizontalLayout {
+            padding-left: 4px;
+            padding-top: 6px;
+            padding-right: 8px;
+            padding-bottom: 6px;
+            spacing: 8px;
+            KIconButton {
+                icon: "up";
+                clicked => {
+                    root.act(0, false);
+                }
+            }
+            Text {
+                text: "Settings";
+                color: Theme.text;
+                font-size: Theme.sp(19px);
+                font-weight: Theme.bold;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            height: Theme.hair;
+            background: Theme.line;
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            content-height: body.preferred-height;
+            body := VerticalLayout {
+                width: parent.width;
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 12px;
+                padding-bottom: 32px;
+
+                KSetHeading {
+                    text: "FILE LIST";
+                }
+                KSetCard {
+                    KSetToggle {
+                        title: "Show \"..\" row";
+                        detail: "Tap it at the top of a list to go up a folder";
+                        checked: root.st.up-row;
+                        toggled(on) => {
+                            root.act(1, on);
+                        }
+                    }
+                    KSetToggle {
+                        title: "Show previews";
+                        detail: "Pictures, album art and video frames as icons";
+                        checked: root.st.previews;
+                        toggled(on) => {
+                            root.act(2, on);
+                        }
+                    }
+                    KSetChoice {
+                        title: "Rows on screen";
+                        detail: "How many file rows fit on one screen, 10 to 24. 16 is the default.";
+                        value: root.st.rows;
+                        clicked => {
+                            root.act(3, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "FOLDER ICONS";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Default folder color";
+                        detail: "Applies to every folder. Folders you gave their own color keep it, unless you choose to change those too.";
+                        dot: true;
+                        dot-color: root.st.folder-default ? Theme.accent : root.st.folder-color;
+                        clicked => {
+                            root.act(4, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "ANIMATIONS";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Animation speed";
+                        detail: "Off also turns off the slide between screens.";
+                        value: root.st.anim;
+                        clicked => {
+                            root.act(5, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "UNITS";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "File sizes";
+                        detail: "Binary counts 1024 bytes to a KB, decimal counts 1000.";
+                        value: root.st.units;
+                        clicked => {
+                            root.act(6, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "SEARCH";
+                }
+                KSetCard {
+                    KSetToggle {
+                        title: "Search subfolders";
+                        detail: "Search inside folders below the current one, not just the list";
+                        checked: root.st.deep;
+                        toggled(on) => {
+                            root.act(7, on);
+                        }
+                    }
+                    KSetChoice {
+                        title: "Path shown in results";
+                        detail: "Relative is from the folder you searched in. Absolute starts at /";
+                        value: root.st.search-path;
+                        clicked => {
+                            root.act(8, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "DELETING";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "When deleting";
+                        detail: "Deleted items kept in the recycle bin can be restored. Open it from the \u{22ee} menu on the file list.";
+                        value: root.st.deleting;
+                        clicked => {
+                            root.act(9, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "PACKING";
+                }
+                KSetCard {
+                    KSetToggle {
+                        title: "Delete source files after packing";
+                        detail: "Removes the original files once they are safely in the archive. Pack still shows a tick box each time.";
+                        checked: root.st.wipe;
+                        toggled(on) => {
+                            root.act(10, on);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "BACKUP";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Export settings";
+                        detail: "Saves your settings, bookmarks, folder icons and colors, and \"open with\" choices to a file.";
+                        value: "Save...";
+                        clicked => {
+                            root.act(11, false);
+                        }
+                    }
+                    KSetChoice {
+                        title: "Import settings";
+                        detail: "Loads a file made by Export. Root and Shizuku access are not included and stay as they are.";
+                        value: "Choose...";
+                        clicked => {
+                            root.act(12, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "TOOLS";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Self-test";
+                        detail: "Checks packing, extracting and encryption on this phone.";
+                        value: "Run";
+                        clicked => {
+                            root.act(13, false);
+                        }
+                    }
+                    KSetChoice {
+                        title: "Benchmark a file";
+                        detail: "Compares Kiln's codecs on a file or folder.";
+                        value: "Choose...";
+                        clicked => {
+                            root.act(14, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "ACCESS";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Protected folders";
+                        detail: "Open \"/\", other apps' data and Android/data using root or Shizuku.";
+                        value: root.st.access;
+                        clicked => {
+                            root.act(15, false);
+                        }
+                    }
+                    if root.st.access-on: KSetText {
+                        text: "Status: " + root.st.access-status;
+                        size: 13px;
+                        pad-top: 4px;
+                        pad-bottom: 8px;
+                    }
+                    if root.st.access-on && root.st.access-root: KSetToggle {
+                        title: "Allow changes (dangerous)";
+                        detail: "Delete, move, rename, create and edit in protected folders. A mistake here can break apps or stop the phone from starting.";
+                        checked: root.st.access-unsafe;
+                        toggled(on) => {
+                            root.act(16, on);
+                        }
+                    }
+                    if root.st.access-on && !root.st.access-root: KSetText {
+                        text: "Protected folders are read-only with Shizuku: you can browse, open and copy files out, but not change them.";
+                        pad-bottom: 8px;
+                    }
+                    if root.st.access-on: VerticalLayout {
+                        padding-bottom: 6px;
+                        KButton {
+                            text: root.st.access-check;
+                            kind: 1;
+                            clicked => {
+                                root.act(17, false);
+                            }
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "ADVANCED";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Parallel jobs";
+                        detail: "Threads used when packing, extracting and checking archives. Automatic uses every core of this device; a smaller number leaves room for other apps and saves battery.";
+                        value: root.st.jobs;
+                        clicked => {
+                            root.act(18, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "STORAGE";
+                }
+                KSetCard {
+                    KSetChoice {
+                        title: "Cache";
+                        detail: "Everything Kiln keeps temporarily: files opened from archives (so they open at once next time), scratch copies and edit copies. Previews are trimmed automatically above 1 GB.";
+                        value: root.st.cache;
+                        clicked => {
+                            root.act(19, false);
+                        }
+                    }
+                }
+
+                KSetHeading {
+                    text: "OPEN FILES WITH";
+                }
+                KSetCard {
+                    if root.open-rows.length == 0: KSetText {
+                        text: "No defaults yet. Choose \"Open with...\" on a file and tick \"Always open .ext files with this app\".";
+                        size: 14px;
+                        pad-top: 10px;
+                        pad-bottom: 10px;
+                    }
+                    for r[i] in root.open-rows: HorizontalLayout {
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            Text {
+                                text: "." + r.ext;
+                                color: Theme.text;
+                                font-size: Theme.sp(16px);
+                                font-weight: Theme.bold;
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: r.label;
+                                color: Theme.text2;
+                                font-size: Theme.sp(13px);
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
+                        }
+                        KButton {
+                            text: "Reset";
+                            kind: 2;
+                            clicked => {
+                                root.reset(i);
+                            }
+                        }
+                    }
+                    if root.open-rows.length > 0: VerticalLayout {
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        KButton {
+                            text: "Reset all";
+                            kind: 1;
+                            clicked => {
+                                root.reset(-1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    states [
+        open when root.shown: {
+            t: 1;
+            in {
+                animate t {
+                    duration: Theme.dur(215ms);
+                    easing: cubic-bezier(0.215, 0.61, 0.355, 1.0);
+                }
+            }
+            out {
+                animate t {
+                    duration: Theme.dur(185ms);
+                    easing: cubic-bezier(0.258, 0.0, 0.6, 0.199);
+                }
+            }
+        }
+    ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rows-on-screen wheel (android.widget.NumberPicker)
+// ---------------------------------------------------------------------------------------------
+
+/// A 120 x 170 dp wheel of whole numbers, three in view: drag it, or tap the one above or below
+/// the chosen number. The chosen number sits between two accent lines and the others fade.
+export component KWheel inherits Rectangle {
+    in property <int> lo: 0;
+    in property <int> hi: 0;
+    in-out property <int> value: 0;
+    width: 120px;
+    height: 170px;
+    clip: true;
+
+    property <length> item: root.height / 3;
+    property <length> span: (root.hi - root.lo) * root.item;
+    property <length> off: 0px;
+    property <bool> drag: false;
+    property <length> start-y: 0px;
+    property <length> start-off: 0px;
+
+    init => {
+        root.off = (root.value - root.lo) * root.item;
+    }
+    changed value => {
+        if (!root.drag) {
+            root.off = (root.value - root.lo) * root.item;
+        }
+    }
+
+    // the chosen number follows the wheel while it is dragged, so that the sheet's Set reads it
+    function settle(index: int) {
+        root.drag = false;
+        root.value = Math.max(root.lo, Math.min(root.hi, root.lo + index));
+        root.off = (root.value - root.lo) * root.item;
+    }
+
+    animate off {
+        duration: root.drag ? 0ms : Theme.dur(150ms);
+        easing: ease-out;
+    }
+
+    for n[i] in root.hi - root.lo + 1: Text {
+        y: root.item + i * root.item - root.off;
+        width: parent.width;
+        height: root.item;
+        text: "\{root.lo + i}";
+        color: Math.round(root.off / root.item) == i ? Theme.text : Theme.text2;
+        font-size: Theme.sp(22px);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        opacity: Math.max(0.3, 1.0 - Math.abs(self.y - root.item) / root.item * 0.6);
+    }
+    // the two lines around the chosen number
+    Rectangle {
+        y: root.item;
+        height: 2px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        y: root.item * 2 - 2px;
+        height: 2px;
+        background: Theme.accent;
+    }
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.drag = true;
+                root.start-y = touch.mouse-y;
+                root.start-off = root.off;
+            } else if (e.kind == PointerEventKind.up && root.drag) {
+                if (Math.abs(touch.mouse-y - root.start-y) < 8px) {
+                    // a tap: the number in the slot that was touched
+                    root.settle(Math.round(root.off / root.item) + Math.floor(touch.mouse-y / root.item) - 1);
+                } else {
+                    root.settle(Math.round(root.off / root.item));
+                }
+            } else if (e.kind == PointerEventKind.cancel && root.drag) {
+                root.settle(Math.round(root.off / root.item));
+            }
+        }
+        moved => {
+            if (root.drag) {
+                root.off = Math.max(0px, Math.min(root.start-off - (touch.mouse-y - root.start-y), root.span));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Result sheets: Benchmark and Self-test
+// ---------------------------------------------------------------------------------------------
+
+/// `smallTag()`: 11 sp bold accent text in a small pill that has the page colour.
+export component KTag inherits Rectangle {
+    in property <string> text;
+    background: Theme.bg;
+    border-radius: 8px;
+    preferred-width: label.preferred-width + 14px;
+    preferred-height: label.preferred-height + 4px;
+    label := Text {
+        x: 7px;
+        y: 2px;
+        text: root.text;
+        color: Theme.accent;
+        font-size: Theme.sp(11px);
+        font-weight: Theme.bold;
+    }
+}
+
+/// The benchmark card (`showBench`): a k_chip card, one block per codec with its name, the tags,
+/// the share, a bar and the size and time, 1 px rules between the blocks.
+export component KBenchList inherits Rectangle {
+    in property <[BenchRow]> rows;
+    background: Theme.chip;
+    border-radius: 14px;
+    preferred-height: col.preferred-height;
+    col := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        for r[i] in root.rows: VerticalLayout {
+            if i > 0: Rectangle {
+                height: Theme.hair-px;
+                background: Theme.line;
+            }
+            VerticalLayout {
+                padding-top: 12px;
+                padding-bottom: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: r.name;
+                        color: Theme.text;
+                        font-size: Theme.sp(15px);
+                        font-weight: Theme.bold;
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                    }
+                    if r.smallest: VerticalLayout {
+                        alignment: center;
+                        KTag {
+                            text: "Smallest";
+                        }
+                    }
+                    if r.fastest: VerticalLayout {
+                        alignment: center;
+                        KTag {
+                            text: "Fastest";
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: r.ratio;
+                        color: r.smallest ? Theme.accent : Theme.text;
+                        font-size: Theme.sp(15px);
+                        font-weight: Theme.bold;
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                    }
+                }
+                Rectangle {
+                    height: 8px;
+                }
+                KMeter {
+                    value: r.value;
+                    accented: r.smallest;
+                }
+                Rectangle {
+                    height: 6px;
+                }
+                Text {
+                    text: r.sub;
+                    color: Theme.text2;
+                    font-size: Theme.sp(12px);
+                    wrap: no-wrap;
+                }
+            }
+        }
+    }
+}
+
+/// A list of self-test checks (`checkRow`): a mark, the name, the time, and the note under it.
+/// `failed` makes the names bold and the notes `tone`; the box is `fill`.
+export component KCheckList inherits Rectangle {
+    in property <[CheckRow]> rows;
+    in property <color> tone: Theme.accent;
+    in property <color> fill: Theme.chip;
+    in property <bool> failed: false;
+    background: root.fill;
+    border-radius: 14px;
+    preferred-height: col.preferred-height;
+    col := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        for r[i] in root.rows: VerticalLayout {
+            if i > 0: Rectangle {
+                height: Theme.hair-px;
+                background: Theme.line;
+            }
+            VerticalLayout {
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 3px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout {
+                        width: 18px;
+                        alignment: center;
+                        Icon {
+                            width: 18px;
+                            height: 18px;
+                            name: r.ok ? "check" : "close";
+                            tint: root.tone;
+                        }
+                    }
+                    Text {
+                        text: r.name;
+                        color: Theme.text;
+                        font-size: Theme.sp(14px);
+                        font-weight: root.failed ? Theme.bold : 400;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: r.secs;
+                        color: Theme.text2;
+                        font-size: Theme.sp(12px);
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                    }
+                }
+                if r.msg != "": HorizontalLayout {
+                    padding-left: 28px;
+                    Text {
+                        text: r.msg;
+                        color: root.failed ? root.tone : Theme.text2;
+                        font-size: Theme.sp(12px);
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

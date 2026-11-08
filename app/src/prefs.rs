@@ -12,6 +12,46 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+/// `Defaults.PREFIX`: a default app is stored per extension as `def_<ext>`.
+const OPEN_PREFIX: &str = "def_";
+
+/// The settings that go into a backup, and their type: b boolean, i int, s string. Root and
+/// Shizuku access are never exported or imported (`Defaults.BACKUP_KEYS`).
+const BACKUP_KEYS: &[(&str, char)] = &[
+    ("up_row", 'b'),
+    ("previews", 'b'),
+    ("delete_after_pack", 'b'),
+    ("search_deep", 'b'),
+    ("units_decimal", 'b'),
+    ("sort_asc", 'b'),
+    ("show_all", 'b'),
+    ("show_hidden", 'b'),
+    ("viewer_wrap", 'b'),
+    ("delete_mode", 'i'),
+    ("jobs", 'i'),
+    ("rows_on_screen", 'i'),
+    ("anim_level", 'i'),
+    ("search_path", 'i'),
+    ("folder_color_default", 'i'),
+    ("sort_key", 'i'),
+    ("viewer_size", 'i'),
+    ("bookmarks", 's'),
+    ("folder_icons", 's'),
+    ("folder_colors", 's'),
+];
+
+/// `Defaults.labelOf`: what a stored "open with" value shows as.
+pub fn open_with_label(value: &str) -> String {
+    match value {
+        "kiln:view" => "Kiln (view)".to_string(),
+        "kiln:edit" => "Kiln (edit)".to_string(),
+        _ => value
+            .split_once('|')
+            .map_or(value, |(_, label)| label)
+            .to_string(),
+    }
+}
+
 /// The settings that are stored in `kiln.xml`, as text by key.
 #[derive(Debug, Default)]
 pub struct Prefs {
@@ -188,6 +228,155 @@ impl Prefs {
         }
         let text = Value::Object(colors).to_string();
         self.set_string("folder_colors", &text.replace('/', "\\/"));
+    }
+
+    /// `Defaults.defaultFolderColor`: the ARGB colour every folder gets unless it has its own, or
+    /// 0 for the normal accent. Set in Settings.
+    pub fn default_folder_color(&self) -> u32 {
+        self.int("folder_color_default", 0) as u32
+    }
+
+    /// `Defaults.setDefaultFolderColor`.
+    pub fn set_default_folder_color(&self, color: u32) {
+        self.set_int("folder_color_default", color as i32);
+    }
+
+    /// `Defaults.folderColorOrDefault`: a folder's own colour, else the default, else 0.
+    pub fn folder_color_or_default(&self, path: &str) -> u32 {
+        match self.folder_color(path) {
+            0 => self.default_folder_color(),
+            own => own,
+        }
+    }
+
+    /// `Defaults.customFolderColors`: how many folders have a colour of their own.
+    pub fn custom_folder_colors(&self) -> usize {
+        self.folder_color_map().len()
+    }
+
+    /// `Defaults.clearFolderColors`: every folder follows the default again.
+    pub fn clear_folder_colors(&self) {
+        self.set_string("folder_colors", "{}");
+    }
+
+    /// `Defaults.all`: the "always open with" choices, `(extension, stored value)`, sorted by
+    /// extension.
+    pub fn open_with_all(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .values
+            .borrow()
+            .iter()
+            .filter_map(|(k, v)| {
+                let ext = k.strip_prefix(OPEN_PREFIX)?;
+                (!ext.is_empty()).then(|| (ext.to_string(), v.clone()))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `Defaults.clear`: forget the app chosen for one extension.
+    pub fn clear_open_with(&self, ext: &str) {
+        self.remove(&format!("{OPEN_PREFIX}{ext}"));
+    }
+
+    /// Forget every "always open with" choice.
+    pub fn clear_all_open_with(&self) {
+        for (ext, _) in self.open_with_all() {
+            self.clear_open_with(&ext);
+        }
+    }
+
+    /// Remove a setting (`Editor.remove(..).apply()`).
+    pub fn remove(&self, key: &str) {
+        if self.values.borrow_mut().remove(key).is_none() || self.file.as_os_str().is_empty() {
+            return;
+        }
+        let text = std::fs::read_to_string(&self.file).unwrap_or_default();
+        if let Some((from, to)) = find_element(&text, key) {
+            let rest = text[to..].trim_start_matches(['\n', ' ']);
+            let out = format!("{}{rest}", &text[..from]);
+            let _ = write_atomic(&self.file, &out);
+        }
+    }
+
+    /// `Defaults.exportSettings`: every backed-up setting that has been set, plus the "always
+    /// open with" choices, as JSON text. Root and Shizuku access are never part of it.
+    pub fn export_settings(&self) -> String {
+        let mut settings = Map::new();
+        {
+            let values = self.values.borrow();
+            for (key, kind) in BACKUP_KEYS {
+                let Some(text) = values.get(*key) else {
+                    continue;
+                };
+                let value = match *kind {
+                    'b' => match text.as_str() {
+                        "true" => Value::Bool(true),
+                        "false" => Value::Bool(false),
+                        _ => continue,
+                    },
+                    'i' => match text.parse::<i32>() {
+                        Ok(n) => Value::from(n),
+                        Err(_) => continue,
+                    },
+                    _ => Value::from(text.clone()),
+                };
+                settings.insert((*key).to_string(), value);
+            }
+        }
+        let open: Map<String, Value> = self
+            .open_with_all()
+            .into_iter()
+            .map(|(ext, value)| (ext, Value::from(value)))
+            .collect();
+        let root = serde_json::json!({
+            "kiln_settings": 1,
+            "settings": settings,
+            "open_with": open,
+        });
+        serde_json::to_string_pretty(&root).unwrap_or_default()
+    }
+
+    /// `Defaults.importSettings`: apply a backup made by [`Prefs::export_settings`]. Unknown keys
+    /// and values of the wrong type are skipped. Returns how many settings were applied.
+    pub fn import_settings(&self, text: &str) -> Result<usize, String> {
+        let root: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if root.get("kiln_settings").and_then(Value::as_i64) != Some(1) {
+            return Err("not a Kiln settings file".to_string());
+        }
+        let mut n = 0;
+        if let Some(Value::Object(settings)) = root.get("settings") {
+            for (key, kind) in BACKUP_KEYS {
+                let Some(value) = settings.get(*key) else {
+                    continue;
+                };
+                match (*kind, value) {
+                    ('b', Value::Bool(b)) => self.set_bool(key, *b),
+                    ('i', Value::Number(num)) => {
+                        let Some(i) = num.as_i64().and_then(|i| i32::try_from(i).ok()) else {
+                            continue;
+                        };
+                        if *key == "sort_key" && !(0..=3).contains(&i) {
+                            continue;
+                        }
+                        self.set_int(key, i);
+                    }
+                    ('s', Value::String(text)) => self.set_string(key, text),
+                    _ => continue,
+                }
+                n += 1;
+            }
+        }
+        if let Some(Value::Object(open)) = root.get("open_with") {
+            for (ext, value) in open {
+                if let (false, Some(value)) = (ext.is_empty(), value.as_str()) {
+                    self.set_string(&format!("{OPEN_PREFIX}{ext}"), value);
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
     }
 
     /// `Defaults.moveFolderIcons`: a folder was renamed or moved, so its icon and colour (and

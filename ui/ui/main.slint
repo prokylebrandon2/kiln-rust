@@ -9,9 +9,10 @@ export { ArcTile, FcRow }
 // in the next parts of Phase B. See docs/UI-SPEC.md, section "Main screen".
 
 import { Theme } from "theme.slint";
-import { DetailRow, Icon, KButton, KCheck, KDetailCard, KFab, KMeter, KProgressBar, KSheet, KSheetOption, KSheetText, KStatTile, KTextField, KTile, KToast, KTopBar, PressArea, KMark } from "components.slint";
+import { DetailRow, Icon, KButton, KCheck, KDetailCard, KFab, KMeter, KProgressBar, KSheet, KSheetOption, KSheetRadio, KSheetText, KStatTile, KTextField, KTile, KToast, KTopBar, PressArea, KMark } from "components.slint";
 import { KFileList, RowData } from "browser.slint";
 import { KMarksPopup, MarkRow } from "marks.slint";
+import { BenchRow, CheckRow, KBenchList, KCheckList, KSettingsPage, KWheel, OpenWithRow, SettingsState } from "settings.slint";
 import { KPullPanel, KRefreshCircle } from "pull.slint";
 
 /// One line of the Properties sheet (Props.Box): `kind` 0 is the name line, 1 a heading (`label`
@@ -126,7 +127,7 @@ component KPickCell inherits Rectangle {
 }
 
 // The Rust side drives the theme (dark mode, font scale, density, animation speed) through this.
-export { DetailRow, MarkRow, RowData, Theme }
+export { BenchRow, CheckRow, DetailRow, MarkRow, OpenWithRow, RowData, SettingsState, Theme }
 
 
 /// A text field with the red line under it that `EditText.setError` gives in the Java. Typing
@@ -182,6 +183,11 @@ export component MainWindow inherits Window {
     /// The file list.
     in property <[RowData]> rows;
     in property <bool> up-row: false;
+    /// Settings > Rows on screen, and the colour of the ".." row's icon: the default folder colour
+    /// when `has-up-color`, else the accent.
+    in property <int> rows-on-screen: 16;
+    in property <bool> has-up-color: false;
+    in property <color> up-color;
     in property <bool> has-where: false;
     /// The selection bar (Copy, Move, Delete, Pack) is up.
     in property <bool> bar-shown: false;
@@ -229,6 +235,8 @@ export component MainWindow inherits Window {
     in property <bool> dlg-cancelable: true;
     /// Option rows between the text and the field.
     in property <[DlgOption]> dlg-options;
+    /// The options are radio rows (Sheet.radio) instead of tiles.
+    in property <bool> dlg-radio: false;
     /// The progress sheet (MainActivity.ProgressUi): a title, the file line, the percent and a bar.
     /// The percent is empty and the bar indeterminate until the first report; Cancel is left out
     /// when `prog-cancellable` is false and greys out when `prog-cancel-enabled` is false.
@@ -315,6 +323,9 @@ export component MainWindow inherits Window {
     in property <string> inf-caption;
     in property <[DetailRow]> inf-rows;
     in property <bool> fc-shown: false;
+    /// The chooser's title, and whether it picks a file (no "Select this folder" button).
+    in property <string> fc-title: "Choose a folder";
+    in property <bool> fc-files: false;
     in property <string> fc-path;
     in property <[FcRow]> fc-rows;
     in property <bool> fc-naming: false;
@@ -357,6 +368,41 @@ export component MainWindow inherits Window {
     in property <bool> mark-has-action: false;
     in property <string> mark-action-icon: "add";
     in property <string> mark-action-label;
+
+    /// The Settings page (SettingsActivity): what it shows and the "open with" choices.
+    in property <bool> st-shown: false;
+    in property <SettingsState> st;
+    in property <[OpenWithRow]> st-open;
+    /// The rows-on-screen wheel sheet.
+    in property <bool> wh-shown: false;
+    in property <string> wh-text;
+    in property <int> wh-min: 10;
+    in property <int> wh-max: 24;
+    in-out property <int> wh-value: 16;
+    /// The default folder colour sheet: swatch 0 is "default" (accent), 1.. follow `pick-colors`.
+    in property <bool> dc-shown: false;
+    in property <int> dc-index: 0;
+    /// The benchmark result sheet.
+    in property <bool> bn-shown: false;
+    in property <string> bn-title;
+    in property <string> bn-head;
+    in property <[BenchRow]> bn-rows;
+    in property <string> bn-note;
+    /// The self-test result sheet.
+    in property <bool> stt-shown: false;
+    in property <bool> stt-ok: true;
+    in property <string> stt-title;
+    in property <string> stt-head;
+    in property <string> stt-sub;
+    in property <string> stt-n-checks;
+    in property <string> stt-n-passed;
+    in property <string> stt-checks-label: "checks";
+    in property <string> stt-took;
+    in property <[CheckRow]> stt-failed;
+    in property <[CheckRow]> stt-passed;
+    in property <string> stt-passed-head;
+    in property <string> stt-notes;
+    in property <string> stt-unfinished;
 
     // ---- what the UI tells the Rust side -------------------------------------------------------
     callback allow-access();
@@ -425,6 +471,17 @@ export component MainWindow inherits Window {
     callback fc-cancelled();
     /// The About sheet: OK, or a tap outside the card.
     callback about-dismissed();
+    /// The Settings page: a tap (see `KSettingsPage`), and a reset of one "open with" choice.
+    callback st-act(int, bool);
+    callback st-reset(int);
+    /// The wheel sheet: a button (0 = Cancel, 1 = Set), and a tap outside the card.
+    callback wh-button-clicked(int);
+    callback wh-cancelled();
+    /// The default colour sheet: a swatch, and Cancel or a tap outside the card.
+    callback dc-swatch-clicked(int);
+    callback dc-cancelled();
+    callback bn-dismissed();
+    callback stt-dismissed();
     /// The Back key or gesture (MainActivity.onBackPressed).
     callback back-pressed();
 
@@ -562,6 +619,8 @@ export component MainWindow inherits Window {
                     pull-enabled: root.pull-enabled;
                     rows: root.rows;
                     up-row: root.up-row;
+                    rows-fit: root.rows-on-screen;
+                    up-tint: root.has-up-color ? root.up-color : Theme.accent;
                     has-where: root.has-where;
                     bottom-pad: root.arc-bar-shown ? arc-bar.height + 24px : root.bar-shown ? bar.height + 24px : 10px;
                     row-clicked(i) => {
@@ -896,6 +955,23 @@ export component MainWindow inherits Window {
         }
     }
 
+    // The Settings page (SettingsActivity): a full screen above the file list, below the sheets.
+    KSettingsPage {
+        width: 100%;
+        height: 100%;
+        shown: root.st-shown;
+        st: root.st;
+        open-rows: root.st-open;
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        act(id, on) => {
+            root.st-act(id, on);
+        }
+        reset(i) => {
+            root.st-reset(i);
+        }
+    }
+
     // Sort by: Name, Size, Date modified, Type, then Ascending and Descending (sortSheet).
     KSheet {
         width: 100%;
@@ -977,13 +1053,23 @@ export component MainWindow inherits Window {
         if root.dlg-body != "": KSheetText {
             text: root.dlg-body;
         }
-        for option[i] in root.dlg-options: KSheetOption {
-            icon: option.icon;
-            label: option.label;
-            sub: option.sub;
-            selected: option.selected;
-            clicked => {
-                root.dlg-option-clicked(i);
+        for option[i] in root.dlg-options: VerticalLayout {
+            if !root.dlg-radio: KSheetOption {
+                icon: option.icon;
+                label: option.label;
+                sub: option.sub;
+                selected: option.selected;
+                clicked => {
+                    root.dlg-option-clicked(i);
+                }
+            }
+            if root.dlg-radio: KSheetRadio {
+                label: option.label;
+                detail: option.sub;
+                selected: option.selected;
+                clicked => {
+                    root.dlg-option-clicked(i);
+                }
             }
         }
         if root.dlg-has-field && root.dlg-shown: KTextField {
@@ -1512,8 +1598,8 @@ export component MainWindow inherits Window {
         width: 100%;
         height: 100%;
         shown: root.fc-shown;
-        title: root.fc-naming ? "New folder" : "Choose a folder";
-        buttons: root.fc-naming ? ["Cancel", "Create"] : ["Cancel", "Select this folder"];
+        title: root.fc-naming ? "New folder" : root.fc-title;
+        buttons: root.fc-naming ? ["Cancel", "Create"] : root.fc-files ? ["Cancel"] : ["Cancel", "Select this folder"];
         kinds: [2, 0];
         inset-top: root.safe-area-insets.top;
         inset-bottom: root.safe-area-insets.bottom;
@@ -1861,6 +1947,247 @@ export component MainWindow inherits Window {
         }
         KDetailCard {
             rows: root.about-rows;
+        }
+        Rectangle {
+            height: 4px;
+        }
+    }
+
+    // The rows-on-screen sheet (NumberPicker in a Sheet): the line of text, the wheel, Cancel and Set.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.wh-shown;
+        title: "Rows on screen";
+        buttons: ["Cancel", "Set"];
+        kinds: [2, 0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.wh-button-clicked(i);
+        }
+        cancelled => {
+            root.wh-cancelled();
+        }
+        KSheetText {
+            text: root.wh-text;
+        }
+        Rectangle {
+            height: 8px;
+        }
+        HorizontalLayout {
+            alignment: center;
+            KWheel {
+                lo: root.wh-min;
+                hi: root.wh-max;
+                value <=> root.wh-value;
+            }
+        }
+    }
+
+    // The default folder colour sheet (pickDefaultFolderColor): 11 swatches, 6 to a row. A tap picks
+    // the colour and closes the sheet; Rust then asks about folders with a colour of their own.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.dc-shown;
+        title: "Default folder color";
+        buttons: ["Cancel"];
+        kinds: [2];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.dc-cancelled();
+        }
+        cancelled => {
+            root.dc-cancelled();
+        }
+        VerticalLayout {
+            for r in [0, 1]: HorizontalLayout {
+                for c in 6: KSwatch {
+                    property <int> at: r * 6 + c;
+                    visible: self.at < 1 + root.pick-colors.length;
+                    dot: self.at == 0 ? Theme.accent : root.pick-colors[self.at - 1];
+                    current: root.dc-index == self.at;
+                    clicked => {
+                        root.dc-swatch-clicked(self.at);
+                    }
+                }
+            }
+        }
+    }
+
+    // The Benchmark result (showBench): the input line, the card of codecs, the note and Close.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.bn-shown;
+        title: root.bn-title;
+        buttons: ["Close"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.bn-dismissed();
+        }
+        cancelled => {
+            root.bn-dismissed();
+        }
+        Text {
+            text: root.bn-head;
+            color: Theme.text2;
+            font-size: Theme.sp(13px);
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 12px;
+        }
+        KBenchList {
+            rows: root.bn-rows;
+        }
+        Rectangle {
+            height: 12px;
+        }
+        Text {
+            text: root.bn-note;
+            color: Theme.text2;
+            font-size: Theme.sp(12px);
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 4px;
+        }
+    }
+
+    // The Self-test result (showSelfTest): the head, three tiles, the failed checks first, then the
+    // others, the notes and Close. The tone is the accent when every check passed, else the danger colour.
+    KSheet {
+        width: 100%;
+        height: 100%;
+        shown: root.stt-shown;
+        title: root.stt-title;
+        buttons: ["Close"];
+        kinds: [0];
+        inset-top: root.safe-area-insets.top;
+        inset-bottom: root.safe-area-insets.bottom;
+        button-clicked(i) => {
+            root.stt-dismissed();
+        }
+        cancelled => {
+            root.stt-dismissed();
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                background: (root.stt-ok ? Theme.accent : Theme.danger).with-alpha(0.15);
+                border-radius: 16px;
+                Icon {
+                    x: 13px;
+                    y: 13px;
+                    width: 28px;
+                    height: 28px;
+                    name: root.stt-ok ? "check" : "close";
+                    tint: root.stt-ok ? Theme.accent : Theme.danger;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: root.stt-head;
+                    color: Theme.text;
+                    font-size: Theme.sp(18px);
+                    font-weight: Theme.bold;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.stt-sub;
+                    color: Theme.text2;
+                    font-size: Theme.sp(13px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 16px;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            KStatTile {
+                big: root.stt-n-checks;
+                small: root.stt-checks-label;
+            }
+            KStatTile {
+                big: root.stt-n-passed;
+                small: "passed";
+            }
+            KStatTile {
+                big: root.stt-took;
+                small: "took";
+            }
+        }
+        if root.stt-unfinished != "": VerticalLayout {
+            Rectangle {
+                height: 12px;
+            }
+            Text {
+                text: root.stt-unfinished;
+                color: Theme.text2;
+                font-size: Theme.sp(13px);
+                wrap: word-wrap;
+            }
+        }
+        if root.stt-failed.length > 0: VerticalLayout {
+            Rectangle {
+                height: 16px;
+            }
+            Text {
+                text: "FAILED";
+                color: Theme.text2;
+                font-size: Theme.sp(11px);
+                font-weight: Theme.bold;
+            }
+            Rectangle {
+                height: 6px;
+            }
+            KCheckList {
+                rows: root.stt-failed;
+                tone: Theme.danger;
+                fill: Theme.danger.with-alpha(0.12);
+                failed: true;
+            }
+        }
+        if root.stt-passed.length > 0: VerticalLayout {
+            Rectangle {
+                height: 16px;
+            }
+            Text {
+                text: root.stt-passed-head;
+                color: Theme.text2;
+                font-size: Theme.sp(11px);
+                font-weight: Theme.bold;
+            }
+            Rectangle {
+                height: 6px;
+            }
+            KCheckList {
+                rows: root.stt-passed;
+            }
+        }
+        if root.stt-notes != "": VerticalLayout {
+            Rectangle {
+                height: 12px;
+            }
+            Text {
+                text: root.stt-notes;
+                color: Theme.text2;
+                font-size: Theme.sp(12px);
+                wrap: word-wrap;
+            }
         }
         Rectangle {
             height: 4px;

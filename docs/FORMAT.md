@@ -185,3 +185,72 @@ attributes appear.
   broke version 2: bump the version, never edit the golden file. Only one golden archive exists
   so far (adaptive profile; zstd and store chunks); LZ4 and LZMA2 chunks and the optional
   extensions are covered by unit and integration tests but not by golden files.
+
+## The `.skln` container (encrypted) — version 1
+
+> **Status:** specification only. Nothing in Kiln writes or reads `.skln` yet. It is separate from
+> the `.kiln` container above: a `.skln` wraps data (a plain `.kiln` archive, or a bundle of named
+> members) in authenticated encryption. Recommended extension: `.skln`.
+
+**The format is public.** Nothing here depends on it being secret; the only secret is the key.
+Everything a reader needs before decrypting is in the header, and the whole header is
+authenticated. All integers are little-endian. Version 1 fixes its algorithms and never negotiates
+them: ChaCha20-Poly1305 (RFC 8439), HKDF-SHA-256 (RFC 5869), and scrypt (RFC 7914) for the
+optional password block.
+
+### Header (36 bytes, plus a 26-byte password block when flag bit 0 is set)
+
+| Bytes | Field | Meaning |
+|---|---|---|
+| 0-7 | magic | `89 53 4B 4C 4E 0D 0A 1A` (`\x89SKLN\r\n\x1a`) |
+| 8 | version | `1`. Readers reject any other value as *unsupported* |
+| 9 | flags | bit 0: a password block follows the header; every other bit must be 0 |
+| 10 | kind | 0: the payload is a plain `.kiln` v2 archive; 1: the payload is a member bundle |
+| 11 | chunk_log2 | records hold up to `2^chunk_log2` plaintext bytes; allowed 12..=24 |
+| 12-19 | revision | u64, raised by 1 on every save; writers that do not track it write 0 |
+| 20-35 | file_salt | 16 random bytes, new on every write |
+
+Password block (only when flag bit 0 is set), bytes 36-61: `kdf u8` (1 = scrypt) | `log_n u8` |
+`r u32` | `p u32` | `kdf_salt[16]`. Allowed: `log_n` 10..=22, `r` 1..=16, `p` 1..=4, and
+`128 * r * 2^log_n` at most 512 MiB. Writers use `log_n` 17, `r` 8, `p` 1.
+
+### Keys and nonces
+
+* `key32` is 32 raw bytes. Either the caller supplies it (Silk hands over its VEK), or it is
+  `scrypt(NFKC(password), kdf_salt, 2^log_n, r, p)` from the password block.
+* `file_key = HKDF-SHA-256(ikm = key32, salt = file_salt, info = "kiln skln v1 file key")`,
+  32 bytes. The salt is new on every write, so one `key32` can seal any number of saves without a
+  key and nonce pair ever repeating.
+* The nonce of record `i` is 4 zero bytes followed by `i` as u64.
+
+### Records
+
+After the header (and password block): one or more records, `len u32 | ciphertext | tag[16]`,
+where `len` counts the ciphertext and tag. Every record except the last has `len` exactly
+`2^chunk_log2 + 16`; the last has `16 <= len <= 2^chunk_log2 + 16` (an empty last chunk is
+allowed). A record is the last one exactly when it ends at the end of the file; nothing may
+follow it. The associated data of every record is all header bytes (including the password block)
+followed by one byte: 1 for the last record, else 0. So a changed header, an edited, reordered or
+cut record, or appended bytes fails authentication, and a wrong key fails record 0.
+
+### Payload
+
+Kind 0: the decrypted stream is a complete plain `.kiln` v2 archive. Kind 1: a bundle,
+`count u32 | { name_len u16 | name (UTF-8) | data_len u32 | data }*`. Names are labels, not paths:
+no separators, not `.` or `..`, no control characters, at most 255 bytes, no duplicates; at most
+1024 members and 64 MiB in all. (Silk's interim `SKIM` bundle uses big-endian lengths; it stays a
+read-only source so existing vaults can be converted.)
+
+### Reader rules
+
+Check order: magic (is it `.skln`?) → version (*unsupported*, not *corrupt*) → flags, kind,
+chunk_log2 and password-block limits → key → records. Header values are used before they are
+authenticated, which is why the limits above are enforced first; tampering is then caught by
+record 0. The revision is readable without the key but is only trustworthy after a successful
+open; a reader that wants rollback protection compares it with the highest value it has seen.
+
+### Required tests (written with the engine)
+
+Wrong key; every single-byte change and every truncation of a real file; swapped records;
+appended bytes; header values outside the limits; a raw-key and a password round trip; and a
+checked-in golden file that must keep opening. Never edit the golden file: bump the version.

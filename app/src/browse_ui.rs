@@ -24,7 +24,7 @@ const SCROLL_STEP_DP: f32 = 6.0;
 
 /// The colours a folder can be given (`MainActivity.FOLDER_COLORS`). The picker's first swatch,
 /// "default", is the accent colour and saves 0.
-const FOLDER_COLORS: [u32; 10] = [
+pub(crate) const FOLDER_COLORS: [u32; 10] = [
     0xFFE5574B, 0xFFE8833A, 0xFFE0A030, 0xFF5DB75D, 0xFF3FA6A0, 0xFF4A8FE7, 0xFF5B6EEF, 0xFF8E7CC3,
     0xFFC45BA3, 0xFF8D99AE,
 ];
@@ -55,13 +55,13 @@ const PICK_ICONS: [(&str, &str); 18] = [
 type Done = Rc<dyn Fn(&App)>;
 
 /// A colour saved as an ARGB number.
-fn argb(color: u32) -> Color {
+pub(crate) fn argb(color: u32) -> Color {
     let [a, r, g, b] = color.to_be_bytes();
     Color::from_argb_u8(a, r, g, b)
 }
 
 /// Which swatch shows the tick for a saved colour: 0 is "default", -1 is none of them.
-fn color_index(color: u32) -> i32 {
+pub(crate) fn color_index(color: u32) -> i32 {
     if color == 0 {
         return 0;
     }
@@ -104,11 +104,6 @@ pub(crate) fn opt(icon: &'static str, label: &str, action: impl Fn(&App) + 'stat
         selected: false,
         action: Rc::new(action),
     }
-}
-
-/// A menu row whose dialog is not built yet.
-fn soon(icon: &'static str, label: &str) -> Opt {
-    opt(icon, label, |app| app.toast("Not in this build yet"))
 }
 
 /// A row of the paste conflict sheet: run the transfer under that policy.
@@ -166,6 +161,7 @@ impl App {
         // A folder's picked icon and colour (`dirIcon`, and `Defaults.folderColor` in the row).
         let picked_icons = self.prefs.folder_icon_map();
         let picked_colors = self.prefs.folder_color_map();
+        let default_color = self.prefs.default_folder_color();
         let thumb_px = self.thumb_px(&b);
         let rows: Vec<RowData> = b
             .rows
@@ -180,8 +176,11 @@ impl App {
                 if let Some(key) = picked_icons.get(&path).and_then(Value::as_str) {
                     r.icon = crate::icons::by_key(key);
                 }
+                // the folder's own colour, else the Settings default (`folderColorOrDefault`)
                 if let Some(color) = picked_colors.get(&path).and_then(Value::as_i64) {
                     r.tint = Tint::Rgb(color as u32 & 0x00FF_FFFF);
+                } else if default_color != 0 {
+                    r.tint = Tint::Rgb(default_color & 0x00FF_FFFF);
                 }
                 row_data(&r, selected, where_line, None)
             })
@@ -492,7 +491,7 @@ impl App {
             out.push(opt("file", hidden, |app| app.menu_toggle(true)));
             out.push(opt("refresh", "Refresh", App::menu_refresh));
             out.push(opt("delete", "Recycle bin", App::bin_sheet));
-            out.push(soon("settings", "Settings"));
+            out.push(opt("settings", "Settings", App::open_settings));
             out.push(opt("archive", "About", App::about));
         }
         out
@@ -581,7 +580,16 @@ impl App {
             self.close_picker();
             return;
         }
+        // The Settings sheets (wheel, colour, results) and the chooser sit above the dialogs.
+        if self.settings_sheets_back() {
+            return;
+        }
         if self.dialog_back() {
+            return;
+        }
+        // The Settings screen is a page of its own: Back leaves it.
+        if self.ui.get_st_shown() {
+            self.close_settings();
             return;
         }
         // The bookmarks drop-down is a window of its own in the Java: Back closes it first.
@@ -802,7 +810,7 @@ impl App {
             "Icon for "
         };
         let index = if colors {
-            color_index(self.prefs.folder_color(path))
+            color_index(self.prefs.folder_color_or_default(path))
         } else {
             -1
         };
@@ -971,12 +979,13 @@ impl App {
     /// `runTransfer`: copy or move under the chosen policy, with a progress sheet and Cancel.
     fn run_transfer(&self, srcs: Vec<String>, dest: String, mv: bool, policy: &'static str) {
         let heading = if mv { "Moving..." } else { "Copying..." };
+        let jobs = self.jobs();
         self.run_op(
             heading,
             true,
             move |job| {
                 let args = json!([srcs, dest, mv, policy]);
-                kiln_bridge::call_job("fs_transfer", &args, 0, job)
+                kiln_bridge::call_job("fs_transfer", &args, jobs, job)
             },
             move |app, result| app.transfer_done(mv, result),
         );

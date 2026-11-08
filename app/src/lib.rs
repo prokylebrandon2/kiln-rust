@@ -30,6 +30,7 @@ pub mod prefs;
 pub mod props;
 mod props_ui;
 mod pull;
+mod settings_ui;
 pub mod sniff;
 pub mod thumbs;
 mod thumbs_ui;
@@ -102,6 +103,7 @@ struct App {
     chooser: RefCell<folder_ui::Chooser>,
     arcui: RefCell<arc_ui::ArcUi>,
     thumbs: RefCell<thumbs_ui::ThumbUi>,
+    settings: RefCell<settings_ui::Open>,
 }
 
 thread_local! {
@@ -155,6 +157,7 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         extract: RefCell::default(),
         chooser: RefCell::default(),
         thumbs: RefCell::default(),
+        settings: RefCell::default(),
         arcui: RefCell::new(arc_ui::ArcUi {
             incoming: host.incoming(),
             ..Default::default()
@@ -212,6 +215,8 @@ impl App {
         b.show_all = self.prefs.bool("show_all", true);
         b.show_hidden = self.prefs.bool("show_hidden", false);
         b.up_row_on = self.prefs.bool("up_row", true);
+        drop(b);
+        self.apply_prefs();
     }
 
     /// Hand the system's colour scheme, density and font scale, and the user's animation speed,
@@ -246,6 +251,7 @@ impl App {
         self.wire_folder();
         self.wire_about();
         self.wire_thumbs();
+        self.wire_settings();
     }
 
     fn on_event(&self, event: Event) {

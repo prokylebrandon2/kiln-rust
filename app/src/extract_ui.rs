@@ -123,10 +123,11 @@ impl App {
             )
         };
         let args = json!([file, password, members_json(&keys), dest, overwrite, total]);
+        let jobs = self.jobs();
         self.run_op(
             "Extracting...",
             true,
-            move |job| kiln_bridge::call_job("extract", &args, 0, job),
+            move |job| kiln_bridge::call_job("extract", &args, jobs, job),
             move |app, result| app.extract_done(keys, dest, overwrite, &name, result),
         );
     }
@@ -243,10 +244,11 @@ impl App {
             return;
         }
         let args = json!([file, password]);
+        let jobs = self.jobs();
         self.run_op(
             "Checking...",
             true,
-            move |job| kiln_bridge::call_job("test", &args, 0, job),
+            move |job| kiln_bridge::call_job("test", &args, jobs, job),
             |app, result| app.check_done(result),
         );
     }
@@ -477,10 +479,11 @@ impl App {
             )
         };
         let args = json!([file, password, count]);
+        let jobs = self.jobs();
         self.run_op(
             "Decrypting...",
             true,
-            move |job| kiln_bridge::call_job("decrypt_in_place", &args, 0, job),
+            move |job| kiln_bridge::call_job("decrypt_in_place", &args, jobs, job),
             move |app, result| app.decrypt_done(result),
         );
     }

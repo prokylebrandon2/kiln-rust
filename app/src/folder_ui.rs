@@ -12,17 +12,21 @@ use crate::{App, app_do};
 /// What the chooser does with the folder that was picked (`OnFile`).
 type Picked = Box<dyn FnOnce(&App, PathBuf)>;
 
-// `Pick` types: "New folder...", "..", a folder, a file (dimmed), another storage.
+// `Pick` types: "New folder...", "..", a folder, a file (dimmed), another storage, and a file
+// that can be picked (`pickFile`).
 const NEW: i32 = 0;
 const UP: i32 = 1;
 const FILE: i32 = 3;
 const VOL: i32 = 4;
+const PICKABLE: i32 = 5;
 
 /// The chooser that is up.
 #[derive(Default)]
 pub(crate) struct Chooser {
     /// The folder that is shown (`cur[0]`).
     cur: PathBuf,
+    /// The chooser picks a file (`FilePicker.open`) instead of a folder.
+    files: bool,
     /// What each row is: its type and the folder or file it leads to.
     entries: Vec<(i32, PathBuf)>,
     done: Option<Picked>,
@@ -53,6 +57,21 @@ impl App {
 
     /// `pickFolder`: start at `start` (or the nearest folder above it, or the storage root).
     pub(crate) fn pick_folder(&self, start: PathBuf, done: impl FnOnce(&App, PathBuf) + 'static) {
+        self.open_chooser("Choose a folder", false, start, Box::new(done));
+    }
+
+    /// `FilePicker.open`: the same sheet, but a tap on a file picks it. There is no "New folder..."
+    /// row and no "Select this folder" button.
+    pub(crate) fn pick_file(
+        &self,
+        title: &str,
+        start: PathBuf,
+        done: impl FnOnce(&App, PathBuf) + 'static,
+    ) {
+        self.open_chooser(title, true, start, Box::new(done));
+    }
+
+    fn open_chooser(&self, title: &str, files: bool, start: PathBuf, done: Picked) {
         if !self.browser.borrow().storage_ok {
             self.host.open_all_files_settings();
             return;
@@ -64,10 +83,13 @@ impl App {
             .unwrap_or_else(|| self.browser.borrow().root().to_path_buf());
         *self.chooser.borrow_mut() = Chooser {
             cur,
+            files,
             entries: Vec::new(),
-            done: Some(Box::new(done)),
+            done: Some(done),
         };
         let ui = &self.ui;
+        ui.set_fc_title(title.into());
+        ui.set_fc_files(files);
         ui.set_fc_naming(false);
         ui.set_fc_name(SharedString::new());
         ui.set_fc_name_error(SharedString::new());
@@ -77,9 +99,16 @@ impl App {
 
     /// The `fill` runnable: the rows for the folder that is shown.
     fn fc_fill(&self) {
-        let cur = self.chooser.borrow().cur.clone();
-        let mut entries: Vec<(i32, PathBuf)> = vec![(NEW, PathBuf::new())];
-        let mut rows = vec![fc_row("new_folder", "New folder...", NEW)];
+        let (cur, files_mode) = {
+            let c = self.chooser.borrow();
+            (c.cur.clone(), c.files)
+        };
+        let mut entries: Vec<(i32, PathBuf)> = Vec::new();
+        let mut rows = Vec::new();
+        if !files_mode {
+            entries.push((NEW, PathBuf::new()));
+            rows.push(fc_row("new_folder", "New folder...", NEW));
+        }
         {
             let b = self.browser.borrow();
             let at_root = b.is_storage_root(&cur);
@@ -130,8 +159,9 @@ impl App {
             }
             for path in files {
                 let name = file_name(&path);
-                rows.push(fc_row(crate::icons::for_file(&name).0, &name, FILE));
-                entries.push((FILE, path));
+                let kind = if files_mode { PICKABLE } else { FILE };
+                rows.push(fc_row(crate::icons::for_file(&name).0, &name, kind));
+                entries.push((kind, path));
             }
         }
         self.chooser.borrow_mut().entries = entries;
@@ -150,6 +180,13 @@ impl App {
         let Some((kind, path)) = entry else { return };
         match kind {
             FILE => {}
+            PICKABLE => {
+                let done = self.chooser.borrow_mut().done.take();
+                self.fc_close();
+                if let Some(done) = done {
+                    done(self, path);
+                }
+            }
             NEW => {
                 let ui = &self.ui;
                 ui.set_fc_name(SharedString::new());
@@ -186,7 +223,7 @@ impl App {
     }
 
     /// Back or a tap outside: back from the name field to the list, else close.
-    fn fc_cancelled(&self) {
+    pub(crate) fn fc_cancelled(&self) {
         if self.ui.get_fc_naming() {
             self.ui.set_fc_naming(false);
         } else {

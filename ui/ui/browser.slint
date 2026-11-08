@@ -34,6 +34,10 @@ export component KFileList inherits Rectangle {
     in property <length> bottom-pad: 10px;
     /// The info strip behind the list may be pulled into view (nothing selected, access granted).
     in property <bool> pull-enabled: false;
+    /// Settings > Rows on screen: about this many rows fit the room of the list (0 = natural height).
+    in property <int> rows-fit: 0;
+    /// The colour of the ".." row's icon (Settings > Default folder color).
+    in property <color> up-tint: Theme.accent;
     /// A tap; the index is into `rows`, or -1 for the ".." row.
     callback row-clicked(int);
     callback row-long-pressed(int);
@@ -61,7 +65,10 @@ export component KFileList inherits Rectangle {
     property <bool> releasing: false;
     property <bool> full: false;
     property <int> still: 0;
-    property <length> row-h: probe.preferred-height;
+    // The biggest height the list has had, so opening the search row or a banner does not resize
+    // the rows (`listRoom`); a new width (a rotation) starts again.
+    property <length> room: 0px;
+    property <length> row-h: root.rows-fit > 0 ? Math.max(24px, root.room / root.rows-fit) : probe.preferred-height;
     property <int> total: root.rows.length + (root.up-row ? 1 : 0);
     property <int> first: Math.max(0, Math.floor((-flick.content-y - root.slack) / root.row-h) - 1);
     property <int> shown: Math.max(0, Math.min(root.total - root.first, Math.ceil(root.height / root.row-h) + 3));
@@ -84,6 +91,17 @@ export component KFileList inherits Rectangle {
 
     init => {
         flick.content-y = -root.slack;
+        root.room = root.height;
+    }
+
+    changed height => {
+        if (root.height > root.room) {
+            root.room = root.height;
+        }
+    }
+
+    changed width => {
+        root.room = root.height;
     }
 
     changed first => {
@@ -175,7 +193,8 @@ export component KFileList inherits Rectangle {
                 width: root.width;
                 height: root.row-h;
                 icon: self.is-up ? "up_dir" : self.d.icon;
-                icon-tint: self.is-up || self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;
+                fit-h: root.rows-fit > 0 ? root.row-h : 0px;
+                icon-tint: self.is-up ? root.up-tint : self.d.tint-kind == 0 ? Theme.accent : self.d.tint-kind == 1 ? Theme.text2 : self.d.tint;
                 name: self.is-up ? ".." : self.d.name;
                 detail: self.is-up ? "" : self.d.detail;
                 where-line: self.is-up ? "" : self.d.where-line;

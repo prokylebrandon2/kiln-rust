@@ -640,24 +640,37 @@ export component KListRow inherits Rectangle {
     in property <string> where-line;
     in property <string> size-text;
     in property <bool> selected: false;
+    /// Settings > Rows on screen: the height this row is made to fit (RowView.fit). 0 keeps the
+    /// natural height and the fixed sizes.
+    in property <length> fit-h: 0px;
     callback clicked();
     callback long-pressed();
-    min-height: 58px;
-    preferred-height: col.preferred-height + 18px > 58px ? col.preferred-height + 18px : 58px;
+
+    // RowView.fit(): every part scales with the row height (the icon fills the row up to 64 dp,
+    // its glyph is 60 % of the tile, the text grows and shrinks with it).
+    property <bool> fit: root.fit-h > 0px;
+    property <float> hd: root.fit-h / 1px;
+    property <length> ic: root.fit ? Math.min(Math.round(root.hd * 0.88) * 1px, 64px) : 40px;
+    property <length> glyph: root.fit ? root.ic * 0.6 : 22px;
+    property <length> name-px: root.fit ? Math.max(12.0, Math.min(17.5, root.hd * 0.37)) * 1px : 16px;
+    property <length> sub-px: root.fit ? Math.max(10.0, Math.min(13.0, root.hd * 0.27)) * 1px : 12px;
+    property <length> size-px: root.fit ? root.sub-px + 1px : 13px;
+    min-height: root.fit ? 0px : 58px;
+    preferred-height: root.fit ? root.fit-h : (col.preferred-height + 18px > 58px ? col.preferred-height + 18px : 58px);
     background: root.selected ? Theme.sel-solid : Theme.bg;
 
     HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 9px;
-        padding-bottom: 9px;
-        spacing: 12px;
+        padding-left: root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px;
+        padding-right: root.fit ? (root.hd < 34.0 ? 12px : 14px) : 16px;
+        padding-top: root.fit ? 2px : 9px;
+        padding-bottom: root.fit ? 2px : 9px;
+        spacing: root.fit ? (root.hd < 34.0 ? 10px : 13px) : 12px;
         VerticalLayout {
-            width: 40px;
+            width: root.ic;
             alignment: center;
             Rectangle {
-                height: 40px;
-                border-radius: 10px;
+                height: root.ic;
+                border-radius: root.fit ? root.ic * 0.25 : 10px;
                 background: Theme.chip;
                 clip: true;
                 if root.has-preview && !root.selected: Image {
@@ -667,35 +680,35 @@ export component KListRow inherits Rectangle {
                     image-fit: cover;
                 }
                 if !root.has-preview || root.selected: Icon {
-                    x: 9px;
-                    y: 9px;
-                    width: 22px;
-                    height: 22px;
+                    x: (root.ic - root.glyph) / 2;
+                    y: (root.ic - root.glyph) / 2;
+                    width: root.glyph;
+                    height: root.glyph;
                     name: root.selected ? "check" : root.icon;
                     tint: root.selected ? Theme.accent : root.icon-tint;
                 }
             }
         }
         col := VerticalLayout {
-            padding-left: 2px;
+            padding-left: root.fit ? 0px : 2px;
             alignment: center;
             horizontal-stretch: 1;
             min-width: 0px;
             KEllipsisText {
                 text: root.name;
-                font-size: Theme.sp(16px);
+                font-size: Theme.sp(root.name-px);
                 mode: 1;
                 cap: root.selected ? Theme.sel-solid : Theme.bg;
             }
             if root.detail != "": KEllipsisText {
                 text: root.detail;
-                font-size: Theme.sp(12px);
+                font-size: Theme.sp(root.sub-px);
                 tint: Theme.text2;
                 mode: 0;
             }
             if root.where-line != "": KEllipsisText {
                 text: root.where-line;
-                font-size: Theme.sp(12px);
+                font-size: Theme.sp(root.sub-px);
                 tint: Theme.accent;
                 mode: 2;
                 cap: root.selected ? Theme.sel-solid : Theme.bg;
@@ -704,7 +717,7 @@ export component KListRow inherits Rectangle {
         Text {
             text: root.size-text;
             color: Theme.text2;
-            font-size: Theme.sp(13px);
+            font-size: Theme.sp(root.size-px);
             vertical-alignment: center;
             wrap: no-wrap;
         }
@@ -1232,6 +1245,9 @@ export component KDetailCard inherits Rectangle {
 /// thumb and a track in the foreground colour at 30 %. The thumb slides in 150 ms.
 export component KSwitch inherits Rectangle {
     in-out property <bool> checked: false;
+    /// True: a tap does not flip `checked` by itself; it only reports the state that was asked
+    /// for, and the owner sets `checked` (the Settings page, which can refuse a change).
+    in property <bool> controlled: false;
     callback toggled(bool);
     width: 52px;
     height: 48px;
@@ -1265,8 +1281,12 @@ export component KSwitch inherits Rectangle {
         height: 100%;
         radius: 24px;
         clicked => {
-            root.checked = !root.checked;
-            root.toggled(root.checked);
+            if (root.controlled) {
+                root.toggled(!root.checked);
+            } else {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+            }
         }
     }
 }

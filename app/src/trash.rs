@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::browse_ui::io_text;
+use crate::fmt::io_text;
 
 /// The bin's folder, at the top of a storage.
 pub(crate) const DIR: &str = ".KilnTrash";

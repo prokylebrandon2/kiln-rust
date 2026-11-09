@@ -1,0 +1,19 @@
+[package]
+name = "kiln-ui-next"
+version = "0.1.0"
+edition = "2024"
+description = "Kiln's new Slint UI (the rewrite): design tokens, controls, screens. Backend-agnostic, so CI can compile it on Linux in about a minute."
+publish = false
+
+[lib]
+name = "kiln_ui_next"
+path = "src/lib.rs"
+
+[dependencies]
+# No backend and no renderer, on purpose: the app crate (and so the APK) picks the Android backend,
+# and a Linux job can still compile every .slint file without building Skia. `std` and `compat-1-2`
+# are the two features the main workspace also requires.
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"

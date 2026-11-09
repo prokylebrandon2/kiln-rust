@@ -1,0 +1,145 @@
+// A window with sample data, for `slint-viewer ui-next/ui/preview.slint` (live preview, no phone
+// and no build). It is not part of the app: nothing imports it but lib.slint, which only
+// re-exports it so that CI compiles it too.
+//
+//   slint-viewer ui-next/ui/preview.slint                          the Files tab
+//   slint-viewer --component PreviewBrowse ui-next/ui/preview.slint  a folder
+//   slint-viewer --component PreviewSelect ui-next/ui/preview.slint  a folder, one row selected
+//   slint-viewer --component PreviewSearch ui-next/ui/preview.slint  a folder, the search open
+//   slint-viewer --component PreviewSheet ui-next/ui/preview.slint   the sort sheet
+//   slint-viewer --component PreviewDialog ui-next/ui/preview.slint  the delete question
+// Tapping the tab bar switches tabs. Taps in a list do nothing here: Rust handles those.
+
+import { Tok } from "tokens.slint";
+import { Icons } from "icons.slint";
+import { HomeState, BrowseState, DialogState, Nav, SheetState } from "state.slint";
+import { MainView } from "shell.slint";
+
+/// Fills the screens' globals with the mockup's sample content.
+component Samples inherits Rectangle {
+    init => {
+        Tok.dark = true;
+        HomeState.categories = [
+            { label: "Downloads", d: Icons.download },
+            { label: "Images", d: Icons.image },
+            { label: "Videos", d: Icons.play },
+            { label: "Audio", d: Icons.music },
+            { label: "Documents", d: Icons.document },
+        ];
+        HomeState.storage-usage = "78.2 GB / 128 GB";
+        HomeState.storage-fraction = 0.611;
+        HomeState.folders = [
+            { stem: "DCIM", ext: "", meta: "23 items • Oct 28, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "Download", ext: "", meta: "12 items • Nov 8, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "Music", ext: "", meta: "7 items • Oct 20, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "Pictures", ext: "", meta: "42 items • Nov 1, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "Movies", ext: "", meta: "5 items • Oct 18, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "Documents", ext: "", meta: "9 items • Oct 15, 2026", d: Icons.folder, tint: transparent, folder: true },
+        ];
+        BrowseState.title = "Download";
+        BrowseState.subtitle = "/storage/emulated/0/Download";
+        BrowseState.rows = [
+            { stem: "Invoices", ext: "", meta: "4 items • Nov 8, 2026", d: Icons.folder, tint: transparent, folder: true },
+            { stem: "backup-2026-11", ext: ".kiln", meta: "1.20 GB • Nov 7, 2026", d: Icons.archive, tint: Tok.accent },
+            { stem: "a-rather-long-file-name-that-has-to-be-cut-somewhere-in-the-middle-of-it", ext: ".pdf", meta: "3.41 MB • Nov 6, 2026", d: Icons.document, tint: Tok.icon },
+            { stem: "holiday", ext: ".jpg", meta: "4.80 MB • Nov 2, 2026", d: Icons.image, tint: Tok.icon },
+            { stem: "notes", ext: ".txt", meta: "812 B • Oct 30, 2026", d: Icons.file, tint: Tok.icon, selected: true },
+        ];
+    }
+}
+
+export component PreviewWindow inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+}
+
+export component PreviewBrowse inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+    }
+}
+
+export component PreviewSelect inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        BrowseState.selecting = true;
+        BrowseState.selected-count = 1;
+    }
+}
+
+export component PreviewSearch inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        BrowseState.searching = true;
+    }
+}
+
+export component PreviewSheet inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        SheetState.title = "Sort by";
+        SheetState.rows = [
+            { label: "Name", checked: true },
+            { label: "Size" },
+            { label: "Date modified" },
+            { label: "Type" },
+            { label: "Ascending", checked: true },
+            { label: "Descending" },
+        ];
+        SheetState.open = true;
+    }
+}
+
+export component PreviewDialog inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        BrowseState.selecting = true;
+        BrowseState.selected-count = 2;
+        DialogState.title = "Delete 2 items?";
+        DialogState.body = "This can't be undone.";
+        DialogState.cancel-label = "Cancel";
+        DialogState.confirm-label = "Delete";
+        DialogState.danger = true;
+        DialogState.open = true;
+    }
+}

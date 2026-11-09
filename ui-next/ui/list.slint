@@ -1,0 +1,87 @@
+// The list of a folder, built by hand because the stock `ListView` needs the std-widgets styles
+// (and their SVG assets), which this app's Slint build leaves out on purpose.
+//
+// Every row is `Tok.row-h` high, so which rows are in view is plain arithmetic and nothing needs
+// measuring. Only enough rows to fill the view (plus a few spare above and below) exist at all.
+// They are slots used in rotation: row `r` always lives in slot `r mod slots`, so when the list
+// scrolls by a row, one slot gets a new row and the others keep theirs untouched.
+//
+// Nothing here reads the scroll position in a binding. A binding on it would be marked stale on
+// every frame of a scroll, and with it the bindings of everything in every row. `sync` runs from
+// a `changed` handler instead and only writes a property when its number really changes.
+
+import { Tok } from "tokens.slint";
+import { FileRow } from "rows.slint";
+import { EntryVm } from "state.slint";
+
+export component FileList inherits Rectangle {
+    in property <[EntryVm]> rows;
+    /// Empty room under the last row, so that something floating over the bottom of the list
+    /// (the selection bar) never hides a row that cannot be scrolled out from under it.
+    in property <length> bottom-inset: 0px;
+    /// 0 at the top, negative below it; Rust reads and writes it through a two-way binding.
+    in-out property <length> scroll-y <=> flick.content-y;
+    /// The first row in view, and how many fit (one more than the height needs, for the row
+    /// that is cut at the bottom).
+    out property <int> view-first: 0;
+    out property <int> view-count: 0;
+    callback clicked(int);
+    callback long-pressed(int);
+    callback menu(int);
+    /// `view-first` or `view-count` changed.
+    callback viewed();
+
+    /// Rows built above and below the view.
+    property <int> spare: 3;
+    /// The first row that has a slot.
+    property <int> first: 0;
+    property <int> slots: Math.ceil(root.height / Tok.row-h) + 2 * root.spare + 1;
+
+    function sync() {
+        let top = Math.max(0, Math.floor(-flick.content-y / Tok.row-h));
+        let build-from = Math.max(0, top - root.spare);
+        if (build-from != root.first) {
+            root.first = build-from;
+        }
+        let count = Math.ceil(root.height / Tok.row-h) + 1;
+        if (top != root.view-first || count != root.view-count) {
+            root.view-first = top;
+            root.view-count = count;
+            root.viewed();
+        }
+    }
+
+    clip: true;
+    init => {
+        root.sync();
+    }
+    changed height => {
+        root.sync();
+    }
+
+    flick := Flickable {
+        content-width: root.width;
+        content-height: root.rows.length * Tok.row-h + root.bottom-inset;
+        changed content-y => {
+            root.sync();
+        }
+
+        for slot in root.slots: FileRow {
+            property <int> index: root.first + Math.mod(slot - root.first, root.slots);
+            x: 0px;
+            y: self.index * Tok.row-h;
+            width: root.width;
+            visible: self.index < root.rows.length;
+            vm: root.rows[self.index];
+            clicked => {
+                root.clicked(self.index);
+            }
+            long-pressed => {
+                root.long-pressed(self.index);
+            }
+            menu => {
+                root.menu(self.index);
+            }
+        }
+    }
+}

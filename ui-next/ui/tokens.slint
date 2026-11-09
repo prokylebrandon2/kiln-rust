@@ -1,0 +1,80 @@
+// Design tokens of the new Kiln UI. Every colour, size and type size lives here and nowhere else.
+//
+// Dark values are MEASURED from the mockup docs/design/home-dark.png (a 393 pt wide phone frame,
+// scaled to dp). Light values are PROPOSED: the mockup is dark only, so the light palette is the
+// same neutral ramp turned around. 1 Slint px == 1 dp.
+
+export global Tok {
+    // ---- set from Rust ------------------------------------------------------------------------
+    /// The system is in dark mode.
+    in-out property <bool> dark: true;
+    /// Settings > Display > Font size (sp = dp * font-scale).
+    in-out property <float> font-scale: 1.0;
+    /// Settings > Animation speed as a factor: Off 0, Fast 0.6, Normal 0.85, Relaxed 1.2.
+    in-out property <float> anim-scale: 0.85;
+
+    // ---- colours ------------------------------------------------------------------------------
+    out property <color> bg: dark ? #121315 : #F6F6F8;
+    /// Search pill, category tiles, storage card.
+    out property <color> surface: dark ? #212226 : #FFFFFF;
+    /// Bottom navigation bar.
+    out property <color> nav: dark ? #1D1E22 : #FFFFFF;
+    /// Hairlines and dividers.
+    out property <color> line: dark ? #2A2B2F : #E4E4E9;
+    out property <color> text: dark ? #FFFFFF : #16171A;
+    out property <color> text-2: dark ? #A7ABB4 : #62656C;
+    out property <color> icon: dark ? #D0D3DA : #3C3F45;
+    out property <color> icon-folder: dark ? #73777E : #7A7F88;
+    out property <color> track: dark ? #3E3F44 : #DFE0E5;
+    out property <color> fill: dark ? #A6AAB2 : #5A5E67;
+    /// Overlay while a row or button is pressed.
+    out property <color> press: dark ? #FFFFFF14 : #00000012;
+    /// A selected row.
+    out property <color> sel: dark ? #FFFFFF1F : #0000001A;
+    /// The one accent; neutral on purpose, as in the mockup.
+    out property <color> accent: dark ? #D5D8DF : #2B2E35;
+    out property <color> danger: dark ? #F2B8B5 : #B3261E;
+    /// Over everything behind a sheet.
+    out property <color> scrim: #00000080;
+
+    // ---- geometry (dp) ------------------------------------------------------------------------
+    out property <length> gutter: 18px;
+    /// Height of the title row of a screen.
+    out property <length> bar-h: 56px;
+    out property <length> pill-h: 48px;
+    out property <length> tile-h: 64px;
+    out property <length> tile-gap: 10px;
+    out property <length> tile-radius: 14px;
+    out property <length> card-h: 60px;
+    out property <length> card-radius: 16px;
+    out property <length> progress-h: 6px;
+    out property <length> row-h: 56px;
+    /// The icon column of a row, and the icon inside it.
+    out property <length> row-lead: 56px;
+    out property <length> row-icon: 40px;
+    /// Where a row's text starts: gutter + icon column + 12.
+    out property <length> row-text-x: 86px;
+    /// Room on the right of a row for its menu button.
+    out property <length> row-trail: 52px;
+    out property <length> nav-h: 62px;
+    /// A sheet: the card's inset from the screen sides, its padding, its title, and a row of it.
+    out property <length> sheet-margin: 20px;
+    out property <length> sheet-pad: 20px;
+    out property <length> sheet-title-h: 40px;
+    out property <length> sheet-row-h: 48px;
+    /// The selection bar: a card of tiles (6 dp padding round 56 dp tiles), 12 dp from the sides
+    /// and the bottom of the screen.
+    out property <length> sel-bar-h: 68px;
+    out property <length> sel-bar-gap: 12px;
+
+    // ---- type, as sizes before the font scale -------------------------------------------------
+    /// sp -> dp.
+    pure public function sp(v: length) -> length {
+        v * font-scale
+    }
+
+    /// A base duration scaled by the animation speed.
+    pure public function dur(v: duration) -> duration {
+        v * anim-scale
+    }
+}

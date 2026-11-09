@@ -1,0 +1,107 @@
+// The one row of every list. Deliberately light: about a dozen elements, one timer (the long
+// press), no cached layer, no animation. The name is cut at its end but the extension never is.
+
+import { Tok } from "tokens.slint";
+import { Icon, IconButton, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+import { EntryVm } from "state.slint";
+
+export component FileRow inherits Rectangle {
+    in property <EntryVm> vm;
+    /// The hairline under the row, inset to the text.
+    in property <bool> divider: true;
+    callback clicked();
+    callback long-pressed();
+    callback menu();
+    height: Tok.row-h;
+    background: root.vm.selected ? Tok.sel : transparent;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        long-press: true;
+        clicked => {
+            root.clicked();
+        }
+        long-pressed => {
+            root.long-pressed();
+        }
+    }
+
+    // the icon column
+    Rectangle {
+        x: Tok.gutter + (Tok.row-lead - Tok.row-icon) / 2;
+        y: (parent.height - Tok.row-icon) / 2;
+        width: Tok.row-icon;
+        height: Tok.row-icon;
+        border-radius: 8px;
+        clip: true;
+
+        if root.vm.has-thumb && !root.vm.selected: Image {
+            width: 100%;
+            height: 100%;
+            source: root.vm.thumb;
+            image-fit: cover;
+        }
+        if !root.vm.has-thumb || root.vm.selected: Icon {
+            size: Tok.row-icon;
+            d: root.vm.selected ? Icons.check : root.vm.d;
+            tint: root.vm.selected ? Tok.accent : root.vm.tint != transparent ? root.vm.tint : root.vm.folder ? Tok.icon-folder : Tok.icon;
+        }
+    }
+
+    // the two lines
+    VerticalLayout {
+        x: Tok.row-text-x;
+        y: 0px;
+        width: parent.width - Tok.row-text-x - Tok.row-trail - 4px;
+        height: parent.height;
+        alignment: center;
+        spacing: 1px;
+
+        HorizontalLayout {
+            // not stretched: the extension follows the name closely, and a long name is cut (by
+            // the layout shrinking it) rather than the extension
+            alignment: start;
+            Text {
+                min-width: 0px;
+                text: root.vm.stem;
+                color: Tok.text;
+                font-size: Tok.sp(16px);
+                wrap: no-wrap;
+                overflow: elide;
+            }
+            if root.vm.ext != "": Text {
+                text: root.vm.ext;
+                color: Tok.text;
+                font-size: Tok.sp(16px);
+                wrap: no-wrap;
+            }
+        }
+        Text {
+            text: root.vm.meta;
+            color: Tok.text-2;
+            font-size: Tok.sp(13px);
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+
+    IconButton {
+        x: parent.width - Tok.row-trail;
+        y: (parent.height - self.height) / 2;
+        d: Icons.more;
+        tint: Tok.icon;
+        clicked => {
+            root.menu();
+        }
+    }
+
+    if root.divider: Rectangle {
+        x: Tok.row-text-x;
+        y: parent.height - 1px;
+        width: parent.width - Tok.row-text-x - 20px;
+        height: 1px;
+        background: Tok.line;
+    }
+}

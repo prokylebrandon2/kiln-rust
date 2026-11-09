@@ -1,0 +1,86 @@
+// The bottom navigation: four equal cells; the current one is white with a short underline.
+
+import { Tok } from "tokens.slint";
+import { Icon, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+
+export struct NavItem {
+    label: string,
+    d: string,
+}
+
+component NavCell inherits Rectangle {
+    in property <NavItem> item;
+    in property <bool> current: false;
+    callback clicked();
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        padding-bottom: 6px;
+
+        Rectangle {
+            height: 26px;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                d: root.item.d;
+                size: 26px;
+                tint: root.current ? Tok.text : Tok.text-2;
+            }
+        }
+        Text {
+            text: root.item.label;
+            color: root.current ? Tok.text : Tok.text-2;
+            font-size: Tok.sp(12px);
+            font-weight: root.current ? 700 : 400;
+            horizontal-alignment: center;
+            wrap: no-wrap;
+        }
+    }
+
+    if root.current: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - 4px;
+        width: 52px;
+        height: 2px;
+        border-radius: 1px;
+        background: Tok.text;
+    }
+}
+
+export component BottomNav inherits Rectangle {
+    in property <int> current: 0;
+    in property <[NavItem]> items: [
+        { label: "Files", d: Icons.folder },
+        { label: "Recent", d: Icons.clock },
+        { label: "Starred", d: Icons.star },
+        { label: "Settings", d: Icons.settings },
+    ];
+    callback selected(int);
+    height: Tok.nav-h;
+    background: Tok.nav;
+
+    Rectangle {
+        y: 0px;
+        height: 1px;
+        background: Tok.line;
+    }
+
+    HorizontalLayout {
+        for item[i] in root.items: NavCell {
+            item: item;
+            current: i == root.current;
+            clicked => {
+                root.selected(i);
+            }
+        }
+    }
+}

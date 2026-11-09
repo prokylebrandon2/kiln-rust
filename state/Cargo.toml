@@ -1,0 +1,10 @@
+[package]
+name = "kiln-state"
+version = "0.1.0"
+edition = "2024"
+description = "Kiln's UI-independent state: folder listings, sorting, filtering, selection and formatting. No UI toolkit, no Android, no dependencies, so it is unit-tested on any machine."
+publish = false
+
+[lib]
+name = "kiln_state"
+path = "src/lib.rs"

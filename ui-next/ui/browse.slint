@@ -1,0 +1,252 @@
+// A folder (or, later, a search or an archive): the back button, the name of the folder, and a
+// virtualised list (list.slint).
+
+import { Tok } from "tokens.slint";
+import { Icon, IconButton, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+import { FileList } from "list.slint";
+import { BrowseState } from "state.slint";
+
+/// The field of the search row: a magnifier, the text, and "Search" while it is empty. It takes
+/// the keyboard focus when it appears.
+component SearchField inherits Rectangle {
+    callback edited(string);
+    height: Tok.pill-h - 4px;
+    border-radius: self.height / 2;
+    background: Tok.surface;
+
+    init => {
+        input.focus();
+    }
+
+    Icon {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.search;
+        size: 20px;
+        tint: Tok.text-2;
+    }
+    if input.text == "": Text {
+        x: 46px;
+        y: 0px;
+        width: parent.width - 46px - 16px;
+        height: parent.height;
+        text: "Search";
+        color: Tok.text-2;
+        font-size: Tok.sp(16px);
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+    input := TextInput {
+        x: 46px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 46px - 16px;
+        color: Tok.text;
+        font-size: Tok.sp(16px);
+        single-line: true;
+        selection-background-color: Tok.text-2.with-alpha(0.35);
+        selection-foreground-color: Tok.text;
+        edited => {
+            root.edited(self.text);
+        }
+    }
+}
+
+/// One tile of the selection bar: an icon over a label.
+component BarTile inherits Rectangle {
+    in property <string> d;
+    in property <string> label;
+    in property <color> tint: Tok.icon;
+    callback clicked();
+    height: Tok.sel-bar-h - 12px;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 14px;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: 8px;
+        d: root.d;
+        size: 24px;
+        tint: root.tint;
+    }
+    Text {
+        x: 0px;
+        y: 36px;
+        width: parent.width;
+        text: root.label;
+        color: root.tint;
+        font-size: Tok.sp(12px);
+        horizontal-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+}
+
+/// While rows are selected: Copy, Move, Delete and Pack on a card floating over the list.
+component SelectionBar inherits Rectangle {
+    callback tile(int);
+    height: Tok.sel-bar-h;
+    border-radius: 20px;
+    background: Tok.surface;
+    border-width: 1px;
+    border-color: Tok.line;
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 0px;
+        BarTile {
+            d: Icons.copy;
+            label: "Copy";
+            clicked => {
+                root.tile(0);
+            }
+        }
+        BarTile {
+            d: Icons.move;
+            label: "Move";
+            clicked => {
+                root.tile(1);
+            }
+        }
+        BarTile {
+            d: Icons.delete;
+            label: "Delete";
+            tint: Tok.danger;
+            clicked => {
+                root.tile(2);
+            }
+        }
+        BarTile {
+            d: Icons.archive;
+            label: "Pack";
+            tint: Tok.accent;
+            clicked => {
+                root.tile(3);
+            }
+        }
+    }
+}
+
+export component BrowseScreen inherits Rectangle {
+    background: Tok.bg;
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: Tok.bar-h + 4px;
+            padding-left: 4px;
+            padding-right: 4px;
+            spacing: 4px;
+            IconButton {
+                // Back, or while rows are selected the cross that clears the selection
+                d: BrowseState.selecting ? Icons.close : Icons.back;
+                clicked => {
+                    BrowseState.back-clicked();
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                alignment: center;
+                Text {
+                    text: BrowseState.selecting ? BrowseState.selected-count + " selected" : BrowseState.title;
+                    color: Tok.text;
+                    font-size: Tok.sp(20px);
+                    font-weight: 700;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                if BrowseState.subtitle != "" && !BrowseState.selecting: Text {
+                    text: BrowseState.subtitle;
+                    color: Tok.text-2;
+                    font-size: Tok.sp(12px);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+            // the search and the sort button are for a folder, not for a selection
+            if !BrowseState.selecting: IconButton {
+                // the magnifier turns into a cross while searching
+                d: BrowseState.searching ? Icons.close : Icons.search;
+                clicked => {
+                    BrowseState.search-clicked();
+                }
+            }
+            if !BrowseState.selecting: IconButton {
+                d: Icons.sort;
+                clicked => {
+                    BrowseState.sort-clicked();
+                }
+            }
+            IconButton {
+                d: Icons.more;
+                clicked => {
+                    BrowseState.more-clicked();
+                }
+            }
+        }
+
+        if BrowseState.searching: HorizontalLayout {
+            padding-left: Tok.gutter - 6px;
+            padding-right: Tok.gutter - 6px;
+            padding-bottom: 8px;
+            SearchField {
+                horizontal-stretch: 1;
+                edited(text) => {
+                    BrowseState.query-edited(text);
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+
+            FileList {
+                width: 100%;
+                height: 100%;
+                rows: BrowseState.rows;
+                bottom-inset: BrowseState.selecting ? Tok.sel-bar-h + 2 * Tok.sel-bar-gap : 0px;
+                scroll-y <=> BrowseState.scroll-y;
+                clicked(i) => {
+                    BrowseState.row-clicked(i);
+                }
+                long-pressed(i) => {
+                    BrowseState.row-long-pressed(i);
+                }
+                menu(i) => {
+                    BrowseState.row-menu(i);
+                }
+                viewed => {
+                    BrowseState.view-first = self.view-first;
+                    BrowseState.view-count = self.view-count;
+                    BrowseState.viewed();
+                }
+            }
+
+            if BrowseState.selecting: SelectionBar {
+                x: Tok.sel-bar-gap;
+                width: parent.width - 2 * Tok.sel-bar-gap;
+                y: parent.height - self.height - Tok.sel-bar-gap;
+                tile(i) => {
+                    BrowseState.bar-clicked(i);
+                }
+            }
+
+            if BrowseState.empty-text != "": Text {
+                x: Tok.gutter;
+                y: 48px;
+                width: parent.width - 2 * Tok.gutter;
+                text: BrowseState.empty-text;
+                color: Tok.text-2;
+                font-size: Tok.sp(15px);
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

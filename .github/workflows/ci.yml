@@ -60,3 +60,41 @@ jobs:
       - run: |
           pip install cryptography
           python3 -I skln/tests/golden/make_v1.py --verify
+
+  # The UI rewrite (docs/UI-REWRITE.md). Both jobs need no Android SDK and no Skia, so they take a
+  # minute or two instead of the APK build's quarter of an hour. They run without --locked on
+  # purpose: the two new crates were added to Cargo.lock by hand.
+  state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # not blocking until `cargo fmt -p kiln-state` has been run once by someone with a compiler
+      - run: cargo fmt -p kiln-state --check
+        continue-on-error: true
+      - run: cargo clippy -p kiln-state --all-targets -- -D warnings
+      - run: cargo test -p kiln-state
+
+  # Compiles every .slint file of the new UI (the app window and the preview window), after two
+  # script checks that need only Python.
+  ui-next:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: python3 tools/ui/slint_lint.py ui-next/ui/lib.slint
+
+      # icons.slint is generated; fail if it was edited by hand or the legacy icons changed
+      - run: |
+          python3 tools/ui/gen_icons_next.py
+          git diff --exit-code -- ui-next/ui/icons.slint
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo check -p kiln-ui-next

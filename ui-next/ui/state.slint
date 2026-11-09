@@ -1,0 +1,131 @@
+// What Rust tells the UI, and what the UI tells Rust. One global per screen: the screens read
+// them directly, so nothing is passed down through intermediate components, and a preview can
+// fill them with sample data (preview.slint).
+
+/// One row of a list.
+export struct EntryVm {
+    /// The name without its extension, which is cut at the end when it is too long...
+    stem: string,
+    /// ...and the extension, which is always shown (".pdf"), or "".
+    ext: string,
+    /// The second line: "23 items • Oct 28, 2026".
+    meta: string,
+    /// Icon path data (Icons.folder or one picked by Rust).
+    d: string,
+    tint: color,
+    selected: bool,
+    /// A folder: its icon is drawn in the folder colour when `tint` is transparent.
+    folder: bool,
+    /// A picture drawn instead of the icon.
+    thumb: image,
+    has-thumb: bool,
+}
+
+/// One line of a sheet (a menu or a choice).
+export struct SheetRow {
+    label: string,
+    /// Icon path data, or "" for none.
+    d: string,
+    /// Draws a check on the right: the current choice of a list of choices.
+    checked: bool,
+}
+
+/// One of the quick-access tiles under the search pill.
+export struct CategoryVm {
+    label: string,
+    d: string,
+}
+
+export global Nav {
+    /// 0 Files, 1 Recent, 2 Starred, 3 Settings.
+    in-out property <int> tab: 0;
+    /// A folder is open on top of the tabs.
+    in-out property <bool> browsing: false;
+    /// "All files access" has not been granted: nothing else can be shown yet.
+    in-out property <bool> permission-missing: false;
+    callback tab-selected(int);
+    /// The Back key (the Android backend reports it as a key press). Rust decides what it does.
+    callback back-pressed();
+    /// The "Allow access" button of the permission screen.
+    callback allow-access();
+}
+
+/// One line of text that appears over the bottom of the screen for a moment. Rust sets `text`
+/// and clears it again.
+export global ToastState {
+    in-out property <string> text;
+}
+
+export global HomeState {
+    in-out property <[CategoryVm]> categories;
+    in-out property <string> storage-name: "Internal Storage";
+    in-out property <string> storage-usage;
+    /// Used / total, 0..1.
+    in-out property <float> storage-fraction: 0.0;
+    in-out property <[EntryVm]> folders;
+    callback search-clicked();
+    callback more-clicked();
+    callback category-clicked(int);
+    callback storage-clicked();
+    callback folder-clicked(int);
+    callback folder-menu(int);
+}
+
+export global BrowseState {
+    in-out property <string> title;
+    in-out property <string> subtitle;
+    in-out property <[EntryVm]> rows;
+    /// "This folder is empty.", "Loading...", or "" while there are rows.
+    in-out property <string> empty-text;
+    /// How far the list is scrolled (0 at the top, negative below it). Two-way bound to the
+    /// list, so Rust reads it to remember a place and writes it to go back to one.
+    in-out property <length> scroll-y;
+    /// The first row in view and how many rows fit, kept up to date by the list. Rust reads
+    /// them to know which rows to fetch sizes and dates for first.
+    in-out property <int> view-first;
+    in-out property <int> view-count;
+    /// Rows are selected: the bar shows how many, and the left button clears the selection.
+    in-out property <bool> selecting: false;
+    in-out property <int> selected-count: 0;
+    /// The search field is open under the bar.
+    in-out property <bool> searching: false;
+    /// `view-first` or `view-count` changed.
+    callback viewed();
+    /// A tile of the selection bar: 0 Copy, 1 Move, 2 Delete, 3 Pack.
+    callback bar-clicked(int);
+    callback back-clicked();
+    callback search-clicked();
+    callback sort-clicked();
+    callback more-clicked();
+    /// The text of the search field changed.
+    callback query-edited(string);
+    callback row-clicked(int);
+    callback row-long-pressed(int);
+    callback row-menu(int);
+}
+
+/// A modal sheet: a menu or a choice over the whole window. Rust fills it and opens it, and the
+/// sheet only says which line was tapped (`picked`) or that it was backed out of (`dismissed`).
+export global SheetState {
+    in-out property <bool> open: false;
+    in-out property <string> title;
+    in-out property <[SheetRow]> rows;
+    callback picked(int);
+    callback dismissed();
+}
+
+/// A question or a message in the middle of the window: a title, some text, and one or two
+/// buttons. Rust fills it and opens it; the dialog only says which button was tapped. A tap
+/// outside the card counts as Cancel (or as OK when there is no Cancel).
+export global DialogState {
+    in-out property <bool> open: false;
+    in-out property <string> title;
+    in-out property <string> body;
+    /// "" for a message that has only its one button.
+    in-out property <string> cancel-label;
+    in-out property <string> confirm-label;
+    /// The confirm button is drawn in the danger colour.
+    in-out property <bool> danger: false;
+    callback confirmed();
+    callback cancelled();
+}

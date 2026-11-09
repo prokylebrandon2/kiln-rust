@@ -1,0 +1,118 @@
+// The modal dialog: a title, some text and one or two buttons on a card in the middle of the
+// window, over a scrim. `DialogState` is the only interface; the dialog reports `confirmed` or
+// `cancelled` and Rust closes it.
+//
+// The card is laid out by hand, not by a layout, because the height of wrapped text has to be
+// known from the text's own width: the card's height is the sum of what is in it.
+
+import { Tok } from "tokens.slint";
+import { Pressable } from "controls.slint";
+import { DialogState } from "state.slint";
+
+component DialogButton inherits Rectangle {
+    in property <string> text;
+    /// Drawn as a filled pill (the confirm button) rather than as plain text (Cancel).
+    in property <bool> filled: false;
+    in property <color> fill-color: Tok.accent;
+    callback clicked();
+    height: 44px;
+    preferred-width: Math.max(88px, label.preferred-width + 40px);
+    min-width: self.preferred-width;
+    border-radius: 22px;
+    background: root.filled ? root.fill-color : transparent;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 22px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    label := Text {
+        x: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.filled ? Tok.bg : Tok.text;
+        font-size: Tok.sp(15px);
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+export component DialogOverlay inherits Rectangle {
+    background: Tok.scrim;
+
+    // a tap outside the card backs out
+    TouchArea {
+        clicked => {
+            DialogState.cancelled();
+        }
+    }
+
+    card := Rectangle {
+        property <length> inner-w: self.width - 2 * Tok.sheet-pad;
+        property <length> body-gap: DialogState.body == "" ? 0px : 10px;
+        width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, Tok.sheet-pad + title.preferred-height + self.body-gap + body.preferred-height + 18px + 44px + 12px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tok.surface;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Tok.line;
+        clip: true;
+
+        // taps on the card stay on the card
+        TouchArea { }
+
+        title := Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad;
+            width: card.inner-w;
+            text: DialogState.title;
+            color: Tok.text;
+            font-size: Tok.sp(19px);
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        body := Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + title.preferred-height + card.body-gap;
+            width: card.inner-w;
+            text: DialogState.body;
+            color: Tok.text-2;
+            font-size: Tok.sp(15px);
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            x: Tok.sheet-pad - 8px;
+            y: parent.height - 12px - 44px;
+            width: card.inner-w + 16px;
+            height: 44px;
+            alignment: end;
+            spacing: 4px;
+
+            if DialogState.cancel-label != "": DialogButton {
+                text: DialogState.cancel-label;
+                clicked => {
+                    DialogState.cancelled();
+                }
+            }
+            DialogButton {
+                text: DialogState.confirm-label;
+                filled: true;
+                fill-color: DialogState.danger ? Tok.danger : Tok.accent;
+                clicked => {
+                    DialogState.confirmed();
+                }
+            }
+        }
+    }
+}

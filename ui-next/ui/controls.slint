@@ -1,0 +1,144 @@
+// The few controls everything else is built from. No ripples, no per-control timers beyond the
+// long press, no squash animation: a press is a flat overlay, which costs one rectangle.
+
+import { Tok } from "tokens.slint";
+
+/// One of the icons of icons.slint (pass `Icons.folder`), tinted.
+export component Icon inherits Path {
+    in property <string> d;
+    in property <color> tint: Tok.icon;
+    in property <length> size: 24px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: root.d;
+    fill: root.tint;
+}
+
+/// A touch target. Put it first and the content over it, or wrap the content in it. A press tints
+/// the area; `long-press` makes it report a hold after 400 ms (and then no click).
+export component Pressable inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <length> radius: 0px;
+    in property <bool> long-press: false;
+    callback clicked();
+    callback long-pressed();
+    out property <bool> pressed: touch.pressed && root.enabled;
+
+    property <bool> fired: false;
+
+    border-radius: root.radius;
+    background: root.pressed ? Tok.press : transparent;
+
+    Timer {
+        interval: 400ms;
+        running: root.pressed && root.long-press;
+        triggered => {
+            root.fired = true;
+            root.long-pressed();
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.fired = false;
+            }
+        }
+        clicked => {
+            if (!root.fired) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+/// A 48 dp round button with a 24 dp icon.
+export component IconButton inherits Rectangle {
+    in property <string> d;
+    in property <color> tint: Tok.icon;
+    in property <length> glyph: 24px;
+    callback clicked();
+    width: 48px;
+    height: 48px;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 24px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: root.glyph;
+        d: root.d;
+        tint: root.tint;
+    }
+}
+
+/// A bar that fills to `value` (0..1).
+export component ProgressBar inherits Rectangle {
+    in property <float> value: 0.0;
+    height: Tok.progress-h;
+    border-radius: self.height / 2;
+    background: Tok.track;
+    clip: true;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        height: parent.height;
+        width: parent.width * Math.min(1.0, Math.max(0.0, root.value));
+        border-radius: parent.border-radius;
+        background: Tok.fill;
+    }
+}
+
+/// "Storage", "Folders": the small grey heading above a block.
+export component SectionHeader inherits VerticalLayout {
+    in property <string> text;
+    padding-top: 24px;
+    padding-bottom: 10px;
+
+    Text {
+        text: root.text;
+        color: Tok.text-2;
+        font-size: Tok.sp(15px);
+        font-weight: 500;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+}
+
+/// A wide pill button with a label.
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 48px;
+    border-radius: 24px;
+    background: Tok.accent;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 24px;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Text {
+        text: root.text;
+        color: Tok.bg;
+        font-size: Tok.sp(16px);
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}

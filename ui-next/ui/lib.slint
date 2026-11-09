@@ -1,0 +1,57 @@
+// The root of the crate: what Rust sees. `MainWindow` is the app; `PreviewWindow` is the sample
+// window, exported only so that it is compiled (and so checked) with everything else.
+
+import { Tok } from "tokens.slint";
+import { MainView } from "shell.slint";
+import { PreviewWindow, PreviewBrowse, PreviewSelect, PreviewSearch, PreviewSheet, PreviewDialog } from "preview.slint";
+
+export { Tok, PreviewWindow, PreviewBrowse, PreviewSelect, PreviewSearch, PreviewSheet, PreviewDialog }
+export { HomeState, BrowseState, Nav, ToastState, SheetState, DialogState, EntryVm, CategoryVm, SheetRow } from "state.slint";
+export { Icons } from "icons.slint";
+
+import { Nav } from "state.slint";
+
+export component MainWindow inherits Window {
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    init => {
+        keys.focus();
+    }
+
+    /// Give the Back key a place to arrive again: the search field has the focus while it is
+    /// open, and when it goes the focus goes with it.
+    public function focus-keys() {
+        keys.focus();
+    }
+
+    // The Back key. The Android backend reports Back as a key press, and a press nobody accepts
+    // closes the app, so Back is always accepted here and Rust decides what it does.
+    keys := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            if (event.text == Key.Back) {
+                Nav.back-pressed();
+                return accept;
+            }
+            return reject;
+        }
+
+        // The system bars are drawn by the system, so the page starts below them: Slint reports
+        // them as the safe area. The bottom strip takes the navigation bar's colour so that the
+        // bar looks like it continues down to the edge of the screen.
+        Rectangle {
+            y: parent.height - root.safe-area-insets.bottom;
+            height: root.safe-area-insets.bottom;
+            background: Nav.browsing || Nav.permission-missing ? Tok.bg : Tok.nav;
+        }
+        VerticalLayout {
+            padding-top: root.safe-area-insets.top;
+            padding-bottom: root.safe-area-insets.bottom;
+            padding-left: root.safe-area-insets.left;
+            padding-right: root.safe-area-insets.right;
+            MainView { }
+        }
+    }
+}

@@ -1,0 +1,127 @@
+// The window's content: the tabs with the bottom bar, or a folder on top of them. It is a
+// Rectangle, not a Window, so that the app window and the preview window can both host it.
+
+import { Tok } from "tokens.slint";
+import { Icon, PrimaryButton } from "controls.slint";
+import { Icons } from "icons.slint";
+import { BottomNav } from "nav.slint";
+import { HomeScreen } from "home.slint";
+import { BrowseScreen } from "browse.slint";
+import { SheetOverlay } from "sheet.slint";
+import { DialogOverlay } from "dialog.slint";
+import { DialogState, Nav, SheetState, ToastState } from "state.slint";
+
+component Placeholder inherits Rectangle {
+    in property <string> title;
+    background: Tok.bg;
+    Text {
+        text: root.title;
+        color: Tok.text-2;
+        font-size: Tok.sp(15px);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+/// Shown instead of everything else until "All files access" is granted.
+component PermissionScreen inherits Rectangle {
+    background: Tok.bg;
+
+    VerticalLayout {
+        alignment: center;
+        padding-left: 32px;
+        padding-right: 32px;
+        spacing: 14px;
+
+        Rectangle {
+            height: 56px;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                d: Icons.lock;
+                size: 56px;
+                tint: Tok.text-2;
+            }
+        }
+        Text {
+            text: "Allow access to all files";
+            color: Tok.text;
+            font-size: Tok.sp(22px);
+            font-weight: 700;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "Kiln needs \"All files access\" to show and pack the files on this phone. Nothing leaves the phone.";
+            color: Tok.text-2;
+            font-size: Tok.sp(15px);
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 8px;
+        }
+        PrimaryButton {
+            text: "Allow access";
+            clicked => {
+                Nav.allow-access();
+            }
+        }
+    }
+}
+
+export component MainView inherits Rectangle {
+    background: Tok.bg;
+
+    if Nav.permission-missing: PermissionScreen { }
+
+    if !Nav.permission-missing && Nav.browsing: BrowseScreen { }
+
+    if !Nav.permission-missing && !Nav.browsing: VerticalLayout {
+        if Nav.tab == 0: HomeScreen {
+            vertical-stretch: 1;
+        }
+        if Nav.tab == 1: Placeholder {
+            vertical-stretch: 1;
+            title: "Recent";
+        }
+        if Nav.tab == 2: Placeholder {
+            vertical-stretch: 1;
+            title: "Starred";
+        }
+        if Nav.tab == 3: Placeholder {
+            vertical-stretch: 1;
+            title: "Settings";
+        }
+        BottomNav {
+            current: Nav.tab;
+            selected(i) => {
+                Nav.tab = i;
+                Nav.tab-selected(i);
+            }
+        }
+    }
+
+    if SheetState.open: SheetOverlay { }
+
+    if DialogState.open: DialogOverlay { }
+
+    if ToastState.text != "": Rectangle {
+        x: Tok.gutter;
+        width: parent.width - 2 * Tok.gutter;
+        height: 48px;
+        y: parent.height - (Nav.browsing ? 0px : Tok.nav-h) - self.height - 16px;
+        border-radius: 12px;
+        background: Tok.text;
+
+        Text {
+            x: 16px;
+            width: parent.width - 32px;
+            text: ToastState.text;
+            color: Tok.bg;
+            font-size: Tok.sp(14px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+}

@@ -84,3 +84,12 @@ pub fn ext(name: &str) -> String {
 pub fn plural(n: i64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
+
+/// An I/O error, without Rust's " (os error N)".
+pub fn io_text(e: &std::io::Error) -> String {
+    let mut text = e.to_string();
+    if let Some(i) = text.find(" (os error") {
+        text.truncate(i);
+    }
+    text
+}

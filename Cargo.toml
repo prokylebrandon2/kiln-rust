@@ -8,7 +8,7 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["bridge", "platform", "ui", "app", "skln"]
+members = ["bridge", "platform", "ui", "app", "skln", "state", "ui-next"]
 # The fuzz crate (cargo-fuzz) is built on its own, with a nightly toolchain.
 exclude = ["fuzz"]
 

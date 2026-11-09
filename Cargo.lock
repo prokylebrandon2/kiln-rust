@@ -1739,7 +1739,8 @@ name = "kiln-app"
 version = "0.5.0"
 dependencies = [
  "kiln-bridge",
- "kiln-ui",
+ "kiln-state",
+ "kiln-ui-next",
  "serde_json",
  "slint",
 ]
@@ -1777,8 +1778,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln-state"
+version = "0.1.0"
+
+[[package]]
 name = "kiln-ui"
 version = "0.5.0"
+dependencies = [
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "kiln-ui-next"
+version = "0.1.0"
 dependencies = [
  "slint",
  "slint-build",

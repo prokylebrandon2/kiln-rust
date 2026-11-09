@@ -1,0 +1,231 @@
+// The Files tab, as in docs/design/home-dark.png: title row, search pill, quick-access tiles,
+// storage card, then the folders of the storage root. The page scrolls as one.
+
+import { Tok } from "tokens.slint";
+import { Icon, IconButton, Pressable, ProgressBar, SectionHeader } from "controls.slint";
+import { Icons } from "icons.slint";
+import { FileRow } from "rows.slint";
+import { CategoryVm, HomeState } from "state.slint";
+
+component SearchPill inherits Rectangle {
+    callback clicked();
+    height: Tok.pill-h;
+    border-radius: self.height / 2;
+    background: Tok.surface;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: parent.border-radius;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Icon {
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.search;
+        size: 22px;
+        tint: Tok.text-2;
+    }
+    Text {
+        x: 50px;
+        y: 0px;
+        width: parent.width - 66px;
+        height: parent.height;
+        text: "Search files…";
+        color: Tok.text-2;
+        font-size: Tok.sp(15px);
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+}
+
+component CategoryTile inherits Rectangle {
+    in property <CategoryVm> category;
+    callback clicked();
+    height: Tok.tile-h;
+    border-radius: Tok.tile-radius;
+    background: Tok.surface;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: Tok.tile-radius;
+        clicked => {
+            root.clicked();
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 5px;
+
+        Rectangle {
+            height: 26px;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                d: root.category.d;
+                size: 26px;
+                tint: Tok.icon;
+            }
+        }
+        Text {
+            text: root.category.label;
+            color: Tok.text;
+            font-size: Tok.sp(11px);
+            horizontal-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+}
+
+component StorageCard inherits Rectangle {
+    callback clicked();
+    height: Tok.card-h;
+    border-radius: Tok.card-radius;
+    background: Tok.surface;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: Tok.card-radius;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Icon {
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.phone;
+        size: 28px;
+        tint: Tok.icon;
+    }
+    VerticalLayout {
+        x: 56px;
+        y: 0px;
+        width: 126px;
+        height: parent.height;
+        alignment: center;
+        spacing: 1px;
+
+        Text {
+            text: HomeState.storage-name;
+            color: Tok.text;
+            font-size: Tok.sp(15px);
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        Text {
+            text: HomeState.storage-usage;
+            color: Tok.text-2;
+            font-size: Tok.sp(13px);
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+    ProgressBar {
+        x: 192px;
+        y: (parent.height - self.height) / 2;
+        width: Math.max(40px, parent.width - 238px);
+        value: HomeState.storage-fraction;
+    }
+    Icon {
+        x: parent.width - 36px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.chevron-right;
+        size: 24px;
+        tint: Tok.text-2;
+    }
+}
+
+export component HomeScreen inherits Rectangle {
+    background: Tok.bg;
+
+    Flickable {
+        content-height: body.preferred-height;
+
+        body := VerticalLayout {
+            width: parent.width;
+            padding-bottom: 16px;
+
+            // title row: the buttons reach into the gutter, as in the mockup
+            HorizontalLayout {
+                height: Tok.bar-h;
+                padding-left: Tok.gutter;
+                padding-right: 4px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Files";
+                    color: Tok.text;
+                    font-size: Tok.sp(32px);
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+                IconButton {
+                    d: Icons.search;
+                    clicked => {
+                        HomeState.search-clicked();
+                    }
+                }
+                IconButton {
+                    d: Icons.more;
+                    clicked => {
+                        HomeState.more-clicked();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                padding-left: Tok.gutter;
+                padding-right: Tok.gutter;
+
+                Rectangle {
+                    height: 8px;
+                }
+                SearchPill {
+                    clicked => {
+                        HomeState.search-clicked();
+                    }
+                }
+                Rectangle {
+                    height: 18px;
+                }
+                HorizontalLayout {
+                    spacing: Tok.tile-gap;
+                    for c[i] in HomeState.categories: CategoryTile {
+                        horizontal-stretch: 1;
+                        category: c;
+                        clicked => {
+                            HomeState.category-clicked(i);
+                        }
+                    }
+                }
+                SectionHeader {
+                    text: "Storage";
+                }
+                StorageCard {
+                    clicked => {
+                        HomeState.storage-clicked();
+                    }
+                }
+                SectionHeader {
+                    text: "Folders";
+                    padding-bottom: 4px;
+                }
+            }
+
+            for e[i] in HomeState.folders: FileRow {
+                vm: e;
+                clicked => {
+                    HomeState.folder-clicked(i);
+                }
+                menu => {
+                    HomeState.folder-menu(i);
+                }
+            }
+        }
+    }
+}

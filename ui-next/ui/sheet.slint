@@ -1,0 +1,117 @@
+// The one modal sheet of the app: a menu (lines with an icon) or a choice (radio lines), as a
+// card in the middle of the window over a scrim. Every line is `Tok.sheet-row-h` high, so the
+// card's height is plain arithmetic, and a long menu scrolls inside it.
+//
+// Rust fills `SheetState` and opens it. A tap on a line reports its number; a tap on the scrim
+// (or the Back key, which Rust receives like any other) reports `dismissed`.
+
+import { Tok } from "tokens.slint";
+import { Icon, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+import { SheetRow, SheetState } from "state.slint";
+
+component SheetLine inherits Rectangle {
+    in property <SheetRow> vm;
+    callback clicked();
+    height: Tok.sheet-row-h;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 12px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    if root.vm.d != "": Icon {
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        d: root.vm.d;
+        size: 24px;
+        tint: Tok.icon;
+    }
+
+    Text {
+        // after the icon column, or at the edge when the line has no icon
+        x: root.vm.d != "" ? 10px + 24px + 14px : 10px;
+        y: 0px;
+        width: parent.width - self.x - (root.vm.checked ? 44px : 10px);
+        height: parent.height;
+        text: root.vm.label;
+        color: Tok.text;
+        font-size: Tok.sp(16px);
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    if root.vm.checked: Icon {
+        x: parent.width - 10px - 20px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.check;
+        size: 20px;
+        tint: Tok.accent;
+    }
+}
+
+export component SheetOverlay inherits Rectangle {
+    /// A sheet without a title (a menu) has no room for one either.
+    property <length> title-h: SheetState.title == "" ? 0px : Tok.sheet-title-h;
+    background: Tok.scrim;
+
+    // a tap outside the card backs out
+    TouchArea {
+        clicked => {
+            SheetState.dismissed();
+        }
+    }
+
+    card := Rectangle {
+        width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, 2 * Tok.sheet-pad + root.title-h + SheetState.rows.length * Tok.sheet-row-h);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tok.surface;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Tok.line;
+        clip: true;
+
+        // taps on the card stay on the card
+        TouchArea { }
+
+        Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad;
+            width: parent.width - 2 * Tok.sheet-pad;
+            height: root.title-h;
+            text: SheetState.title;
+            color: Tok.text;
+            font-size: Tok.sp(19px);
+            font-weight: 700;
+            vertical-alignment: top;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        Flickable {
+            x: Tok.sheet-pad - 10px;
+            y: Tok.sheet-pad + root.title-h;
+            width: parent.width - 2 * Tok.sheet-pad + 20px;
+            height: parent.height - Tok.sheet-pad - root.title-h - Tok.sheet-pad;
+            content-width: self.width;
+            content-height: SheetState.rows.length * Tok.sheet-row-h;
+
+            for r[i] in SheetState.rows: SheetLine {
+                x: 0px;
+                y: i * Tok.sheet-row-h;
+                width: parent.width;
+                vm: r;
+                clicked => {
+                    SheetState.picked(i);
+                }
+            }
+        }
+    }
+}

@@ -36,10 +36,15 @@ window component.
 2. `ui-next/` (`kiln-ui-next`): `tokens.slint` (every colour, size and type size),
    `controls.slint`, one file per screen, and `state.slint` with one global per screen
    (`Nav`, `HomeState`, `BrowseState`) as the only interface between Rust and a screen.
-   Lists are `FileList` (`list.slint`): rows are all `Tok.row-h` high, so only the rows in view
-   (plus a few spare) exist, used as slots in rotation (row `r` lives in slot `r mod slots`).
-   The stock `ListView` cannot be used: it needs the std-widgets styles and their SVG assets,
-   which this Slint build leaves out, and rustc fails on it (`load_image_from_embedded_data`).
+   Lists are `FileList` (`list.slint`) on the stock `ListView` (the only `std-widgets` import):
+   rows are all `Tok.row-h` high and `ListView` builds only the ones in view. Three things about
+   it matter. A `ListView` takes one `for` and nothing else, so the room under the last row
+   (`bottom-inset`) is made of blank rows. The default style (Fluent) embeds SVG images and rustc
+   fails on the generated code (`load_image_from_embedded_data`, no decoder in this build), so
+   `ui-next/build.rs` selects Cupertino explicitly. And the style's scroll view pans by touch only
+   and draws a scrollbar, so `mouse-drag-pan-enabled` is on and the scrollbars are off.
+   (The first version of the screen used `ListView`, then a hand-built list of rotating row slots
+   replaced it, then `ListView` came back with the style fixed.)
    `preview.slint` fills the globals with sample data for `slint-viewer`.
 3. Rust glue (`app/src/screens.rs`): `ListingModel` is a Slint `Model` over a `Listing` that
    builds an `EntryVm` only when the list asks for a row, so opening a folder of ten thousand
@@ -47,7 +52,7 @@ window component.
    rows in view and forwarded as `row_changed` (a sort by size or date fetches all first).
 
 Rules kept from the old code: edition 2024, `unsafe` only in `platform/`, no new dependencies
-(`ui-next` uses the same pinned `slint` / `slint-build`), no `std-widgets` at all (`tools/ui/slint_lint.py` fails on it).
+(`ui-next` uses the same pinned `slint` / `slint-build`), no `std-widgets` except `ListView` (`tools/ui/slint_lint.py` fails on any other).
 
 ## Done (slice 0)
 

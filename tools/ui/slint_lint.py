@@ -22,6 +22,9 @@ BUILTINS = {
     "PathArcTo", "PathCubicTo", "PathQuadraticTo", "PathClose", "MoveTo", "LineTo", "ArcTo",
     "CubicTo", "QuadraticTo", "Close",
 }
+# The one stock widget the app uses. A style has to be chosen for it (ui-next/build.rs) and the
+# default one (Fluent) embeds SVG images that this build cannot decode, so the choice matters.
+STD_WIDGETS_ALLOWED = {"ListView"}
 KEYWORD_CTX = re.compile(r"(?:component|global|struct|enum)\s+$")
 
 
@@ -119,9 +122,13 @@ def main(root_arg):
         visible = set(f.defined) | BUILTINS
         for names, relp in f.imports:
             if relp == "std-widgets.slint":
-                # the app's Slint build has no styles (and so none of their SVG assets): a stock
-                # widget compiles in Slint but fails in rustc, as ListView did
-                problems.append(f"{rel}: std-widgets.slint cannot be used in this build")
+                # a stock widget compiles in Slint but can still fail in rustc (Fluent's SVG
+                # assets), so only the ones that are known to build are allowed
+                for n in names:
+                    if n in STD_WIDGETS_ALLOWED:
+                        visible.add(n)
+                    else:
+                        problems.append(f"{rel}: {n} from std-widgets.slint is not allowed here")
                 continue
             target = files.get((p.parent / relp).resolve())
             if target is None:

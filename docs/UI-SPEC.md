@@ -208,7 +208,7 @@ Slint: `ui/ui/browser.slint` (`KFileList`, `RowData`), `ui/ui/main.slint`; Rust:
   date line 12 sp k_text2, in a search a third line 12 sp k_accent (ellipsised at the start),
   size 13 sp k_text2 on the right. A selected row is tinted k_sel and shows a check in the tile.
   Every row of a list is as high as the first one (all rows have the same lines), so the list is a
-  `Flickable` that builds only the rows in view (plus 3) at `index * row height`.
+  `ListView` (which builds only the rows in view) of `index * row height` high items.
 - **Row text.** Folder: `<date>` and `<n> item(s)`; encrypted set: `Encrypted set · <date>`;
   archive: `Archive · <date>` or `Encrypted archive · <date>` and the size; file: date
   and size. Icon colours: folders and sets k_accent, archives k_text2, files by type (`Icons`).

@@ -1,15 +1,16 @@
-// The list of a folder, built by hand because the stock `ListView` needs the std-widgets styles
-// (and their SVG assets), which this app's Slint build leaves out on purpose.
+// The list of a folder, on the stock `ListView`.
 //
-// Every row is `Tok.row-h` high, so which rows are in view is plain arithmetic and nothing needs
-// measuring. Only enough rows to fill the view (plus a few spare above and below) exist at all.
-// They are slots used in rotation: row `r` always lives in slot `r mod slots`, so when the list
-// scrolls by a row, one slot gets a new row and the others keep theirs untouched.
+// `ListView` builds only the rows in view (every row is `Tok.row-h` high, so which rows are in view
+// is plain arithmetic and nothing needs measuring), and it is the only place that imports
+// `std-widgets.slint`. This component keeps the interface the screens use: the rows, the room
+// left under the last one, the scroll position that Rust reads and writes, and which rows are in
+// view (Rust looks up sizes and dates for those first).
 //
 // Nothing here reads the scroll position in a binding. A binding on it would be marked stale on
 // every frame of a scroll, and with it the bindings of everything in every row. `sync` runs from
 // a `changed` handler instead and only writes a property when its number really changes.
 
+import { ListView } from "std-widgets.slint";
 import { Tok } from "tokens.slint";
 import { FileRow } from "rows.slint";
 import { EntryVm } from "state.slint";
@@ -17,10 +18,10 @@ import { EntryVm } from "state.slint";
 export component FileList inherits Rectangle {
     in property <[EntryVm]> rows;
     /// Empty room under the last row, so that something floating over the bottom of the list
-    /// (the selection bar) never hides a row that cannot be scrolled out from under it.
+    /// (the selection bar, "+ New") never hides a row that cannot be scrolled out from under it.
     in property <length> bottom-inset: 0px;
     /// 0 at the top, negative below it; Rust reads and writes it through a two-way binding.
-    in-out property <length> scroll-y <=> flick.content-y;
+    in-out property <length> scroll-y <=> list.content-y;
     /// The first row in view, and how many fit (one more than the height needs, for the row
     /// that is cut at the bottom).
     out property <int> view-first: 0;
@@ -31,18 +32,11 @@ export component FileList inherits Rectangle {
     /// `view-first` or `view-count` changed.
     callback viewed();
 
-    /// Rows built above and below the view.
-    property <int> spare: 3;
-    /// The first row that has a slot.
-    property <int> first: 0;
-    property <int> slots: Math.ceil(root.height / Tok.row-h) + 2 * root.spare + 1;
+    /// Blank rows under the last one, enough to cover `bottom-inset`.
+    property <int> spare-rows: Math.ceil(root.bottom-inset / Tok.row-h);
 
     function sync() {
-        let top = Math.max(0, Math.floor(-flick.content-y / Tok.row-h));
-        let build-from = Math.max(0, top - root.spare);
-        if (build-from != root.first) {
-            root.first = build-from;
-        }
+        let top = Math.max(0, Math.floor(-list.content-y / Tok.row-h));
         let count = Math.ceil(root.height / Tok.row-h) + 1;
         if (top != root.view-first || count != root.view-count) {
             root.view-first = top;
@@ -59,28 +53,39 @@ export component FileList inherits Rectangle {
         root.sync();
     }
 
-    flick := Flickable {
-        content-width: root.width;
-        content-height: root.rows.length * Tok.row-h + root.bottom-inset;
+    // The style puts its Flickable 2 px in from each edge of the ListView, so the ListView is 2 px
+    // bigger on every side and the rows sit exactly where the root's edges are. It has no scrollbar
+    // (a thin bar over the rows was not part of the design), and the pointer pans it whether it
+    // comes as a touch or as a mouse drag (the style's default is touch only).
+    list := ListView {
+        x: -2px;
+        y: -2px;
+        width: root.width + 4px;
+        height: root.height + 4px;
+        mouse-drag-pan-enabled: true;
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
         changed content-y => {
             root.sync();
         }
 
-        for slot in root.slots: FileRow {
-            property <int> index: root.first + Math.mod(slot - root.first, root.slots);
-            x: 0px;
-            y: self.index * Tok.row-h;
-            width: root.width;
-            visible: self.index < root.rows.length;
-            vm: root.rows[self.index];
-            clicked => {
-                root.clicked(self.index);
-            }
-            long-pressed => {
-                root.long-pressed(self.index);
-            }
-            menu => {
-                root.menu(self.index);
+        // The rows, then blank ones that make the room under the last row: a `ListView` takes
+        // one `for` and nothing else, and it takes every item to be as high as the first.
+        for i in root.rows.length + root.spare-rows: Rectangle {
+            height: Tok.row-h;
+
+            if i < root.rows.length: FileRow {
+                width: root.width;
+                vm: root.rows[i];
+                clicked => {
+                    root.clicked(i);
+                }
+                long-pressed => {
+                    root.long-pressed(i);
+                }
+                menu => {
+                    root.menu(i);
+                }
             }
         }
     }

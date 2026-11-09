@@ -58,6 +58,10 @@ component SheetLine inherits Rectangle {
 export component SheetOverlay inherits Rectangle {
     /// A sheet without a title (a menu) has no room for one either.
     property <length> title-h: SheetState.title == "" ? 0px : Tok.sheet-title-h;
+    /// Plain lines of text under the title, 22 px each.
+    property <length> body-h: SheetState.body-lines.length * 22px;
+    /// The Cancel button: 44 px high with 8 px above it.
+    property <length> cancel-h: SheetState.cancel-label == "" ? 0px : 52px;
     background: Tok.scrim;
 
     // a tap outside the card backs out
@@ -69,7 +73,7 @@ export component SheetOverlay inherits Rectangle {
 
     card := Rectangle {
         width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
-        height: Math.min(parent.height - 2 * Tok.sheet-margin, 2 * Tok.sheet-pad + root.title-h + SheetState.rows.length * Tok.sheet-row-h);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, 2 * Tok.sheet-pad + root.title-h + root.body-h + SheetState.rows.length * Tok.sheet-row-h + root.cancel-h);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Tok.surface;
@@ -95,11 +99,24 @@ export component SheetOverlay inherits Rectangle {
             overflow: elide;
         }
 
+        for line[i] in SheetState.body-lines: Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + root.title-h + i * 22px;
+            width: parent.width - 2 * Tok.sheet-pad;
+            height: 22px;
+            text: line;
+            color: Tok.text-2;
+            font-size: Tok.sp(15px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
         Flickable {
             x: Tok.sheet-pad - 10px;
-            y: Tok.sheet-pad + root.title-h;
+            y: Tok.sheet-pad + root.title-h + root.body-h;
             width: parent.width - 2 * Tok.sheet-pad + 20px;
-            height: parent.height - Tok.sheet-pad - root.title-h - Tok.sheet-pad;
+            height: parent.height - Tok.sheet-pad - root.title-h - root.body-h - root.cancel-h - Tok.sheet-pad;
             content-width: self.width;
             content-height: SheetState.rows.length * Tok.sheet-row-h;
 
@@ -111,6 +128,36 @@ export component SheetOverlay inherits Rectangle {
                 clicked => {
                     SheetState.picked(i);
                 }
+            }
+        }
+
+        // a text button that backs out, at the right
+        if SheetState.cancel-label != "": Rectangle {
+            width: Math.max(88px, cancel-text.preferred-width + 40px);
+            height: 44px;
+            x: parent.width - Tok.sheet-pad + 8px - self.width;
+            y: parent.height - Tok.sheet-pad - self.height;
+            border-radius: 22px;
+
+            Pressable {
+                width: 100%;
+                height: 100%;
+                radius: 22px;
+                clicked => {
+                    SheetState.dismissed();
+                }
+            }
+
+            cancel-text := Text {
+                width: parent.width;
+                height: parent.height;
+                text: SheetState.cancel-label;
+                color: Tok.text;
+                font-size: Tok.sp(15px);
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: no-wrap;
             }
         }
     }

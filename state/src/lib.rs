@@ -13,6 +13,7 @@
 pub mod entry;
 pub mod fmt;
 pub mod listing;
+pub mod name;
 pub mod order;
 pub mod scan;
 

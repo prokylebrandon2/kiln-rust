@@ -89,10 +89,22 @@ export global BrowseState {
     in-out property <int> selected-count: 0;
     /// The search field is open under the bar.
     in-out property <bool> searching: false;
+    /// Something is held by Copy or Move and nothing is selected: the paste bar shows. "" for no
+    /// paste bar, otherwise its first line ("Copying 3 items").
+    in-out property <string> paste-title;
+    /// The folder the items would go into, after "Into ".
+    in-out property <string> paste-into;
+    /// The confirm button: "Paste here" or "Move here".
+    in-out property <string> paste-label;
     /// `view-first` or `view-count` changed.
     callback viewed();
     /// A tile of the selection bar: 0 Copy, 1 Move, 2 Delete, 3 Pack.
     callback bar-clicked(int);
+    callback paste-clicked();
+    callback paste-cancelled();
+    callback paste-new-folder();
+    /// The "+ New" button.
+    callback new-clicked();
     callback back-clicked();
     callback search-clicked();
     callback sort-clicked();
@@ -110,6 +122,10 @@ export global SheetState {
     in-out property <bool> open: false;
     in-out property <string> title;
     in-out property <[SheetRow]> rows;
+    /// Lines of text under the title (one line of the card each), or none.
+    in-out property <[string]> body-lines;
+    /// A text button under the lines that backs out, or "" for none.
+    in-out property <string> cancel-label;
     callback picked(int);
     callback dismissed();
 }
@@ -126,6 +142,12 @@ export global DialogState {
     in-out property <string> confirm-label;
     /// The confirm button is drawn in the danger colour.
     in-out property <bool> danger: false;
+    /// A text field under the text (a name to type). Rust sets `field-text` to what it starts with
+    /// and reads it back on `confirmed`.
+    in-out property <bool> field: false;
+    in-out property <string> field-text;
+    /// A red line under the field, or "". Typing in the field clears it.
+    in-out property <string> error;
     callback confirmed();
     callback cancelled();
 }

@@ -58,7 +58,9 @@ export component DialogOverlay inherits Rectangle {
         property <length> inner-w: self.width - 2 * Tok.sheet-pad;
         property <length> body-gap: DialogState.body == "" ? 0px : 10px;
         width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
-        height: Math.min(parent.height - 2 * Tok.sheet-margin, Tok.sheet-pad + title.preferred-height + self.body-gap + body.preferred-height + 18px + 44px + 12px);
+        /// The name field: 12 px above it, 48 px of field, and the red line under it when there is one.
+        property <length> field-h: !DialogState.field ? 0px : 12px + 48px + (DialogState.error == "" ? 0px : 24px);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, Tok.sheet-pad + title.preferred-height + self.body-gap + body.preferred-height + self.field-h + 18px + 44px + 12px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Tok.surface;
@@ -89,6 +91,63 @@ export component DialogOverlay inherits Rectangle {
             color: Tok.text-2;
             font-size: Tok.sp(15px);
             wrap: word-wrap;
+        }
+
+        if DialogState.field: Rectangle {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + title.preferred-height + card.body-gap + body.preferred-height + 12px;
+            width: card.inner-w;
+            height: 48px;
+            border-radius: 12px;
+            background: Tok.bg;
+            border-width: DialogState.error == "" ? 1px : 2px;
+            border-color: DialogState.error == "" ? Tok.line : Tok.danger;
+
+            if name-input.text == "": Text {
+                x: 14px;
+                width: parent.width - 28px;
+                height: parent.height;
+                text: "Name";
+                color: Tok.text-2;
+                font-size: Tok.sp(16px);
+                vertical-alignment: center;
+            }
+            name-input := TextInput {
+                x: 14px;
+                y: 0px;
+                width: parent.width - 28px;
+                height: parent.height;
+                vertical-alignment: center;
+                text <=> DialogState.field-text;
+                color: Tok.text;
+                font-size: Tok.sp(16px);
+                single-line: true;
+                selection-background-color: Tok.text-2.with-alpha(0.35);
+                selection-foreground-color: Tok.text;
+                init => {
+                    self.focus();
+                    self.select-all();
+                }
+                edited => {
+                    DialogState.error = "";
+                }
+                accepted => {
+                    DialogState.confirmed();
+                }
+            }
+        }
+
+        if DialogState.field && DialogState.error != "": Text {
+            x: Tok.sheet-pad + 4px;
+            y: Tok.sheet-pad + title.preferred-height + card.body-gap + body.preferred-height + 12px + 48px + 4px;
+            width: card.inner-w - 8px;
+            height: 20px;
+            text: DialogState.error;
+            color: Tok.danger;
+            font-size: Tok.sp(12px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
         }
 
         HorizontalLayout {

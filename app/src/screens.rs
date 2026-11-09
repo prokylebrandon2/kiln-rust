@@ -26,7 +26,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use kiln_state::fmt::{self as sfmt, Units};
-use kiln_state::{Change, Entry, Kind, Listing, Meta, Order, SortKey, scan};
+use kiln_state::{Change, Entry, Kind, Listing, Meta, Order, SortKey, name, scan};
 use kiln_ui_next::{BrowseState, CategoryVm, EntryVm, HomeState, Icons, MainWindow, Nav};
 use kiln_ui_next::{DialogState, SheetRow, SheetState, ToastState, Tok};
 use slint::{
@@ -252,6 +252,35 @@ enum SheetAction {
     ShowAll,
     ShowHidden,
     Refresh,
+    /// A way out of a paste where names already exist.
+    Paste(Policy),
+    /// The lines of the "New" sheet.
+    New(New),
+}
+
+/// What the "New" sheet can make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum New {
+    Folder,
+    TextFile,
+}
+
+/// What a paste does with a name that already exists in the folder (the engine's policy word).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Policy {
+    Replace,
+    Skip,
+    Keep,
+}
+
+impl Policy {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Skip => "skip",
+            Self::Keep => "keep",
+        }
+    }
 }
 
 /// A line of a sheet and what it does.
@@ -277,8 +306,59 @@ struct Carry {
 enum DialogAction {
     /// Delete these for good.
     Delete(Vec<PathBuf>),
+    /// Make a folder or an empty text file of the name in the field, in the open folder.
+    Make(New),
     /// A message: the button only closes it.
     Close,
+}
+
+/// What Copy or Move holds, until it is pasted or let go of.
+struct Clip {
+    paths: Vec<PathBuf>,
+    mv: bool,
+}
+
+/// A paste that waits for the answer of the "already exists" sheet.
+struct Transfer {
+    srcs: Vec<String>,
+    dest: String,
+    mv: bool,
+}
+
+/// Make a folder or an empty file at `path`; the text to show when it can't be done.
+fn create_new(path: &Path, kind: New) -> Result<(), String> {
+    use std::io::ErrorKind::AlreadyExists;
+    let taken = || "That name is taken".to_string();
+    if path.exists() {
+        return Err(taken());
+    }
+    let made = match kind {
+        New::Folder => std::fs::create_dir_all(path),
+        New::TextFile => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(drop),
+    };
+    made.map_err(|e| {
+        if e.kind() == AlreadyExists {
+            taken()
+        } else {
+            io_text(&e)
+        }
+    })
+}
+
+/// The name of a folder as a title: "Internal storage" for the top of the storage.
+fn folder_title(dir: &Path, root: &Path) -> String {
+    if dir == root {
+        "Internal storage".to_string()
+    } else {
+        dir.file_name().map_or_else(
+            || dir.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )
+    }
 }
 
 // ---- the state of the screens -------------------------------------------------------------------
@@ -314,6 +394,10 @@ pub(crate) struct Screens {
     dialog: RefCell<Option<DialogAction>>,
     /// A file operation is running on a worker thread; a second one is ignored until it is done.
     busy: Cell<bool>,
+    /// What Copy or Move holds (`None` when nothing is held).
+    clip: RefCell<Option<Clip>>,
+    /// The paste that the open "already exists" sheet is about.
+    transfer: RefCell<Option<Transfer>>,
     /// What the text of the search field says (it is kept across a refresh of the folder).
     query: RefCell<String>,
     /// Set by Refresh, taken by the listing that arrives.
@@ -347,6 +431,8 @@ impl Screens {
             sheet: RefCell::default(),
             dialog: RefCell::default(),
             busy: Cell::new(false),
+            clip: RefCell::default(),
+            transfer: RefCell::default(),
             query: RefCell::default(),
             carry: RefCell::default(),
             loading_hint: Timer::default(),
@@ -402,6 +488,10 @@ impl App {
         browse.on_more_clicked(|| app_do(|a| a.folder_menu()));
         browse.on_viewed(|| app_do(|a| a.fetch_view()));
         browse.on_bar_clicked(|i| app_do(|a| a.bar_clicked(i)));
+        browse.on_paste_clicked(|| app_do(|a| a.paste()));
+        browse.on_paste_cancelled(|| app_do(|a| a.cancel_clip()));
+        browse.on_paste_new_folder(|| app_do(|a| a.ask_name(New::Folder)));
+        browse.on_new_clicked(|| app_do(|a| a.new_sheet()));
 
         let dialog = self.ui.global::<DialogState>();
         dialog.on_confirmed(|| app_do(|a| a.dialog_confirmed()));
@@ -666,16 +756,9 @@ impl App {
         browse.set_selected_count(0);
         s.model.replace(Listing::new(Vec::new(), self.order()));
 
-        let title = if dir == s.root {
-            "Internal storage".to_string()
-        } else {
-            dir.file_name().map_or_else(
-                || dir.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            )
-        };
-        browse.set_title(title.into());
+        browse.set_title(folder_title(&dir, &s.root).into());
         browse.set_subtitle(dir.display().to_string().into());
+        self.update_paste_bar();
         browse.set_empty_text(SharedString::new());
         browse.set_scroll_y(0.0);
         self.read_dir(dir, scroll, true);
@@ -871,8 +954,8 @@ impl App {
     /// A tile of the selection bar: 0 Copy, 1 Move, 2 Delete, 3 Pack.
     fn bar_clicked(&self, tile: i32) {
         match tile {
-            0 => self.soon("Copy"),
-            1 => self.soon("Move"),
+            0 => self.set_clip(false),
+            1 => self.set_clip(true),
             2 => self.ask_delete(),
             _ => self.soon("Pack"),
         }
@@ -893,6 +976,8 @@ impl App {
         dialog.set_cancel_label(cancel.into());
         dialog.set_confirm_label(confirm.into());
         dialog.set_danger(danger);
+        dialog.set_field(false);
+        dialog.set_error(SharedString::new());
         dialog.set_open(true);
     }
 
@@ -906,18 +991,90 @@ impl App {
         let dialog = self.ui.global::<DialogState>();
         let was_open = dialog.get_open();
         if was_open {
+            let had_field = dialog.get_field();
             dialog.set_open(false);
+            dialog.set_field(false);
             self.screens.dialog.borrow_mut().take();
+            if had_field {
+                // the field had the keyboard focus, and the Back key has to have somewhere to arrive
+                self.ui.invoke_focus_keys();
+            }
         }
         was_open
     }
 
-    /// The confirm button was tapped: close the dialog, then do what it asked.
+    /// The confirm button was tapped: close the dialog, then do what it asked. A name that can't
+    /// be used keeps the dialog open, with the reason under the field.
     fn dialog_confirmed(&self) {
         let action = self.screens.dialog.borrow().clone();
+        if let Some(DialogAction::Make(kind)) = action {
+            self.make_new(kind);
+            return;
+        }
         self.close_dialog();
         if let Some(DialogAction::Delete(paths)) = action {
             self.delete_paths(paths);
+        }
+    }
+
+    // ---- New ---------------------------------------------------------------------------------
+
+    /// The "+ New" button: a folder or an empty text file in the open folder.
+    fn new_sheet(&self) {
+        let icons = self.ui.global::<Icons>();
+        let lines = vec![
+            line(
+                SheetAction::New(New::Folder),
+                "Folder",
+                &icons.get_new_folder(),
+                false,
+            ),
+            line(
+                SheetAction::New(New::TextFile),
+                "Text file",
+                &icons.get_new_file(),
+                false,
+            ),
+        ];
+        self.open_sheet_with("New", &[], "Cancel", lines);
+    }
+
+    /// Ask for the name of a new folder or text file.
+    fn ask_name(&self, kind: New) {
+        if self.screens.levels.borrow().is_empty() {
+            return;
+        }
+        let (title, initial) = match kind {
+            New::Folder => ("New folder", ""),
+            New::TextFile => ("New text file", "untitled.txt"),
+        };
+        self.open_dialog(
+            (title, ""),
+            ("Cancel", "Create"),
+            false,
+            DialogAction::Make(kind),
+        );
+        let dialog = self.ui.global::<DialogState>();
+        dialog.set_field_text(initial.into());
+        dialog.set_field(true);
+    }
+
+    /// Make what the field names. The folder is read again so that it shows (any paste that is
+    /// held stays held).
+    fn make_new(&self, kind: New) {
+        let dialog = self.ui.global::<DialogState>();
+        let Some(dir) = self.screens.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let made = name::check(dialog.get_field_text().as_str())
+            .map_err(str::to_string)
+            .and_then(|n| create_new(&dir.join(n), kind));
+        match made {
+            Ok(()) => {
+                self.close_dialog();
+                self.reload_here();
+            }
+            Err(why) => dialog.set_error(why.into()),
         }
     }
 
@@ -976,6 +1133,11 @@ impl App {
             let why = result["message"].as_str().unwrap_or_default();
             self.message("Couldn't delete everything", why);
         }
+        self.reload_here();
+    }
+
+    /// Read the open folder again, where the list was scrolled to.
+    fn reload_here(&self) {
         let dir = self.screens.levels.borrow().last().map(|l| l.dir.clone());
         if let Some(dir) = dir {
             let scroll = self.ui.global::<BrowseState>().get_scroll_y();
@@ -983,14 +1145,174 @@ impl App {
         }
     }
 
+    // ---- Copy, Move and Paste ---------------------------------------------------------------------
+
+    /// Copy (`mv` false) or Move: hold the selected rows that are in view, let go of the selection,
+    /// and let the paste bar ask for a folder.
+    fn set_clip(&self, mv: bool) {
+        let s = &self.screens;
+        let Some(dir) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let paths: Vec<PathBuf> = {
+            let listing = s.model.listing.borrow();
+            let picked = listing.selected_entries();
+            picked.iter().map(|e| dir.join(&e.name)).collect()
+        };
+        if paths.is_empty() {
+            return;
+        }
+        *s.clip.borrow_mut() = Some(Clip { paths, mv });
+        self.clear_selection();
+        self.update_paste_bar();
+        let go = if mv { "Move here" } else { "Paste here" };
+        self.toast(&format!("Open a folder, then tap \"{go}\""));
+    }
+
+    /// The paste bar's Cancel: let go of what was held.
+    fn cancel_clip(&self) {
+        self.screens.clip.borrow_mut().take();
+        self.update_paste_bar();
+    }
+
+    /// Say what is held and where it would go (or hide the bar when nothing is held).
+    fn update_paste_bar(&self) {
+        let s = &self.screens;
+        let browse = self.ui.global::<BrowseState>();
+        let held = s.clip.borrow();
+        let Some(clip) = held.as_ref() else {
+            browse.set_paste_title(SharedString::new());
+            return;
+        };
+        let into = s
+            .levels
+            .borrow()
+            .last()
+            .map(|l| folder_title(&l.dir, &s.root))
+            .unwrap_or_default();
+        let count = sfmt::plural(clip.paths.len() as u64, "item", "items");
+        let (verb, label) = if clip.mv {
+            ("Moving", "Move here")
+        } else {
+            ("Copying", "Paste here")
+        };
+        browse.set_paste_title(format!("{verb} {count}").into());
+        browse.set_paste_into(into.into());
+        browse.set_paste_label(label.into());
+    }
+
+    /// "Paste here": ask the engine what the paste would touch, on a worker thread.
+    fn paste(&self) {
+        let s = &self.screens;
+        if s.busy.get() {
+            return;
+        }
+        let Some(dest) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let held = s.clip.borrow();
+        let Some(clip) = held.as_ref() else {
+            return;
+        };
+        let srcs: Vec<String> = clip
+            .paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let (mv, dest) = (clip.mv, dest.to_string_lossy().into_owned());
+        s.busy.set(true);
+        std::thread::spawn(move || {
+            let plan = kiln_bridge::call("fs_plan", &json!([srcs, dest, mv]), 0);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|a| a.paste_planned(srcs, dest, mv, &plan));
+            });
+        });
+    }
+
+    /// The middle of a paste: say why it can't, ask about names already in the folder, or go on.
+    fn paste_planned(&self, srcs: Vec<String>, dest: String, mv: bool, plan: &Value) {
+        self.screens.busy.set(false);
+        if !plan["ok"].as_bool().unwrap_or(false) {
+            let why = plan["error"]
+                .as_str()
+                .or_else(|| plan["message"].as_str())
+                .unwrap_or_default();
+            self.message(if mv { "Can't move" } else { "Can't copy" }, why);
+            return;
+        }
+        let clashes: Vec<&str> = plan["conflicts"]
+            .as_array()
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if clashes.is_empty() {
+            self.run_transfer(srcs, dest, mv, Policy::Replace);
+            return;
+        }
+        let (title, body) = sfmt::clashes(&clashes);
+        *self.screens.transfer.borrow_mut() = Some(Transfer { srcs, dest, mv });
+        let none = SharedString::new();
+        let lines = vec![
+            line(SheetAction::Paste(Policy::Replace), "Replace", &none, false),
+            line(
+                SheetAction::Paste(Policy::Skip),
+                "Skip existing",
+                &none,
+                false,
+            ),
+            line(SheetAction::Paste(Policy::Keep), "Keep both", &none, false),
+        ];
+        self.open_sheet_with(&title, &body, "Cancel", lines);
+    }
+
+    /// Copy or move under the chosen policy, on a worker thread. (No progress sheet or Cancel yet.)
+    fn run_transfer(&self, srcs: Vec<String>, dest: String, mv: bool, policy: Policy) {
+        if self.screens.busy.replace(true) {
+            return;
+        }
+        let word = policy.word();
+        std::thread::spawn(move || {
+            let result = kiln_bridge::call("fs_transfer", &json!([srcs, dest, mv, word]), 0);
+            let _ = slint::invoke_from_event_loop(move || {
+                app_do(|a| a.transfer_done(mv, &result));
+            });
+        });
+    }
+
+    /// Say what happened, let go of the items, read the folder again.
+    fn transfer_done(&self, mv: bool, result: &Value) {
+        self.screens.busy.set(false);
+        self.screens.clip.borrow_mut().take();
+        self.update_paste_bar();
+        let text = result["message"].as_str().unwrap_or_default();
+        if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+        } else if result["ok"].as_bool().unwrap_or(false) {
+            self.toast(text);
+        } else if mv {
+            self.message("Not everything was moved", text);
+        } else {
+            self.message("Not everything was copied", text);
+        }
+        self.reload_here();
+    }
+
     // ---- sort, menu and the sheet they share ----------------------------------------------------
 
     /// Show `lines` in the sheet.
     fn open_sheet(&self, title: &str, lines: Vec<Line>) {
+        self.open_sheet_with(title, &[], "", lines);
+    }
+
+    /// Show `lines` in the sheet, with plain `body` lines of text under the title and a text
+    /// button `cancel` ("" for none) under the lines.
+    fn open_sheet_with(&self, title: &str, body: &[String], cancel: &str, lines: Vec<Line>) {
         let (actions, rows): (Vec<_>, Vec<_>) = lines.into_iter().unzip();
         *self.screens.sheet.borrow_mut() = actions;
         let sheet = self.ui.global::<SheetState>();
         sheet.set_title(title.into());
+        let body: Vec<SharedString> = body.iter().map(|l| l.as_str().into()).collect();
+        sheet.set_body_lines(ModelRc::new(VecModel::from(body)));
+        sheet.set_cancel_label(cancel.into());
         sheet.set_rows(ModelRc::new(VecModel::from(rows)));
         sheet.set_open(true);
     }
@@ -1101,6 +1423,13 @@ impl App {
             SheetAction::ShowAll => self.toggle_show(false),
             SheetAction::ShowHidden => self.toggle_show(true),
             SheetAction::Refresh => self.refresh_folder(),
+            SheetAction::New(kind) => self.ask_name(kind),
+            SheetAction::Paste(policy) => {
+                let waiting = self.screens.transfer.borrow_mut().take();
+                if let Some(t) = waiting {
+                    self.run_transfer(t.srcs, t.dest, t.mv, policy);
+                }
+            }
         }
     }
 

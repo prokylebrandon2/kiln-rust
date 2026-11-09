@@ -88,6 +88,140 @@ component BarTile inherits Rectangle {
     }
 }
 
+/// A button of the paste bar: plain text, or a filled pill for the one that does it.
+component PasteButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> filled: false;
+    callback clicked();
+    height: 44px;
+    preferred-width: Math.max(88px, label.preferred-width + 32px);
+    min-width: self.preferred-width;
+    border-radius: 22px;
+    background: root.filled ? Tok.accent : transparent;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 22px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.filled ? Tok.bg : Tok.text;
+        font-size: Tok.sp(15px);
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+/// While something is held by Copy or Move and nothing is selected: what and where, over New
+/// folder, Cancel and the button that pastes.
+component PasteBar inherits Rectangle {
+    height: Tok.paste-bar-h;
+    border-radius: 20px;
+    background: Tok.surface;
+    border-width: 1px;
+    border-color: Tok.line;
+
+    Text {
+        x: 18px;
+        y: 14px;
+        width: parent.width - 36px;
+        text: BrowseState.paste-title;
+        color: Tok.text;
+        font-size: Tok.sp(15px);
+        font-weight: 700;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    Text {
+        x: 18px;
+        y: 38px;
+        width: parent.width - 36px;
+        text: "Into " + BrowseState.paste-into;
+        color: Tok.text-2;
+        font-size: Tok.sp(12px);
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    HorizontalLayout {
+        x: 8px;
+        y: parent.height - 12px - 44px;
+        width: parent.width - 16px;
+        height: 44px;
+        spacing: 4px;
+
+        PasteButton {
+            text: "New folder";
+            clicked => {
+                BrowseState.paste-new-folder();
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        PasteButton {
+            text: "Cancel";
+            clicked => {
+                BrowseState.paste-cancelled();
+            }
+        }
+        PasteButton {
+            text: BrowseState.paste-label;
+            filled: true;
+            clicked => {
+                BrowseState.paste-clicked();
+            }
+        }
+    }
+}
+
+/// The "+ New" button: a pill with a plus, over the bottom right of the list.
+component NewButton inherits Rectangle {
+    callback clicked();
+    height: 48px;
+    width: 16px + 24px + 8px + label.preferred-width + 20px;
+    border-radius: 24px;
+    background: Tok.accent;
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 24px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Icon {
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+        d: Icons.add;
+        size: 24px;
+        tint: Tok.bg;
+    }
+    label := Text {
+        x: 16px + 24px + 8px;
+        y: 0px;
+        height: parent.height;
+        text: "New";
+        color: Tok.bg;
+        font-size: Tok.sp(15px);
+        font-weight: 600;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
 /// While rows are selected: Copy, Move, Delete and Pack on a card floating over the list.
 component SelectionBar inherits Rectangle {
     callback tile(int);
@@ -135,6 +269,20 @@ component SelectionBar inherits Rectangle {
 
 export component BrowseScreen inherits Rectangle {
     background: Tok.bg;
+
+    // "+ New" goes while the list scrolls down by more than 6 px at a time, comes back on the way
+    // up, and is always there at the top.
+    property <length> list-y: BrowseState.scroll-y;
+    property <length> last-y: 0px;
+    property <bool> new-shown: true;
+    changed list-y => {
+        if (self.list-y >= -1px || self.list-y > self.last-y) {
+            self.new-shown = true;
+        } else if (self.list-y < self.last-y - 6px) {
+            self.new-shown = false;
+        }
+        self.last-y = self.list-y;
+    }
 
     VerticalLayout {
         HorizontalLayout {
@@ -210,7 +358,7 @@ export component BrowseScreen inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 rows: BrowseState.rows;
-                bottom-inset: BrowseState.selecting ? Tok.sel-bar-h + 2 * Tok.sel-bar-gap : 0px;
+                bottom-inset: BrowseState.selecting ? Tok.sel-bar-h + 2 * Tok.sel-bar-gap : BrowseState.paste-title != "" ? Tok.paste-bar-h + 2 * Tok.sel-bar-gap : 80px;
                 scroll-y <=> BrowseState.scroll-y;
                 clicked(i) => {
                     BrowseState.row-clicked(i);
@@ -234,6 +382,20 @@ export component BrowseScreen inherits Rectangle {
                 y: parent.height - self.height - Tok.sel-bar-gap;
                 tile(i) => {
                     BrowseState.bar-clicked(i);
+                }
+            }
+
+            if BrowseState.paste-title != "" && !BrowseState.selecting: PasteBar {
+                x: Tok.sel-bar-gap;
+                width: parent.width - 2 * Tok.sel-bar-gap;
+                y: parent.height - self.height - Tok.sel-bar-gap;
+            }
+
+            if !BrowseState.selecting && BrowseState.paste-title == "" && root.new-shown: NewButton {
+                x: parent.width - self.width - 16px;
+                y: parent.height - self.height - 16px;
+                clicked => {
+                    BrowseState.new-clicked();
                 }
             }
 

@@ -80,13 +80,33 @@ pub fn plural(n: u64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// What a question about the selection is about: the quoted name for one item, \"N items\" for
-/// more (\"Delete \"a.txt\"?\", \"Delete 3 items?\").
+/// What a question about the selection is about: the quoted name for one item, "N items" for
+/// more (`Delete "a.txt"?`, `Delete 3 items?`).
 pub fn what(names: &[&str]) -> String {
     match names {
         [one] => format!("\"{one}\""),
         _ => plural(names.len() as u64, "item", "items"),
     }
+}
+
+/// What a paste says when names already exist in the folder: the title ("1 item already exists",
+/// "3 items already exist") and the lines under it, the first five as "• name" and then "and N
+/// more".
+pub fn clashes(names: &[&str]) -> (String, Vec<String>) {
+    let title = plural(
+        names.len() as u64,
+        "item already exists",
+        "items already exist",
+    );
+    let mut lines: Vec<String> = names
+        .iter()
+        .take(5)
+        .map(|n| format!("\u{2022} {n}"))
+        .collect();
+    if names.len() > 5 {
+        lines.push(format!("and {} more", names.len() - 5));
+    }
+    (title, lines)
 }
 
 #[cfg(test)]
@@ -121,6 +141,20 @@ mod tests {
         assert_eq!(ext("archive.tar.gz"), "gz");
         assert_eq!(ext(".nomedia"), "");
         assert_eq!(ext("README"), "");
+    }
+
+    #[test]
+    fn clashes_name_five_and_count_the_rest() {
+        let (title, lines) = clashes(&["a"]);
+        assert_eq!(title, "1 item already exists");
+        assert_eq!(lines, ["\u{2022} a"]);
+        let names = ["a", "b", "c", "d", "e", "f", "g"];
+        let (title, lines) = clashes(&names);
+        assert_eq!(title, "7 items already exist");
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[4], "\u{2022} e");
+        assert_eq!(lines[5], "and 2 more");
+        assert_eq!(clashes(&names[..5]).1.len(), 5);
     }
 
     #[test]

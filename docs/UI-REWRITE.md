@@ -108,7 +108,7 @@ Rules kept from the old code: edition 2024, `unsafe` only in `platform/`, no new
   failure opens the message "Couldn't delete everything" with the engine's text, and the folder is
   read again (the selection is gone). Only rows that are selected **and in view** are deleted: a
   row that a search hides is never touched, even though the bar still counts it.
-- Copy, Move and Pack still toast "... is not in the new screens yet."
+- Pack still toasts "... is not in the new screens yet." (Copy and Move are slice 3b.)
 - `kiln_state::fmt::what` (tested) builds the "<what>" of a question about the selection.
 - Icons `copy`, `move` and `delete` were added to `gen_icons_next.py`.
 
@@ -116,17 +116,60 @@ Not yet in this slice: the progress sheet and Cancel while deleting (the spec op
 250 ms), `delete_mode` (ask / recycle bin / permanent: today it is always permanent, after the
 confirm), and the read-only-folder rule that comes with Root and Shizuku.
 
+## Done (slice 3b)
+
+- Copy and Move (the first two tiles of the selection bar) hold the selected rows that are in
+  view, let go of the selection, and toast `Open a folder, then tap "Paste here"` (`"Move here"`).
+- The paste bar (`PasteBar`, `ui-next/ui/browse.slint`, `BrowseState.paste-*`): while something is
+  held and nothing is selected it floats over the bottom of the list like the selection bar:
+  "Copying N items" or "Moving N items" (15 sp bold), "Into <folder>" (12 sp), then New folder,
+  Cancel and Paste here / Move here. The folder is "Internal storage" at the top of the storage.
+  The list has `bottom-inset` for it. New folder opens the name dialog (slice 3c).
+- Paste here runs `fs_plan` on a worker thread. If it fails: "Can't copy" or "Can't move" with the
+  engine's reason. With nothing in the way it runs `fs_transfer` (policy replace); otherwise the
+  sheet "1 item already exists" / "N items already exist" opens: the first five names as
+  "• name" lines and "and N more", then Replace, Skip existing and Keep both (no icon) and a text
+  Cancel (the items stay held). `SheetState` gained `body-lines` and `cancel-label` for it.
+- When the transfer is done the items are let go of, the engine's message is toasted ("Cancelled",
+  or the sheet "Not everything was copied" / "moved" on failure) and the folder is read again.
+- `kiln_state::fmt::clashes` (tested) builds the title and the lines of the "already exists" sheet.
+
+Not yet in this slice: the progress sheet and Cancel while copying or moving (the transfer runs on
+a worker thread and cannot be cancelled), the read-only-folder rule ("Can't paste here") that
+comes with Root and Shizuku, and a paste bar that follows the person to the Files tab: it shows
+only on the folder screen.
+
+## Done (slice 3c)
+
+- "+ New" (`NewButton`, `ui-next/ui/browse.slint`): a 48 px pill with a plus, 16 px from the bottom
+  right. It goes while the list scrolls down by more than 6 px at a time, comes back on the way up,
+  and is always there at the top; it is hidden while rows are selected or the paste bar shows. The
+  list keeps 80 px free under its last row for it.
+- Tapping it opens the "New" sheet (Folder, Text file, Cancel text), which opens the name dialog.
+- The dialog has a text field now (`DialogState.field`, `field-text`, `error`): "Name" hint, the
+  text starts selected (`untitled.txt` for a text file, empty for a folder), Enter confirms, and a
+  name that can't be used keeps the dialog open with a red line under the field and a red outline:
+  "Enter a name (no slashes)" (empty, a slash, `.` or `..`; `kiln_state::name::check`, tested),
+  "That name is taken", or the system's reason. Typing clears the line. Back closes the dialog.
+- New folder in the paste bar opens the same dialog; the held items stay held.
+- A made folder or file is created on the UI thread (it is one call) and the folder is read again.
+- Icons `new-folder` and `new-file` were added to `gen_icons_next.py`.
+
+Differences from the Java: the Java trims the name and refuses only empty and slashes; `.` and `..`
+are refused here too. Not yet: a new file or folder in a folder the engine must write as root
+(`Priv`, with Root and Shizuku), and the row slide-in after creating.
+
 ## Not in the new screens yet (each shows a "not in the new screens yet" toast or does nothing)
 
-Copy, Move and Pack (the tiles of the selection bar), the progress sheet, the recycle bin, "+ New", the row menus, other sheets and
+Pack (the last tile of the selection bar), the progress sheet, the recycle bin, the row menus and rename, other sheets and
 dialogs, thumbnails, archives (a `.kiln` tap), Recent, Starred, Settings, bookmarks, USB / SD
 volumes, the crash report sheet, files shared into Kiln, the recycle bin, properties,
 extract / pack.
 
 ## Next slices
 
-1. **Copy / Move / Paste, "+ New" and the row menu**: the paste bar, the "already exists" sheet,
-   a text field for the name dialogs, and the progress sheet with Cancel (shared with Delete).
+1. **The row menu and rename** (the name dialog is there now), and the progress sheet with Cancel
+   (shared with Delete, Copy and Move).
 2. **Thumbnails** off the UI thread, keyed by path + mtime + size, inserted with `row_changed`.
 3. **Recent, Starred, Settings** (placeholders in `shell.slint`).
 4. **Archives, extract, check, info**; start the engine again.

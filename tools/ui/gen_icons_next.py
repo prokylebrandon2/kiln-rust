@@ -32,6 +32,8 @@ FROM_LEGACY = {
     "copy": "copy",
     "move": "move",
     "delete": "delete",
+    "new-folder": "new_folder",
+    "new-file": "new_file",
 }
 
 # Material Symbols, filled, 24x24.

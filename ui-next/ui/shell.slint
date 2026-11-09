@@ -9,7 +9,7 @@ import { HomeScreen } from "home.slint";
 import { BrowseScreen } from "browse.slint";
 import { SheetOverlay } from "sheet.slint";
 import { DialogOverlay } from "dialog.slint";
-import { DialogState, Nav, SheetState, ToastState } from "state.slint";
+import { BrowseState, DialogState, Nav, SheetState, ToastState } from "state.slint";
 
 component Placeholder inherits Rectangle {
     in property <string> title;
@@ -106,10 +106,12 @@ export component MainView inherits Rectangle {
     if DialogState.open: DialogOverlay { }
 
     if ToastState.text != "": Rectangle {
+        /// Above the selection bar or the paste bar, so that it never covers their buttons.
+        property <length> lift: !Nav.browsing ? 0px : BrowseState.selecting ? Tok.sel-bar-h + Tok.sel-bar-gap : BrowseState.paste-title != "" ? Tok.paste-bar-h + Tok.sel-bar-gap : 0px;
         x: Tok.gutter;
         width: parent.width - 2 * Tok.gutter;
         height: 48px;
-        y: parent.height - (Nav.browsing ? 0px : Tok.nav-h) - self.height - 16px;
+        y: parent.height - (Nav.browsing ? 0px : Tok.nav-h) - self.lift - self.height - 16px;
         border-radius: 12px;
         background: Tok.text;
 

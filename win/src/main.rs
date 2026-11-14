@@ -169,8 +169,8 @@ fn cmd_add(args: &[String]) -> Result<(), String> {
             overwrite: flags.force,
         };
         let mut progress = printer("packing");
-        let stats = zip::create(&archive, &inputs, &options, &mut progress)
-            .map_err(|e| e.to_string())?;
+        let stats =
+            zip::create(&archive, &inputs, &options, &mut progress).map_err(|e| e.to_string())?;
         eprintln!();
         println!(
             "{} files, {} folders, {} -> {} ({} stored) in {:.2} s",
@@ -247,9 +247,14 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     let archive = PathBuf::from(archive);
     if is_zip(&archive)? {
         let zip = ZipArchive::open(&archive).map_err(|e| e.to_string())?;
-        println!("{:<16} {:>14} {:>14}  {:<8} Name", "Modified", "Size", "Packed", "Method");
+        println!(
+            "{:<16} {:>14} {:>14}  {:<8} Name",
+            "Modified", "Size", "Packed", "Method"
+        );
         for e in zip.entries() {
-            let when = e.modified.map_or_else(|| " ".repeat(16), dostime::format_local);
+            let when = e
+                .modified
+                .map_or_else(|| " ".repeat(16), dostime::format_local);
             let name = if e.is_dir {
                 format!("{}/", e.name)
             } else {
@@ -276,7 +281,11 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
             };
             println!("{when:<16} {:>14}  {name}", e.size);
         }
-        println!("{} entries, {}", arc.entries().len(), fmt_bytes(arc.total_raw()));
+        println!(
+            "{} entries, {}",
+            arc.entries().len(),
+            fmt_bytes(arc.total_raw())
+        );
     }
     Ok(())
 }

@@ -201,7 +201,13 @@ fn decode_name(raw: &[u8], utf8_flag: bool) -> String {
     }
     let table: Vec<char> = CP437_HIGH.chars().collect();
     raw.iter()
-        .map(|&b| if b < 0x80 { b as char } else { table[(b - 0x80) as usize] })
+        .map(|&b| {
+            if b < 0x80 {
+                b as char
+            } else {
+                table[(b - 0x80) as usize]
+            }
+        })
         .collect()
 }
 
@@ -460,7 +466,9 @@ impl ZipArchive {
             .find(|&i| {
                 le32(&tail, i) == SIG_EOCD && i + 22 + le16(&tail, i + 20) as usize <= tail.len()
             })
-            .ok_or(Error::NotAnArchive("no ZIP end-of-central-directory record"))?;
+            .ok_or(Error::NotAnArchive(
+                "no ZIP end-of-central-directory record",
+            ))?;
         let eocd_abs = tail_off + eocd_rel as u64;
         let mut count = le16(&tail, eocd_rel + 10) as u64;
         let mut cd_size = le32(&tail, eocd_rel + 12) as u64;
@@ -489,7 +497,9 @@ impl ZipArchive {
             .checked_add(cd_size)
             .ok_or_else(|| Error::corrupt("central directory offset overflows"))?;
         if expected_end > cd_end {
-            return Err(Error::corrupt("central directory lies beyond the end record"));
+            return Err(Error::corrupt(
+                "central directory lies beyond the end record",
+            ));
         }
         // Bytes in front of the archive (a self-extractor stub) shift every offset.
         let shift = cd_end - expected_end;
@@ -519,7 +529,10 @@ impl ZipArchive {
         let off = e.local_off + 30 + le16(&h, 26) as u64 + le16(&h, 28) as u64;
         match off.checked_add(e.packed) {
             Some(end) if end <= self.len => Ok(off),
-            _ => Err(Error::corrupt(format!("{}: data runs past the end of the file", e.name))),
+            _ => Err(Error::corrupt(format!(
+                "{}: data runs past the end of the file",
+                e.name
+            ))),
         }
     }
 
@@ -698,7 +711,10 @@ impl ZipArchive {
         }
         let _hold = budget.acquire(e.size + e.packed, abort);
         ctx.inbuf.resize(e.packed as usize, 0);
-        at(read_exact_at(&self.file, &mut ctx.inbuf, data_off), &self.path)?;
+        at(
+            read_exact_at(&self.file, &mut ctx.inbuf, data_off),
+            &self.path,
+        )?;
         let data: &[u8] = if e.method == 0 {
             if e.packed != e.size {
                 return Err(Error::corrupt(format!("{}: stored size mismatch", e.name)));
@@ -758,7 +774,10 @@ impl ZipArchive {
             }
             total += n as u64;
             if total > e.size {
-                return Err(Error::corrupt(format!("{}: more data than declared", e.name)));
+                return Err(Error::corrupt(format!(
+                    "{}: more data than declared",
+                    e.name
+                )));
             }
             hasher.update(&buf[..n]);
             at(out.write_all(&buf[..n]), target)?;
@@ -967,7 +986,10 @@ impl CompCtx {
         }
         let bound = self.comp.deflate_compress_bound(len);
         self.outbuf.resize(bound, 0);
-        let n = self.comp.deflate_compress(&self.inbuf, &mut self.outbuf).ok()?;
+        let n = self
+            .comp
+            .deflate_compress(&self.inbuf, &mut self.outbuf)
+            .ok()?;
         if n >= len { None } else { Some(n) }
     }
 }
@@ -1036,7 +1058,14 @@ fn central_header(r: &CdRec, v: &mut Vec<u8>) {
     put16(v, r.dos_time);
     put16(v, r.dos_date);
     put32(v, r.crc);
-    put32(v, if packed64 { MAX32 as u32 } else { r.packed as u32 });
+    put32(
+        v,
+        if packed64 {
+            MAX32 as u32
+        } else {
+            r.packed as u32
+        },
+    );
     put32(v, if size64 { MAX32 as u32 } else { r.size as u32 });
     put16(v, name.len() as u16);
     put16(v, 9 + if zip64 { 4 + z.len() as u16 } else { 0 });
@@ -1175,9 +1204,7 @@ fn add_big(sh: &Shared, src: &Src, meta: Meta) -> std::result::Result<CdRec, Fai
         enc.finish().map_err(io_err)?;
         r
     };
-    let mut tmp = w
-        .into_inner()
-        .map_err(|e| io_err(e.into_error()))?;
+    let mut tmp = w.into_inner().map_err(|e| io_err(e.into_error()))?;
     let packed = tmp.stream_position().map_err(io_err)?;
     tmp.seek(SeekFrom::Start(0)).map_err(io_err)?;
     let meta = Meta {
@@ -1400,7 +1427,9 @@ pub fn create(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<CreateStats> {
     if inputs.is_empty() {
-        return Err(Error::Invalid("nothing to archive: no input paths given".into()));
+        return Err(Error::Invalid(
+            "nothing to archive: no input paths given".into(),
+        ));
     }
     if opts.level > 12 {
         return Err(Error::Invalid("the level must be between 0 and 12".into()));

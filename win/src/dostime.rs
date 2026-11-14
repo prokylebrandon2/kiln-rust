@@ -78,7 +78,9 @@ pub fn unix_to_dos(utc_secs: i64) -> (u16, u16) {
         d = 31;
     }
     let date = (((y - 1980) as u16) << 9) | ((m as u16) << 5) | d as u16;
-    let time = (((sod / 3600) as u16) << 11) | ((((sod % 3600) / 60) as u16) << 5) | ((sod % 60 / 2) as u16);
+    let time = (((sod / 3600) as u16) << 11)
+        | ((((sod % 3600) / 60) as u16) << 5)
+        | ((sod % 60 / 2) as u16);
     (date, time)
 }
 
@@ -106,5 +108,9 @@ pub fn format_local(utc_secs: i64) -> String {
     let local = utc_secs + local_offset(utc_secs);
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
     let sod = local.rem_euclid(86_400);
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", sod / 3600, sod % 3600 / 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        sod / 3600,
+        sod % 3600 / 60
+    )
 }

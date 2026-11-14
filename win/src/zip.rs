@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use kiln::cancel;
 use kiln::error::{Error, Result};
@@ -103,6 +103,23 @@ fn read_at(f: &File, buf: &mut [u8], off: u64) -> io::Result<usize> {
 #[cfg(windows)]
 fn read_at(f: &File, buf: &mut [u8], off: u64) -> io::Result<usize> {
     std::os::windows::fs::FileExt::seek_read(f, buf, off)
+}
+
+/// Open `path` for reading, telling the Windows cache manager that it is read front to back.
+#[cfg(windows)]
+fn open_sequential(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+        .open(path)
+}
+
+/// Open `path` for reading.
+#[cfg(not(windows))]
+fn open_sequential(path: &Path) -> io::Result<File> {
+    File::open(path)
 }
 
 fn read_exact_at(f: &File, mut buf: &mut [u8], mut off: u64) -> io::Result<()> {
@@ -633,9 +650,15 @@ impl ZipArchive {
                     })
                 })
                 .collect();
+            // Report every 40 ms, but look for the last worker every millisecond: sleeping the
+            // whole 40 ms would add up to that much idle time to every run.
+            let mut next_report = Instant::now();
             while finished.load(Ordering::Acquire) < nthreads {
-                progress(done.load(Ordering::Relaxed), total);
-                thread::sleep(Duration::from_millis(40));
+                if Instant::now() >= next_report {
+                    progress(done.load(Ordering::Relaxed), total);
+                    next_report = Instant::now() + Duration::from_millis(40);
+                }
+                thread::sleep(Duration::from_millis(1));
             }
             handles.into_iter().any(|h| h.join().is_err())
         });
@@ -1177,7 +1200,7 @@ fn add_big(sh: &Shared, src: &Src, meta: Meta) -> std::result::Result<CdRec, Fai
             source,
         })
     };
-    let mut input = File::open(&src.path).map_err(|e| Fail::Skip(e.to_string()))?;
+    let mut input = open_sequential(&src.path).map_err(|e| Fail::Skip(e.to_string()))?;
     let mut head = Vec::new();
     (&mut input)
         .take(SAMPLE_LEN as u64)
@@ -1247,10 +1270,13 @@ fn add_entry(sh: &Shared, src: &Src, ctx: &mut CompCtx) -> std::result::Result<C
 
     let _hold = sh.budget.acquire(src.size * 2 + 4096, &sh.abort);
     ctx.inbuf.clear();
-    let mut file = File::open(&src.path).map_err(|e| Fail::Skip(e.to_string()))?;
-    file.read_to_end(&mut ctx.inbuf)
+    ctx.inbuf.reserve(src.size as usize);
+    let file = open_sequential(&src.path).map_err(|e| Fail::Skip(e.to_string()))?;
+    // The size is known from the walk, so read exactly that much: no size query, no seek and no
+    // extra read to find the end of the file.
+    file.take(src.size)
+        .read_to_end(&mut ctx.inbuf)
         .map_err(|e| Fail::Skip(e.to_string()))?;
-    drop(file);
     let size = ctx.inbuf.len() as u64;
     let crc = crc32fast::hash(&ctx.inbuf);
     let packed_len = if sh.level > 0 && size > 0 {
@@ -1461,9 +1487,14 @@ pub fn create(
     let nthreads = thread_count(opts.threads, order.len());
     let outs: Vec<thread::Result<WorkerOut>> = thread::scope(|s| {
         let handles: Vec<_> = (0..nthreads).map(|_| s.spawn(|| worker(&sh))).collect();
+        // Report every 40 ms, but look for the last worker every millisecond (see `extract`).
+        let mut next_report = Instant::now();
         while sh.finished.load(Ordering::Acquire) < nthreads {
-            progress(sh.done.load(Ordering::Relaxed), total);
-            thread::sleep(Duration::from_millis(40));
+            if Instant::now() >= next_report {
+                progress(sh.done.load(Ordering::Relaxed), total);
+                next_report = Instant::now() + Duration::from_millis(40);
+            }
+            thread::sleep(Duration::from_millis(1));
         }
         handles.into_iter().map(|h| h.join()).collect()
     });

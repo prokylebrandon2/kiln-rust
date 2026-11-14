@@ -68,5 +68,17 @@ Measure-Case '.kiln (adaptive) / 7z (LZMA2, -mx5)' '7-Zip' $s7 `
     { Run $sevenZip @('a', '-t7z', '-mx=5', '-mmt=on', $s7, $Data) } `
     { Run $sevenZip @('x', '-y', "-o$out", $s7) }
 
+# Thread sweep (kiln-win only): is it faster with more workers than cores? Creating files waits on
+# the file system and the virus scanner, so extra threads can hide that wait.
+$cores = [Environment]::ProcessorCount
+foreach ($workers in ($cores * 2), ($cores * 4)) {
+    Measure-Case "zip, level 6, -t $workers" 'kiln-win' $z1 `
+        { Run $Exe @('a', $z1, $Data, '-l', '6', '-y', '-t', "$workers") } `
+        { Run $Exe @('x', $z1, '-o', $out, '-y', '-t', "$workers") }
+    Measure-Case ".kiln (adaptive), -t $workers" 'kiln-win' $k1 `
+        { Run $Exe @('a', $k1, $Data, '-l', '5', '-y', '-t', "$workers") } `
+        { Run $Exe @('x', $k1, '-o', $out, '-y', '-t', "$workers") }
+}
+
 if ($env:GITHUB_STEP_SUMMARY) { $summary | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
 $global:LASTEXITCODE = 0

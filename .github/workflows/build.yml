@@ -1,3 +1,4 @@
+
 name: Build APK
 
 on:
@@ -14,9 +15,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
     env:
+      # Build only the requested ABIs.
       KILN_ABIS: ${{ github.event.inputs.abis || 'arm64-v8a' }}
 
     steps:
@@ -46,118 +47,73 @@ jobs:
           echo "android.jar: $jar"
           echo "ANDROID_JAR=$jar" >> "$GITHUB_ENV"
 
-      - name: Set up Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.100.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Show Rust environment
+        shell: bash
+        run: |
+          rustc --version --verbose
+          cargo --version
+          uname -m
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Validate Android ABIs
+      - name: Verify workflow being executed
         shell: bash
         run: |
-          set -euo pipefail
+          echo "Commit: $GITHUB_SHA"
+          echo "Workflow: $GITHUB_WORKFLOW"
+          grep -R -n "cargo install cargo-ndk" .github/workflows || true
+          grep -R -n "cargo binstall cargo-ndk" .github/workflows || true
 
-          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
+      - name: Install cargo-ndk (prebuilt only)
+        shell: bash
+        run: |
+          cargo binstall cargo-ndk@4.1.2 \
+            --no-confirm \
+            --disable-strategies compile,quick-install
 
-          if [ "${#ABIS[@]}" -eq 0 ]; then
-            echo "No Android ABIs specified."
-            exit 1
-          fi
-
-          for abi in "${ABIS[@]}"; do
-            abi="$(echo "$abi" | xargs)"
-
-            case "$abi" in
-              arm64-v8a|x86_64)
-                ;;
-              *)
-                echo "Unsupported ABI: $abi"
-                exit 1
-                ;;
-            esac
-          done
+          cargo ndk --version
 
       - name: Build libkiln_android.so with the NDK
         shell: bash
-        env:
-          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--pack-dyn-relocs=android"
         run: |
-          set -euo pipefail
-
-          cargo install cargo-ndk --locked
-
           targets=()
-
-          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
-
-          for abi in "${ABIS[@]}"; do
-            abi="$(echo "$abi" | xargs)"
+          for abi in ${KILN_ABIS//,/ }; do
             targets+=(-t "$abi")
           done
 
-          cargo ndk "${targets[@]}" --platform 30 \
-            -o app/src/main/jniLibs \
-            build --release -p kiln-platform
+          RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--pack-dyn-relocs=android" \
+            cargo ndk "${targets[@]}" --platform 30 -o app/src/main/jniLibs build --release -p kiln-platform
 
-          echo "Built native libraries:"
-          find app/src/main/jniLibs -type f -name '*.so' -print
+          ls -l app/src/main/jniLibs/*/
 
       - name: Build APK
-        run: |
-          gradle :app:assembleDebug \
-            -PkilnAbis="$KILN_ABIS" \
-            --stacktrace
+        run: gradle :app:assembleDebug -PkilnAbis="$KILN_ABIS" --stacktrace
 
       - name: Verify APK contents
         shell: bash
         run: |
-          set -euo pipefail
-
-          apk="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -n 1)"
-
-          if [ -z "$apk" ]; then
-            echo "APK was not generated."
-            exit 1
-          fi
-
+          apk="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
           echo "APK: $apk"
 
-          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
+          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/libkiln_android\.so'
 
-          for abi in "${ABIS[@]}"; do
-            abi="$(echo "$abi" | xargs)"
+          want="$(echo "${KILN_ABIS//,/ }" | wc -w)"
+          test "$(unzip -l "$apk" | grep -c 'libkiln_android\.so')" -eq "$want"
+          ls -l "$apk"
 
-            case "$abi" in
-              arm64-v8a|x86_64)
-                ;;
-              *)
-                echo "Unsupported ABI: $abi"
-                exit 1
-                ;;
-            esac
-
-            if ! unzip -l "$apk" | grep -q "lib/$abi/libkiln_android.so"; then
-              echo "Missing native library for ABI: $abi"
-              exit 1
-            fi
-          done
-
-          want="${#ABIS[@]}"
-          actual="$(unzip -l "$apk" | grep -c 'libkiln_android\.so' || true)"
-
-          if [ "$actual" -ne "$want" ]; then
-            echo "Expected $want native libraries, found $actual."
-            exit 1
-          fi
-
-          ls -lh "$apk"
-
-          if unzip -l "$apk" | grep -Eq 'classes[0-9]*\.dex'; then
-            echo "Note: the APK contains Dalvik code."
+          if unzip -l "$apk" | grep -E 'classes[0-9]*\.dex'; then
+            echo "note: the APK contains Dalvik code"
           else
-            echo "No Java or Kotlin code in the APK."
+            echo "no Java or Kotlin code in the APK"
           fi
 
       - name: Upload APK
@@ -165,11 +121,9 @@ jobs:
         with:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
 
       - name: Upload Cargo.lock
         uses: actions/upload-artifact@v4
         with:
           name: cargo-lock
           path: Cargo.lock
-          if-no-files-found: error

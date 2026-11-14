@@ -1,0 +1,28 @@
+[package]
+name = "kiln-win"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Kiln for Windows: extract and create .zip and .kiln archives (slice 1: ZIP engine and command line)"
+publish = false
+
+[[bin]]
+name = "kiln-win"
+path = "src/main.rs"
+
+[dependencies]
+kiln = { path = ".." }
+# Per-file deflate: about 3-4x faster per thread than 7-Zip's encoder at the same or better ratio
+# (measured on the Phase 3 benchmark sets). A safe wrapper around the C library libdeflate.
+libdeflater = "1"
+# Streaming deflate and inflate for entries too big to hold in memory (over 512 MiB).
+# Already in Cargo.lock.
+flate2 = "1"
+# Anonymous temporary file that holds a big entry's compressed bytes until the output is free.
+tempfile = "3"
+crc32fast = "1"
+walkdir = "2"
+
+# Local time zone offset for ZIP's DOS timestamps (std cannot give it).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

@@ -1,6 +1,11 @@
 # Round-trip checks for kiln-win.exe on a throw-away tree: .zip and .kiln, selective extract,
 # overwrite protection, and ZIP interoperability with PowerShell and 7-Zip (both directions).
-param([Parameter(Mandatory)][string]$Exe)
+# With -Gui it also drives kiln-gui.exe the way the Explorer menu does.
+param(
+    [Parameter(Mandatory)][string]$Exe,
+    # kiln-gui.exe, the Explorer menu helper; its checks are skipped when it is not given.
+    [string]$Gui
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -105,6 +110,83 @@ if (Test-Path -LiteralPath $sevenZip) {
     }
 } else {
     Write-Warning '7-Zip not found on this runner; skipped the 7-Zip interoperability checks'
+}
+
+# ---- kiln-gui: what the Explorer menu starts --------------------------------------------------
+if ($Gui) {
+    # No message boxes on a build server: kiln-gui writes what a box would show to standard error
+    # and answers every question "no".
+    $env:KILN_GUI_QUIET = '1'
+
+    # kiln-gui has no console, so the shell would not wait for it. Start-Process -Wait does, and
+    # gives the exit code.
+    function Invoke-Gui([string[]]$ArgList) {
+        $errFile = Join-Path $work 'gui-stderr.txt'
+        $quoted = $ArgList | ForEach-Object { '"' + $_ + '"' }
+        $p = Start-Process -FilePath $Gui -ArgumentList $quoted -Wait -PassThru -RedirectStandardError $errFile
+        $text = ''
+        if (Test-Path -LiteralPath $errFile) { $text = "$(Get-Content -LiteralPath $errFile -Raw)" }
+        [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
+    }
+
+    foreach ($ext in 'zip', 'kiln') {
+        Write-Host "== kiln-gui .$ext =="
+        $verb = if ($ext -eq 'zip') { 'az' } else { 'ak' }
+
+        # "Add to": the archive appears next to the folder, named after it.
+        $made = Join-Path $work "src.$ext"
+        if (Test-Path -LiteralPath $made) { Remove-Item -LiteralPath $made -Force }
+        $r = Invoke-Gui @($verb, $src)
+        if ($r.Code -ne 0) { throw "kiln-gui $verb failed with exit code $($r.Code): $($r.Text)" }
+        if (-not (Test-Path -LiteralPath $made)) { throw "kiln-gui $verb did not create src.$ext" }
+        Write-Host "ok: kiln-gui $verb"
+
+        # "Test archive".
+        $r = Invoke-Gui @('t', $made)
+        if ($r.Code -ne 0 -or $r.Text -notmatch 'Everything is Ok') {
+            throw "kiln-gui t .$ext failed with exit code $($r.Code): $($r.Text)"
+        }
+        Write-Host 'ok: kiln-gui t'
+
+        # "Extract Here" (x) and "Extract to subfolder" (xf), and the refusal to replace files.
+        foreach ($mode in 'x', 'xf') {
+            $dir = Join-Path $work "gui-$mode-$ext"
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            Copy-Item -LiteralPath $made -Destination $dir
+            $copy = Join-Path $dir "src.$ext"
+            $r = Invoke-Gui @($mode, $copy)
+            if ($r.Code -ne 0) { throw "kiln-gui $mode .$ext failed with exit code $($r.Code): $($r.Text)" }
+            $root = if ($mode -eq 'x') { Join-Path $dir 'src' } else { Join-Path $dir 'src\src' }
+            Assert-Same $src $root "kiln-gui $mode .$ext"
+            $again = Invoke-Gui @($mode, $copy)
+            if ($again.Code -eq 0) { throw "kiln-gui $mode .$ext replaced existing files without asking" }
+        }
+    }
+
+    # The menu: register writes the registry keys, unregister removes them again.
+    Write-Host '== kiln-gui menu =='
+    $classes = 'HKCU:\Software\Classes'
+    $menuKeys = @(
+        "$classes\*\shell\KilnAdd",
+        "$classes\Directory\shell\KilnAdd",
+        "$classes\SystemFileAssociations\.zip\shell\Kiln",
+        "$classes\SystemFileAssociations\.kiln\shell\Kiln"
+    )
+    $r = Invoke-Gui @('register')
+    if ($r.Code -ne 0) { throw "kiln-gui register failed with exit code $($r.Code): $($r.Text)" }
+    foreach ($key in $menuKeys) {
+        if (-not (Test-Path -LiteralPath $key)) { throw "register did not create $key" }
+    }
+    $cmdKey = "$classes\SystemFileAssociations\.zip\shell\Kiln\shell\20extract-to\command"
+    $command = (Get-ItemProperty -LiteralPath $cmdKey).'(default)'
+    if ($command -notlike '*kiln-gui.exe" xf "%1"') { throw "unexpected menu command: $command" }
+    Write-Host "ok: menu command $command"
+    $r = Invoke-Gui @('unregister')
+    if ($r.Code -ne 0) { throw "kiln-gui unregister failed with exit code $($r.Code): $($r.Text)" }
+    foreach ($key in $menuKeys) {
+        if (Test-Path -LiteralPath $key) { throw "unregister left $key behind" }
+    }
+    Write-Host 'ok: menu registered and removed'
 }
 
 Pop-Location

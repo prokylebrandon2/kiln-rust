@@ -9,9 +9,6 @@
 //! `.kiln` archives go through the Kiln engine (level 0 = store, 1-3 fastest, 4-6 adaptive,
 //! 7-9 maximum); everything else is a ZIP.
 
-mod dostime;
-mod zip;
-
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,7 +17,8 @@ use std::time::Instant;
 
 use kiln::{Archive, ExtractOptions, PackOptions, Profile};
 
-use zip::{CreateOpts, ExtractOpts, ZipArchive};
+use kiln_win::dostime;
+use kiln_win::zip::{self, CreateOpts, ExtractOpts, ZipArchive};
 
 const USAGE: &str = "usage:
   kiln-win a <archive.zip|archive.kiln> <files or folders...> [-l LEVEL] [-t THREADS] [-y]

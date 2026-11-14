@@ -1,4 +1,5 @@
-# Kiln for Windows (win/): builds kiln-win.exe, smoke-tests it against real archives, and ships it.
+# Kiln for Windows (win/): builds kiln-win.exe (command line) and kiln-gui.exe (the helper behind the
+# Explorer "Kiln" menu), smoke-tests them against real archives, and ships them.
 #
 #   push / pull request   build, smoke test, lint; the exe is attached to the run as an artifact
 #   tag win-v*            also publishes a GitHub release with kiln-win-<tag>-x64.zip
@@ -93,22 +94,29 @@ jobs:
           git commit -m "Update Cargo.lock for kiln-win [skip ci]"
           git push
 
+      - name: Unit tests
+        run: cargo test --release -p kiln-win
+
       - name: Smoke test
         shell: pwsh
-        run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe"
+        run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe" -Gui "$PWD/target/release/kiln-gui.exe"
 
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/kiln-win.exe dist/kiln-win.exe
-          $size = [math]::Round((Get-Item dist/kiln-win.exe).Length / 1MB, 2)
-          "kiln-win.exe: $size MiB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          foreach ($name in 'kiln-win.exe', 'kiln-gui.exe') {
+            Copy-Item "target/release/$name" "dist/$name"
+            $size = [math]::Round((Get-Item "dist/$name").Length / 1MB, 2)
+            "${name}: $size MiB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: kiln-win-x64
-          path: dist/kiln-win.exe
+          path: |
+            dist/kiln-win.exe
+            dist/kiln-gui.exe
           if-no-files-found: error
 
   # Format and lint are kept apart so a style nit never blocks the exe or a release.
@@ -162,7 +170,7 @@ jobs:
       - name: Package
         run: |
           cd dist
-          zip "kiln-win-${GITHUB_REF_NAME}-x64.zip" kiln-win.exe
+          zip "kiln-win-${GITHUB_REF_NAME}-x64.zip" kiln-win.exe kiln-gui.exe
           sha256sum "kiln-win-${GITHUB_REF_NAME}-x64.zip" > SHA256SUMS.txt
 
       - name: Publish

@@ -3,12 +3,23 @@ name = "kiln-win"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Kiln for Windows: extract and create .zip and .kiln archives (slice 1: ZIP engine and command line)"
+description = "Kiln for Windows: extract and create .zip and .kiln archives (ZIP engine, command line, Explorer menu helper)"
 publish = false
 
+# The parts both programs share: the ZIP engine, DOS timestamps and the whole-archive operations.
+[lib]
+name = "kiln_win"
+path = "src/lib.rs"
+
+# The command line.
 [[bin]]
 name = "kiln-win"
 path = "src/main.rs"
+
+# The helper the Explorer "Kiln" menu starts: a progress window with Cancel (like 7-Zip's 7zG.exe).
+[[bin]]
+name = "kiln-gui"
+path = "src/gui/main.rs"
 
 [dependencies]
 kiln = { path = ".." }
@@ -23,6 +34,18 @@ tempfile = "3"
 crc32fast = "1"
 walkdir = "2"
 
-# Local time zone offset for ZIP's DOS timestamps (std cannot give it).
+# Local time zone offset for ZIP's DOS timestamps (std cannot give it), and the Win32 calls of
+# kiln-gui: the progress window, message boxes, and the Explorer menu in the registry.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

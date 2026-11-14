@@ -39,6 +39,13 @@ const MAX16: u64 = 0xFFFF;
 const IN_MEMORY_MAX: u64 = 512 << 20;
 /// Most bytes of file data held in memory by all workers together (a single file may exceed it).
 const MEMORY_BUDGET: u64 = 1 << 30;
+/// Entries whose buffers (packed + unpacked) total at most this many bytes skip the memory budget
+/// when extracting: the budget is one mutex that every worker would otherwise lock twice per file,
+/// and the most these entries can hold at once is `64 workers * SMALL_ENTRY`.
+const SMALL_ENTRY: u64 = 256 << 10;
+/// Bytes read beyond an entry's name when its local header and data are fetched with one read:
+/// room for the local extra field (ours is 9 bytes, ZIP64 adds 20, 7-Zip's NTFS times add 36).
+const HEADER_SLACK: u64 = 128;
 const CHUNK: usize = 1 << 20;
 /// Files from this size on are sampled first and stored when the sample does not shrink.
 const SAMPLE_FROM: usize = 256 << 10;
@@ -120,6 +127,16 @@ fn open_sequential(path: &Path) -> io::Result<File> {
 #[cfg(not(windows))]
 fn open_sequential(path: &Path) -> io::Result<File> {
     File::open(path)
+}
+
+/// Make `buf` at least `n` bytes long, and never shorter than it already is. `Vec::resize` down
+/// and up again from one entry to the next would zero-fill the difference every time an entry
+/// is bigger than the one before; this zero-fills only when a buffer reaches a new largest size.
+/// Callers use `&buf[..n]`.
+fn grow_to(buf: &mut Vec<u8>, n: usize) {
+    if buf.len() < n {
+        buf.resize(n, 0);
+    }
 }
 
 fn read_exact_at(f: &File, mut buf: &mut [u8], mut off: u64) -> io::Result<()> {
@@ -469,7 +486,8 @@ fn parse_central(cd: &[u8], count: u64, shift: u64) -> Result<Vec<ZipEntry>> {
 impl ZipArchive {
     /// Open `path` and read its central directory.
     pub fn open(path: &Path) -> Result<Self> {
-        let file = at(File::open(path), path)?;
+        // Workers take entries in archive order, so the reads sweep the file front to back.
+        let file = at(open_sequential(path), path)?;
         let len = at(file.metadata(), path)?.len();
         if len < 22 {
             return Err(Error::NotAnArchive("too small to be a ZIP file"));
@@ -551,6 +569,49 @@ impl ZipArchive {
                 e.name
             ))),
         }
+    }
+
+    /// Read an entry's local header and its packed bytes into `buf` and return where the packed
+    /// bytes start. One positional read does both when the header (30 bytes, the name and the
+    /// extra field) fits in `HEADER_SLACK` plus the central directory's name length; otherwise a
+    /// second read fetches the data. The checks are those of `data_offset`.
+    fn read_packed(&self, e: &ZipEntry, buf: &mut Vec<u8>) -> Result<usize> {
+        let packed = e.packed as usize;
+        let avail = self.len.saturating_sub(e.local_off);
+        let guess = 30 + e.name.len() as u64 + HEADER_SLACK + e.packed;
+        // At least the 30 header bytes: a file cut short then fails the read, as before.
+        let want = guess.min(avail).max(30) as usize;
+        grow_to(buf, want);
+        at(
+            read_exact_at(&self.file, &mut buf[..want], e.local_off),
+            &self.path,
+        )?;
+        if le32(&buf[..], 0) != SIG_LOCAL {
+            return Err(Error::corrupt(format!("{}: bad local header", e.name)));
+        }
+        let start = 30 + le16(&buf[..], 26) as usize + le16(&buf[..], 28) as usize;
+        let end = start.checked_add(packed);
+        if end.is_some_and(|end| end <= want) {
+            return Ok(start);
+        }
+        // A long name or extra field: the data starts past what was read. Check it lies inside
+        // the file, then read just the data.
+        let data_off = e.local_off + start as u64;
+        match data_off.checked_add(e.packed) {
+            Some(data_end) if data_end <= self.len => {}
+            _ => {
+                return Err(Error::corrupt(format!(
+                    "{}: data runs past the end of the file",
+                    e.name
+                )));
+            }
+        }
+        grow_to(buf, packed);
+        at(
+            read_exact_at(&self.file, &mut buf[..packed], data_off),
+            &self.path,
+        )?;
+        Ok(0)
     }
 
     fn select(&self, members: &[String]) -> Result<Vec<usize>> {
@@ -728,31 +789,30 @@ impl ZipArchive {
         if e.size == 0 {
             return Ok(());
         }
-        let data_off = self.data_offset(e)?;
         if e.size > IN_MEMORY_MAX || e.packed > IN_MEMORY_MAX {
+            let data_off = self.data_offset(e)?;
             return self.extract_stream(e, data_off, out, target, done);
         }
-        let _hold = budget.acquire(e.size + e.packed, abort);
-        ctx.inbuf.resize(e.packed as usize, 0);
-        at(
-            read_exact_at(&self.file, &mut ctx.inbuf, data_off),
-            &self.path,
-        )?;
+        let held = e.size + e.packed;
+        let _hold = (held > SMALL_ENTRY).then(|| budget.acquire(held, abort));
+        let start = self.read_packed(e, &mut ctx.inbuf)?;
+        let packed = &ctx.inbuf[start..start + e.packed as usize];
         let data: &[u8] = if e.method == 0 {
             if e.packed != e.size {
                 return Err(Error::corrupt(format!("{}: stored size mismatch", e.name)));
             }
-            &ctx.inbuf
+            packed
         } else {
-            ctx.outbuf.resize(e.size as usize, 0);
+            let size = e.size as usize;
+            grow_to(&mut ctx.outbuf, size);
             let n = ctx
                 .dec
-                .deflate_decompress(&ctx.inbuf, &mut ctx.outbuf)
+                .deflate_decompress(packed, &mut ctx.outbuf[..size])
                 .map_err(|err| Error::corrupt(format!("{}: {err:?}", e.name)))?;
             if n as u64 != e.size {
                 return Err(Error::corrupt(format!("{}: size mismatch", e.name)));
             }
-            &ctx.outbuf
+            &ctx.outbuf[..size]
         };
         if crc32fast::hash(data) != e.crc {
             return Err(Error::Checksum(e.name.clone()));
@@ -1548,4 +1608,158 @@ pub fn create(
         }
     }
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// Builds a ZIP in memory, entry by entry, in the order given.
+    #[derive(Default)]
+    struct ZipBuilder {
+        out: Vec<u8>,
+        central: Vec<u8>,
+        count: u16,
+    }
+
+    impl ZipBuilder {
+        /// Append a file. `deflate` picks method 8 over stored; `extra` is the length of an extra
+        /// field in the local header (0, or 4 and up); the central directory entry has none.
+        fn add(&mut self, name: &str, body: &[u8], deflate: bool, extra: usize) {
+            let crc = crc32fast::hash(body);
+            let packed = if deflate {
+                let level = CompressionLvl::new(6).map_err(|_| "level").unwrap();
+                let mut comp = Compressor::new(level);
+                let mut buf = vec![0u8; comp.deflate_compress_bound(body.len())];
+                let n = comp
+                    .deflate_compress(body, &mut buf)
+                    .map_err(|_| "deflate")
+                    .unwrap();
+                buf.truncate(n);
+                buf
+            } else {
+                body.to_vec()
+            };
+            let method = if deflate { 8 } else { 0 };
+            let local_off = self.out.len() as u32;
+            let v = &mut self.out;
+            put32(v, SIG_LOCAL);
+            put16(v, 20);
+            put16(v, 0); // flags
+            put16(v, method);
+            put16(v, 0); // time
+            put16(v, 0x21); // date: 1980-01-01
+            put32(v, crc);
+            put32(v, packed.len() as u32);
+            put32(v, body.len() as u32);
+            put16(v, name.len() as u16);
+            put16(v, extra as u16);
+            v.extend_from_slice(name.as_bytes());
+            if extra > 0 {
+                put16(v, 0xCAFE);
+                put16(v, (extra - 4) as u16);
+                v.resize(v.len() + extra - 4, 0xAB);
+            }
+            v.extend_from_slice(&packed);
+            let c = &mut self.central;
+            put32(c, SIG_CENTRAL);
+            put16(c, 20); // made by
+            put16(c, 20); // needed
+            put16(c, 0); // flags
+            put16(c, method);
+            put16(c, 0); // time
+            put16(c, 0x21); // date
+            put32(c, crc);
+            put32(c, packed.len() as u32);
+            put32(c, body.len() as u32);
+            put16(c, name.len() as u16);
+            put16(c, 0); // extra
+            put16(c, 0); // comment
+            put16(c, 0); // disk
+            put16(c, 0); // internal attributes
+            put32(c, 0); // external attributes
+            put32(c, local_off);
+            c.extend_from_slice(name.as_bytes());
+            self.count += 1;
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            let cd_off = self.out.len();
+            let cd_size = self.central.len();
+            self.out.extend_from_slice(&self.central);
+            let v = &mut self.out;
+            put32(v, SIG_EOCD);
+            put16(v, 0);
+            put16(v, 0);
+            put16(v, self.count);
+            put16(v, self.count);
+            put32(v, cd_size as u32);
+            put32(v, cd_off as u32);
+            put16(v, 0); // comment length
+            self.out
+        }
+    }
+
+    /// Compressible but not flat bytes.
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    /// Write `bytes` to a scratch folder, extract it with `threads` workers, return the folder.
+    fn extract_zip(bytes: &[u8], threads: usize) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("t.zip");
+        fs::write(&archive, bytes).unwrap();
+        let zip = ZipArchive::open(&archive).unwrap();
+        let dest = tmp.path().join("out");
+        let opts = ExtractOpts {
+            dest: dest.clone(),
+            threads,
+            ..ExtractOpts::default()
+        };
+        let mut none = |_: u64, _: u64| {};
+        zip.extract(&opts, &mut none).unwrap();
+        (tmp, dest)
+    }
+
+    /// The local header and data come from one read when the extra field is at most
+    /// `HEADER_SLACK` bytes (128), and from two reads past that. Both sizes matter: 5,000 bytes
+    /// skips the memory budget, 300,000 goes through it.
+    #[test]
+    fn local_extra_field_of_any_length() {
+        for len in [5_000usize, 300_000] {
+            let body = pattern(len);
+            for extra in [0usize, 9, 36, 128, 129, 300, 4000] {
+                for deflate in [false, true] {
+                    let mut z = ZipBuilder::default();
+                    z.add("a.txt", &body, deflate, extra);
+                    let (_tmp, out) = extract_zip(&z.finish(), 1);
+                    let got = fs::read(out.join("a.txt")).unwrap();
+                    assert_eq!(got, body, "{len} {extra} {deflate}");
+                }
+            }
+        }
+    }
+
+    /// One worker handles the entries in this order, so its buffers shrink and grow again: the
+    /// bytes of each file must still be exactly its own (stored, deflated and empty entries).
+    #[test]
+    fn buffers_are_reused_across_entries() {
+        let sizes = [300_000usize, 10, 200_000, 5, 100_000, 150_000, 0];
+        let mut z = ZipBuilder::default();
+        for (i, &len) in sizes.iter().enumerate() {
+            let deflate = len > 0 && i % 3 != 1;
+            z.add(&format!("f{i}.bin"), &pattern(len), deflate, 0);
+        }
+        let bytes = z.finish();
+        for threads in [1usize, 4] {
+            let (_tmp, out) = extract_zip(&bytes, threads);
+            for (i, &len) in sizes.iter().enumerate() {
+                let got = fs::read(out.join(format!("f{i}.bin"))).unwrap();
+                assert_eq!(got, pattern(len), "file {i}, {threads} threads");
+            }
+        }
+    }
 }

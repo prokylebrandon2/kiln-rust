@@ -34,6 +34,25 @@ FROM_LEGACY = {
     "delete": "delete",
     "new-folder": "new_folder",
     "new-file": "new_file",
+    "edit": "edit",
+    # The folder icons of the icon picker (Icons.FOLDER_KEYS), `dir-<key>`; "folder" is `folder`.
+    "dir-download": "d_download",
+    "dir-camera": "d_camera",
+    "dir-pictures": "d_pictures",
+    "dir-movies": "d_movies",
+    "dir-music": "d_music",
+    "dir-documents": "d_documents",
+    "dir-android": "d_android",
+    "dir-bell": "d_bell",
+    "dir-zip": "d_zip",
+    "dir-star": "d_star",
+    "dir-heart": "d_heart",
+    "dir-lock": "d_lock",
+    "dir-code": "d_code",
+    "dir-home": "home",
+    "dir-phone": "d_phone",
+    "dir-sd": "d_sd",
+    "dir-usb": "usb",
 }
 
 # Material Symbols, filled, 24x24.

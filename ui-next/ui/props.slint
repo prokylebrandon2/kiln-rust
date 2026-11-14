@@ -1,0 +1,181 @@
+// The Properties sheet: a card over a scrim with a scrolling list of what is known about the
+// selection, a check box for a folder's `.nomedia` file, and Copy / OK. `PropsState` is the only
+// interface. Every line has a height that follows from its kind alone, so the card's height is
+// plain arithmetic and a long list scrolls inside it.
+
+import { Tok } from "tokens.slint";
+import { Icon, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+import { DialogButton } from "dialog.slint";
+import { PropRow, PropsState } from "state.slint";
+
+/// One line: the item's name (bold), a heading (small, muted), or a label over its value.
+component PropLine inherits Rectangle {
+    in property <PropRow> vm;
+    height: vm.kind == 0 ? Tok.sp(40px) : vm.kind == 1 ? Tok.sp(38px) : Tok.sp(52px);
+
+    if root.vm.kind == 0: Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.vm.label;
+        color: Tok.text;
+        font-size: Tok.sp(19px);
+        font-weight: 700;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    if root.vm.kind == 1: Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.vm.label;
+        color: Tok.text-2;
+        font-size: Tok.sp(13px);
+        font-weight: 700;
+        vertical-alignment: bottom;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    if root.vm.kind == 2: Rectangle {
+        Text {
+            y: Tok.sp(6px);
+            width: parent.width;
+            height: Tok.sp(18px);
+            text: root.vm.label;
+            color: Tok.text-2;
+            font-size: Tok.sp(12px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        Text {
+            y: Tok.sp(24px);
+            width: parent.width;
+            height: Tok.sp(22px);
+            text: root.vm.value;
+            color: Tok.text;
+            font-size: Tok.sp(15px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+}
+
+export component PropsOverlay inherits Rectangle {
+    /// The box under the list, when the item is a folder.
+    property <length> box-h: PropsState.has-nomedia ? 48px : 0px;
+    background: Tok.scrim;
+
+    // a tap outside the card closes the sheet
+    TouchArea {
+        clicked => {
+            PropsState.ok-clicked();
+        }
+    }
+
+    card := Rectangle {
+        width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, Tok.sheet-pad + lines.preferred-height + 8px + root.box-h + 8px + 44px + 12px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tok.surface;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Tok.line;
+        clip: true;
+
+        // taps on the card stay on the card
+        TouchArea { }
+
+        Flickable {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad;
+            width: parent.width - 2 * Tok.sheet-pad;
+            height: parent.height - Tok.sheet-pad - 8px - root.box-h - 8px - 44px - 12px;
+            content-width: self.width;
+            content-height: lines.preferred-height;
+
+            lines := VerticalLayout {
+                width: parent.content-width;
+                for r in PropsState.rows: PropLine {
+                    vm: r;
+                }
+            }
+        }
+
+        if PropsState.has-nomedia: Rectangle {
+            x: Tok.sheet-pad - 8px;
+            y: parent.height - 12px - 44px - 8px - root.box-h;
+            width: parent.width - 2 * Tok.sheet-pad + 16px;
+            height: root.box-h;
+            border-radius: 12px;
+
+            Pressable {
+                width: 100%;
+                height: 100%;
+                radius: 12px;
+                clicked => {
+                    PropsState.nomedia-toggled(!PropsState.nomedia);
+                }
+            }
+
+            // the box: an outline, filled with a check when on
+            Rectangle {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                width: 22px;
+                height: 22px;
+                border-radius: 5px;
+                border-width: 2px;
+                border-color: PropsState.nomedia ? Tok.accent : Tok.text-2;
+                background: PropsState.nomedia ? Tok.accent : transparent;
+
+                if PropsState.nomedia: Icon {
+                    x: (parent.width - self.width) / 2 - 2px;
+                    y: (parent.height - self.height) / 2 - 2px;
+                    d: Icons.check;
+                    size: 18px;
+                    tint: Tok.bg;
+                }
+            }
+
+            Text {
+                x: 10px + 22px + 14px;
+                width: parent.width - self.x - 10px;
+                height: parent.height;
+                text: "Disable media scanning";
+                color: Tok.text;
+                font-size: Tok.sp(15px);
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            x: Tok.sheet-pad - 8px;
+            y: parent.height - 12px - 44px;
+            width: parent.width - 2 * Tok.sheet-pad + 16px;
+            height: 44px;
+            alignment: end;
+            spacing: 4px;
+
+            DialogButton {
+                text: "Copy";
+                clicked => {
+                    PropsState.copy-clicked();
+                }
+            }
+            DialogButton {
+                text: "OK";
+                filled: true;
+                clicked => {
+                    PropsState.ok-clicked();
+                }
+            }
+        }
+    }
+}

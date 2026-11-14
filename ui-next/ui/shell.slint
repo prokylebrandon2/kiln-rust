@@ -9,7 +9,10 @@ import { HomeScreen } from "home.slint";
 import { BrowseScreen } from "browse.slint";
 import { SheetOverlay } from "sheet.slint";
 import { DialogOverlay } from "dialog.slint";
-import { BrowseState, DialogState, Nav, SheetState, ToastState } from "state.slint";
+import { ProgressOverlay } from "progress.slint";
+import { PropsOverlay } from "props.slint";
+import { PickOverlay } from "pick.slint";
+import { BrowseState, DialogState, Nav, PickState, ProgressState, PropsState, SheetState, ToastState } from "state.slint";
 
 component Placeholder inherits Rectangle {
     in property <string> title;
@@ -103,7 +106,13 @@ export component MainView inherits Rectangle {
 
     if SheetState.open: SheetOverlay { }
 
+    if PropsState.open: PropsOverlay { }
+
+    if PickState.open: PickOverlay { }
+
     if DialogState.open: DialogOverlay { }
+
+    if ProgressState.open: ProgressOverlay { }
 
     if ToastState.text != "": Rectangle {
         /// Above the selection bar or the paste bar, so that it never covers their buttons.

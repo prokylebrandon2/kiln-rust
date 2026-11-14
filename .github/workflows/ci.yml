@@ -93,9 +93,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # not blocking until `cargo fmt -p kiln-state` has been run once by someone with a compiler
       - run: cargo fmt -p kiln-state --check
-        continue-on-error: true
       - run: cargo clippy -p kiln-state --all-targets -- -D warnings
       - run: cargo test -p kiln-state
 

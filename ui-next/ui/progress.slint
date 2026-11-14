@@ -1,0 +1,119 @@
+// The progress sheet: a card in the middle of the window, over a scrim, for a file operation that
+// takes a while. A title ("Copying..."), under it the file in hand with the percent at its right,
+// a bar, and an outline Cancel. `ProgressState` is the only interface.
+//
+// Back and a tap outside do nothing here (the scrim only keeps taps from reaching what is
+// behind it); Cancel is the one way out, and Rust keeps the card up until the work has stopped.
+//
+// Laid out by hand, like the dialog: the card's height is the sum of what is in it.
+
+import { Tok } from "tokens.slint";
+import { Pressable, ProgressBar } from "controls.slint";
+import { ProgressState } from "state.slint";
+
+export component ProgressOverlay inherits Rectangle {
+    background: Tok.scrim;
+
+    // taps outside the card are swallowed
+    TouchArea { }
+
+    card := Rectangle {
+        property <length> inner-w: self.width - 2 * Tok.sheet-pad;
+        /// The file line and the percent share one row; it is as high as the taller of the two.
+        property <length> row-h: Math.max(22px, Math.max(file-line.preferred-height, percent.preferred-height));
+        /// Room kept for the percent on the right of the file line (none while it is unknown).
+        property <length> percent-w: ProgressState.percent == "" ? 0px : 56px;
+        width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
+        height: Tok.sheet-pad + title.preferred-height + 10px + self.row-h + 12px + Tok.progress-h + 20px + 44px + 12px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tok.surface;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Tok.line;
+        clip: true;
+
+        // taps on the card stay on the card
+        TouchArea { }
+
+        title := Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad;
+            width: card.inner-w;
+            text: ProgressState.title;
+            color: Tok.text;
+            font-size: Tok.sp(19px);
+            font-weight: 700;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        file-line := Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + title.preferred-height + 10px;
+            width: card.inner-w - card.percent-w;
+            height: card.row-h;
+            text: ProgressState.line;
+            color: Tok.text-2;
+            font-size: Tok.sp(14px);
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        percent := Text {
+            x: Tok.sheet-pad + card.inner-w - 56px;
+            y: Tok.sheet-pad + title.preferred-height + 10px;
+            width: 56px;
+            height: card.row-h;
+            text: ProgressState.percent;
+            color: Tok.text;
+            font-size: Tok.sp(16px);
+            font-weight: 700;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+
+        ProgressBar {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + title.preferred-height + 10px + card.row-h + 12px;
+            width: card.inner-w;
+            value: ProgressState.frac;
+            indeterminate: ProgressState.indeterminate;
+        }
+
+        // an outline button at the right
+        Rectangle {
+            width: Math.max(96px, cancel-text.preferred-width + 40px);
+            height: 44px;
+            x: parent.width - Tok.sheet-pad - self.width;
+            y: parent.height - 12px - self.height;
+            border-radius: 22px;
+            border-width: 1px;
+            border-color: ProgressState.cancel-enabled ? Tok.text-2 : Tok.line;
+
+            Pressable {
+                width: 100%;
+                height: 100%;
+                radius: 22px;
+                enabled: ProgressState.cancel-enabled;
+                clicked => {
+                    ProgressState.cancel-clicked();
+                }
+            }
+
+            cancel-text := Text {
+                width: parent.width;
+                height: parent.height;
+                text: "Cancel";
+                color: ProgressState.cancel-enabled ? Tok.text : Tok.text-2.with-alpha(0.5);
+                font-size: Tok.sp(15px);
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
+        }
+    }
+}

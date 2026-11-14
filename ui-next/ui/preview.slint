@@ -8,11 +8,14 @@
 //   slint-viewer --component PreviewSearch ui-next/ui/preview.slint  a folder, the search open
 //   slint-viewer --component PreviewSheet ui-next/ui/preview.slint   the sort sheet
 //   slint-viewer --component PreviewDialog ui-next/ui/preview.slint  the delete question
+//   slint-viewer --component PreviewProgress ui-next/ui/preview.slint a copy that is under way
+//   slint-viewer --component PreviewProps ui-next/ui/preview.slint    the properties of a folder
+//   slint-viewer --component PreviewPick ui-next/ui/preview.slint     the icon and color picker
 // Tapping the tab bar switches tabs. Taps in a list do nothing here: Rust handles those.
 
 import { Tok } from "tokens.slint";
 import { Icons } from "icons.slint";
-import { HomeState, BrowseState, DialogState, Nav, SheetState } from "state.slint";
+import { HomeState, BrowseState, DialogState, Nav, PickState, ProgressState, PropsState, SheetState } from "state.slint";
 import { MainView } from "shell.slint";
 
 /// Fills the screens' globals with the mockup's sample content.
@@ -141,5 +144,90 @@ export component PreviewDialog inherits Window {
         DialogState.confirm-label = "Delete";
         DialogState.danger = true;
         DialogState.open = true;
+    }
+}
+
+export component PreviewProgress inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        BrowseState.paste-title = "Copying 3 items";
+        ProgressState.title = "Copying...";
+        ProgressState.line = "holiday-photos/IMG_2041.jpg";
+        ProgressState.percent = "42%";
+        ProgressState.frac = 0.42;
+        ProgressState.indeterminate = false;
+        ProgressState.open = true;
+    }
+}
+
+export component PreviewProps inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        PropsState.rows = [
+            { label: "Invoices", kind: 0 },
+            { label: "General information", kind: 1 },
+            { label: "Type", value: "Folder", kind: 2 },
+            { label: "File count", value: "128", kind: 2 },
+            { label: "Size", value: "4.80 MB (5033164 B)", kind: 2 },
+            { label: "Last modification", value: "2026-11-08 14:02:11", kind: 2 },
+            { label: "Permissions", value: "rwx rwx --- (770)", kind: 2 },
+            { label: "FS path", value: "/storage/emulated", kind: 2 },
+            { label: "FS type", value: "sdcardfs", kind: 2 },
+        ];
+        PropsState.has-nomedia = true;
+        PropsState.open = true;
+    }
+}
+
+export component PreviewPick inherits Window {
+    preferred-width: 393px;
+    preferred-height: 852px;
+    background: Tok.bg;
+    default-font-family: "Roboto";
+
+    MainView { }
+    Samples { }
+    init => {
+        Nav.browsing = true;
+        PickState.title = "Icon and color for Music";
+        PickState.has-colors = true;
+        PickState.colors = [#E5574B, #E8833A, #E0A030, #5DB75D, #3FA6A0, #4A8FE7, #5B6EEF, #8E7CC3, #C45BA3, #8D99AE];
+        PickState.color-index = 6;
+        PickState.tint = #5B6EEF;
+        PickState.cells = [
+            { d: Icons.folder, label: "Folder" },
+            { d: Icons.dir-download, label: "Download" },
+            { d: Icons.dir-camera, label: "Camera" },
+            { d: Icons.dir-pictures, label: "Pictures" },
+            { d: Icons.dir-movies, label: "Movies" },
+            { d: Icons.dir-music, label: "Music", current: true },
+            { d: Icons.dir-documents, label: "Documents" },
+            { d: Icons.dir-android, label: "Android" },
+            { d: Icons.dir-bell, label: "Sounds" },
+            { d: Icons.dir-zip, label: "Archives" },
+            { d: Icons.dir-star, label: "Favourite" },
+            { d: Icons.dir-heart, label: "Heart" },
+            { d: Icons.dir-lock, label: "Private" },
+            { d: Icons.dir-code, label: "Code" },
+            { d: Icons.dir-home, label: "Home" },
+            { d: Icons.dir-phone, label: "Phone storage" },
+            { d: Icons.dir-sd, label: "SD card" },
+            { d: Icons.dir-usb, label: "USB drive" },
+        ];
+        PickState.open = true;
     }
 }

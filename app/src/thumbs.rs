@@ -491,7 +491,7 @@ mod tests {
         };
         assert!(pool.retarget(&HashSet::new(), vec![job(1), bad]).is_empty());
         let wait = Duration::from_secs(5);
-        let mut got = vec![
+        let mut got = [
             rx.recv_timeout(wait).unwrap(),
             rx.recv_timeout(wait).unwrap(),
         ];

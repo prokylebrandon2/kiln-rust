@@ -13,9 +13,15 @@
 //! each of its lines does). All three are the listing's own (`Listing::toggle`, `set_query`,
 //! `set_order`), so what this file adds is telling the screen about them.
 //!
+//! Delete, Copy and Move run behind the progress sheet (`progress.rs`): `App::run_job` starts the
+//! engine call with a cancellable job, and `delete_done` / `transfer_done` take the result.
+//!
+//! An archive that is opened (`Screens::arc`) shows its inside in the same list: its rows are the
+//! entries of an ordinary listing, so sorting, search and selection work as they do in a folder.
+//!
 //! Not here yet (they were in the old UI and come back as slices, see docs/UI-REWRITE.md):
-//! the selection bar and the row menus, thumbnails, archives, Recent, Starred and Settings.
-//! Their buttons say so in a toast.
+//! the rest of the selection menu (Open options...), thumbnails, the archive tools (Extract,
+//! Check, Info, editing), Recent, Starred and Settings. Their buttons say so in a toast.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -34,9 +40,11 @@ use slint::{
     TimerMode, VecModel,
 };
 
+use crate::arc::ArcState;
 use crate::fmt::io_text;
 use crate::host::{Host, OpenWith};
 use crate::icons;
+use crate::pick_sheet::{Marks, argb};
 use crate::{App, app_do};
 
 /// How many rows of a folder are asked about at once while it is scrolled.
@@ -50,7 +58,7 @@ const LOADING_HINT_MS: u64 = 700;
 
 /// The icon paths of `icons.slint` that Rust picks from, read once from the `Icons` global.
 #[derive(Clone, Default)]
-struct IconSet {
+pub(crate) struct IconSet {
     folder: SharedString,
     file: SharedString,
     image: SharedString,
@@ -62,6 +70,9 @@ struct IconSet {
     check: SharedString,
     close: SharedString,
     refresh: SharedString,
+    edit: SharedString,
+    /// The folder icons of the icon picker, by key (`icons::by_key`); "folder" is the plain one.
+    dirs: HashMap<&'static str, SharedString>,
 }
 
 impl IconSet {
@@ -79,7 +90,33 @@ impl IconSet {
             check: i.get_check(),
             close: i.get_close(),
             refresh: i.get_refresh(),
+            edit: i.get_edit(),
+            dirs: HashMap::from([
+                ("folder", i.get_folder()),
+                ("download", i.get_dir_download()),
+                ("camera", i.get_dir_camera()),
+                ("pictures", i.get_dir_pictures()),
+                ("movies", i.get_dir_movies()),
+                ("music", i.get_dir_music()),
+                ("documents", i.get_dir_documents()),
+                ("android", i.get_dir_android()),
+                ("bell", i.get_dir_bell()),
+                ("zip", i.get_dir_zip()),
+                ("star", i.get_dir_star()),
+                ("heart", i.get_dir_heart()),
+                ("lock", i.get_dir_lock()),
+                ("code", i.get_dir_code()),
+                ("home", i.get_dir_home()),
+                ("phone", i.get_dir_phone()),
+                ("sd", i.get_dir_sd()),
+                ("usb", i.get_dir_usb()),
+            ]),
         }
+    }
+
+    /// The icon of a folder icon key (the plain folder for a key that is not known).
+    pub(crate) fn dir(&self, key: &str) -> &SharedString {
+        self.dirs.get(key).unwrap_or(&self.folder)
     }
 
     /// The icon of an entry: its kind, then for a file what its extension says.
@@ -105,7 +142,11 @@ impl IconSet {
 /// What turns an [`Entry`] into the [`EntryVm`] a row draws.
 struct Looks {
     host: Rc<dyn Host>,
+    /// The top of the phone's own storage (the folders that sit in it have standard icons).
+    root: PathBuf,
     icons: IconSet,
+    /// The icons and colours that were picked for folders.
+    marks: RefCell<Marks>,
     units: Cell<Units>,
     /// Offsets of the phone's time zone from UTC, by day since 1970, so that a folder of
     /// thousands of files asks the phone once per day and not once per file.
@@ -143,16 +184,43 @@ impl Looks {
         parts.join(" \u{2022} ")
     }
 
-    fn vm(&self, e: &Entry, selected: bool) -> EntryVm {
+    /// The icon and colour of the folder `name` in `dir`: what was picked for it, else the
+    /// standard icon of Android's own folders (Download, DCIM...) or the plain one, in the
+    /// default folder colour if there is one. A transparent colour lets the row use the theme's.
+    fn dir_look(&self, dir: &Path, name: &str) -> (SharedString, Color) {
+        let path = dir.join(name);
+        let path = path.to_string_lossy();
+        let parent = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let marks = self.marks.borrow();
+        let d = match marks.icon_key(&path, name, &parent, dir == self.root) {
+            Some(key) => self.icons.dir(key).clone(),
+            None => self.icons.folder.clone(),
+        };
+        let tint = match marks.color(&path) {
+            0 => Color::from_argb_u8(0, 0, 0, 0),
+            color => argb(color),
+        };
+        (d, tint)
+    }
+
+    /// The row of `e`, an entry of the folder `dir`.
+    fn vm(&self, e: &Entry, dir: &Path, selected: bool) -> EntryVm {
         let folder = e.kind.is_folder();
         let (stem, ext) = split_name(&e.name, folder);
+        let (d, tint) = match e.kind {
+            Kind::Dir => self.dir_look(dir, &e.name),
+            // transparent: the row picks the neutral icon or folder colour of the theme
+            _ => (self.icons.of(e).clone(), Color::from_argb_u8(0, 0, 0, 0)),
+        };
         EntryVm {
             stem: stem.into(),
             ext: ext.into(),
             meta: self.meta_line(e).into(),
-            d: self.icons.of(e).clone(),
-            // transparent: the row picks the neutral icon or folder colour of the theme
-            tint: Color::from_argb_u8(0, 0, 0, 0),
+            d,
+            tint,
             selected,
             folder,
             thumb: Image::default(),
@@ -179,6 +247,8 @@ fn split_name(name: &str, folder: bool) -> (&str, &str) {
 /// The rows of the folder on screen. Slint asks for a row when it needs to draw it.
 pub(crate) struct ListingModel {
     looks: Rc<Looks>,
+    /// The folder the rows belong to.
+    dir: RefCell<PathBuf>,
     listing: RefCell<Listing>,
     notify: ModelNotify,
 }
@@ -187,6 +257,7 @@ impl ListingModel {
     fn new(looks: Rc<Looks>) -> Self {
         Self {
             looks,
+            dir: RefCell::default(),
             listing: RefCell::new(Listing::new(Vec::new(), Order::default())),
             notify: ModelNotify::default(),
         }
@@ -218,7 +289,10 @@ impl Model for ListingModel {
     fn row_data(&self, row: usize) -> Option<EntryVm> {
         let listing = self.listing.borrow();
         let entry = listing.entry(row)?;
-        Some(self.looks.vm(entry, listing.is_selected(row)))
+        Some(
+            self.looks
+                .vm(entry, &self.dir.borrow(), listing.is_selected(row)),
+        )
     }
 
     fn model_tracker(&self) -> &dyn ModelTracker {
@@ -252,6 +326,14 @@ enum SheetAction {
     ShowAll,
     ShowHidden,
     Refresh,
+    /// Show the facts about what is selected.
+    Properties,
+    /// Rename the one selected item.
+    Rename,
+    /// The icon and colour picker for the one selected folder.
+    IconColor,
+    /// Show the one selected set as the plain folder it is on disk.
+    PlainSet,
     /// A way out of a paste where names already exist.
     Paste(Policy),
     /// The lines of the "New" sheet.
@@ -308,6 +390,10 @@ enum DialogAction {
     Delete(Vec<PathBuf>),
     /// Make a folder or an empty text file of the name in the field, in the open folder.
     Make(New),
+    /// Give the item of this name, in the open folder, the name in the field.
+    Rename(String),
+    /// Open the set or archive at this path with the password in the field.
+    Unlock(PathBuf),
     /// A message: the button only closes it.
     Close,
 }
@@ -349,6 +435,24 @@ fn create_new(path: &Path, kind: New) -> Result<(), String> {
     })
 }
 
+/// Rename `from` to `to`, both in the same folder; the text to show when it can't be done. A name
+/// that is taken is refused, as the Java does, because `rename(2)` would replace what is there
+/// without a word. A dangling link counts as taken too (`exists` would say it is not there).
+fn rename_path(from: &Path, to: &Path) -> Result<(), String> {
+    if to.symlink_metadata().is_ok() {
+        return Err("That name is taken".to_string());
+    }
+    std::fs::rename(from, to).map_err(|e| io_text(&e))
+}
+
+/// The last part of `path`, as text.
+fn base_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// The name of a folder as a title: "Internal storage" for the top of the storage.
 fn folder_title(dir: &Path, root: &Path) -> String {
     if dir == root {
@@ -380,6 +484,9 @@ pub(crate) struct Screens {
     home_names: RefCell<Vec<String>>,
     /// The folders opened on top of the tabs, the one on screen last.
     levels: RefCell<Vec<Level>>,
+    /// The archive whose inside is on screen, if any. The folder it was opened from stays the
+    /// last of `levels`.
+    arc: RefCell<Option<ArcState>>,
     /// Counts the folders opened, so that a late result can tell it is too late.
     generation: Cell<u64>,
     /// The listing of the current folder has arrived.
@@ -413,7 +520,9 @@ impl Screens {
     pub(crate) fn new(ui: &MainWindow, host: Rc<dyn Host>, units: Units) -> Self {
         let looks = Rc::new(Looks {
             host: host.clone(),
+            root: host.storage_root(),
             icons: IconSet::read(ui),
+            marks: RefCell::default(),
             units: Cell::new(units),
             offsets: RefCell::default(),
         });
@@ -424,6 +533,7 @@ impl Screens {
             home: Rc::new(VecModel::default()),
             home_names: RefCell::default(),
             levels: RefCell::default(),
+            arc: RefCell::default(),
             generation: Cell::new(0),
             loaded: Cell::new(false),
             pending: RefCell::default(),
@@ -612,7 +722,7 @@ impl App {
         for row in 0..listing.len() {
             if let Some(e) = listing.entry(row) {
                 names.push(e.name.clone());
-                rows.push(s.looks.vm(e, false));
+                rows.push(s.looks.vm(e, &s.root, false));
             }
         }
         *s.home_names.borrow_mut() = names;
@@ -662,7 +772,11 @@ impl App {
     /// What the Back key and the back button do: close the sheet, leave the selection, leave the
     /// search, go up a folder, then out of the folders, then to the Files tab, then out of the app.
     pub(crate) fn on_back(&self) {
-        if self.close_dialog() || self.close_sheet() {
+        // The progress sheet ignores Back: only its Cancel stops the work.
+        if self.job_running() {
+            return;
+        }
+        if self.close_dialog() || self.close_props() || self.close_pick() || self.close_sheet() {
             return;
         }
         let nav = self.ui.global::<Nav>();
@@ -674,6 +788,8 @@ impl App {
                 self.clear_selection();
             } else if browse.get_searching() {
                 self.close_search();
+            } else if self.in_archive() {
+                self.arc_back();
             } else {
                 self.leave_folder();
             }
@@ -721,9 +837,14 @@ impl App {
         let Some((name, kind)) = picked else {
             return;
         };
+        if self.in_archive() {
+            self.arc_row(&name, kind);
+            return;
+        }
         match kind {
-            Kind::Dir | Kind::Set => self.open_folder(dir.join(name)),
-            Kind::Archive => self.soon("Opening archives"),
+            Kind::Dir => self.open_folder(dir.join(name)),
+            Kind::Set => self.ask_password(dir.join(name)),
+            Kind::Archive => self.open_archive(dir.join(name), String::new()),
             Kind::File => self.open_file(&dir.join(&name), &name),
         }
     }
@@ -754,6 +875,7 @@ impl App {
         s.carry.borrow_mut().take();
         browse.set_selecting(false);
         browse.set_selected_count(0);
+        *s.model.dir.borrow_mut() = dir.clone();
         s.model.replace(Listing::new(Vec::new(), self.order()));
 
         browse.set_title(folder_title(&dir, &s.root).into());
@@ -953,6 +1075,10 @@ impl App {
 
     /// A tile of the selection bar: 0 Copy, 1 Move, 2 Delete, 3 Pack.
     fn bar_clicked(&self, tile: i32) {
+        if self.in_archive() {
+            self.soon("Changing an archive");
+            return;
+        }
         match tile {
             0 => self.set_clip(false),
             1 => self.set_clip(true),
@@ -977,6 +1103,9 @@ impl App {
         dialog.set_confirm_label(confirm.into());
         dialog.set_danger(danger);
         dialog.set_field(false);
+        dialog.set_placeholder("Name".into());
+        dialog.set_password(false);
+        dialog.set_select_to(-1);
         dialog.set_error(SharedString::new());
         dialog.set_open(true);
     }
@@ -1007,13 +1136,17 @@ impl App {
     /// be used keeps the dialog open, with the reason under the field.
     fn dialog_confirmed(&self) {
         let action = self.screens.dialog.borrow().clone();
-        if let Some(DialogAction::Make(kind)) = action {
-            self.make_new(kind);
-            return;
-        }
-        self.close_dialog();
-        if let Some(DialogAction::Delete(paths)) = action {
-            self.delete_paths(paths);
+        match action {
+            Some(DialogAction::Unlock(file)) => self.unlock_confirmed(file),
+            Some(DialogAction::Make(kind)) => self.make_new(kind),
+            Some(DialogAction::Rename(old)) => self.rename_to_field(&old),
+            Some(DialogAction::Delete(paths)) => {
+                self.close_dialog();
+                self.delete_paths(paths);
+            }
+            Some(DialogAction::Close) | None => {
+                self.close_dialog();
+            }
         }
     }
 
@@ -1078,6 +1211,142 @@ impl App {
         }
     }
 
+    // ---- Rename ------------------------------------------------------------------------------
+
+    /// Menu > Properties: the facts about the rows that are selected and in view.
+    fn props_menu(&self) {
+        let s = &self.screens;
+        let Some(dir) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let picked: Vec<(PathBuf, Kind)> = {
+            let listing = s.model.listing.borrow();
+            let entries = listing.selected_entries();
+            entries
+                .iter()
+                .map(|e| (dir.join(&e.name), e.kind))
+                .collect()
+        };
+        self.open_props(&picked);
+    }
+
+    /// Menu > Icon and color...: the selection is cleared, then the picker opens for the folder
+    /// that was selected.
+    fn icon_color_menu(&self) {
+        let s = &self.screens;
+        let Some(dir) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let name = {
+            let listing = s.model.listing.borrow();
+            listing
+                .only_selected()
+                .filter(|e| e.kind == Kind::Dir)
+                .map(|e| e.name.clone())
+        };
+        let Some(name) = name else {
+            return;
+        };
+        self.clear_selection();
+        self.open_pick(dir.join(&name), &name, true);
+    }
+
+    /// Read the picked icons and colours again from the settings (the rows draw from this copy).
+    pub(crate) fn reload_marks(&self) {
+        *self.screens.looks.marks.borrow_mut() = Marks::load(&self.prefs);
+    }
+
+    /// The icon paths that Rust picks from.
+    pub(crate) fn icon_paths(&self) -> &IconSet {
+        &self.screens.looks.icons
+    }
+
+    /// A picked icon or colour changed: give the folder its new look in the list, without
+    /// reading the folder again, and on the Files tab when it sits in the top of the storage.
+    pub(crate) fn marks_changed(&self, path: &Path) {
+        self.reload_marks();
+        let s = &self.screens;
+        let here = s.levels.borrow().last().map(|l| l.dir.clone());
+        if let (Some(here), Some(name)) = (here, path.file_name())
+            && path.parent() == Some(here.as_path())
+        {
+            let row = {
+                let listing = s.model.listing.borrow();
+                (0..listing.len()).find(|&r| {
+                    listing
+                        .entry(r)
+                        .is_some_and(|e| e.name.as_str() == name.to_string_lossy())
+                })
+            };
+            if let Some(row) = row {
+                s.model.edit(|_| Change::Rows(vec![row]));
+            }
+        }
+        if path.parent() == Some(s.root.as_path()) {
+            self.load_home();
+        }
+    }
+
+    /// Menu > Rename: ask for the new name of the one selected item. The name starts out in the
+    /// field with everything but its extension selected.
+    fn ask_rename(&self) {
+        let s = &self.screens;
+        if s.busy.get() || s.levels.borrow().is_empty() {
+            return;
+        }
+        let old = {
+            let listing = s.model.listing.borrow();
+            listing.only_selected().map(|e| e.name.clone())
+        };
+        let Some(old) = old else {
+            return;
+        };
+        self.open_dialog(
+            ("Rename", ""),
+            ("Cancel", "Rename"),
+            false,
+            DialogAction::Rename(old.clone()),
+        );
+        let dialog = self.ui.global::<DialogState>();
+        dialog.set_select_to(i32::try_from(name::stem_end(&old)).unwrap_or(-1));
+        dialog.set_field_text(old.into());
+        dialog.set_field(true);
+    }
+
+    /// Rename `old` to what the field says. A name that can't be used keeps the dialog open, with
+    /// the reason under the field. The same name is not a change: the dialog just closes and the
+    /// selection stays. After a rename the folder is read again (the selection is gone), and the
+    /// icon and colour of a renamed folder follow it.
+    fn rename_to_field(&self, old: &str) {
+        let dialog = self.ui.global::<DialogState>();
+        let Some(dir) = self.screens.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let new = match name::check(dialog.get_field_text().as_str()) {
+            Ok(n) => n,
+            Err(why) => {
+                dialog.set_error(why.into());
+                return;
+            }
+        };
+        if new == old {
+            self.close_dialog();
+            return;
+        }
+        let (from, to) = (dir.join(old), dir.join(&new));
+        match rename_path(&from, &to) {
+            Ok(()) => {
+                let old_path = from.to_string_lossy();
+                let new_path = to.to_string_lossy();
+                self.prefs.move_folder_icons(&old_path, &new_path);
+                self.reload_marks();
+                self.close_dialog();
+                self.reload_here();
+            }
+            Err(why) => dialog.set_error(why.into()),
+        }
+    }
+
     /// "Delete <what>?" for the rows that are selected and in view. A selected row that a search
     /// hides is left alone: only what the person can see is asked about, and deleted.
     fn ask_delete(&self) {
@@ -1106,7 +1375,7 @@ impl App {
         );
     }
 
-    /// Delete for good with `fs_delete` on a worker thread. (No progress sheet or Cancel yet.)
+    /// Delete for good with `fs_delete` on a worker thread, behind the progress sheet.
     fn delete_paths(&self, paths: Vec<PathBuf>) {
         let s = &self.screens;
         if s.busy.replace(true) {
@@ -1116,12 +1385,14 @@ impl App {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
-        std::thread::spawn(move || {
-            let result = kiln_bridge::call("fs_delete", &json!([paths]), 0);
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|a| a.delete_done(&result));
-            });
-        });
+        let started = self.run_job(
+            "Deleting...",
+            move |job| kiln_bridge::call_job("fs_delete", &json!([paths]), 0, job),
+            |app, result| app.delete_done(result),
+        );
+        if !started {
+            s.busy.set(false);
+        }
     }
 
     /// Say what went wrong, if anything, and read the folder again (the selection is gone).
@@ -1179,6 +1450,11 @@ impl App {
     fn update_paste_bar(&self) {
         let s = &self.screens;
         let browse = self.ui.global::<BrowseState>();
+        if s.arc.borrow().is_some() {
+            // nothing is pasted into an archive; what is held stays held for the folder after it
+            browse.set_paste_title(SharedString::new());
+            return;
+        }
         let held = s.clip.borrow();
         let Some(clip) = held.as_ref() else {
             browse.set_paste_title(SharedString::new());
@@ -1264,18 +1540,23 @@ impl App {
         self.open_sheet_with(&title, &body, "Cancel", lines);
     }
 
-    /// Copy or move under the chosen policy, on a worker thread. (No progress sheet or Cancel yet.)
+    /// Copy or move under the chosen policy, on a worker thread, behind the progress sheet.
     fn run_transfer(&self, srcs: Vec<String>, dest: String, mv: bool, policy: Policy) {
         if self.screens.busy.replace(true) {
             return;
         }
         let word = policy.word();
-        std::thread::spawn(move || {
-            let result = kiln_bridge::call("fs_transfer", &json!([srcs, dest, mv, word]), 0);
-            let _ = slint::invoke_from_event_loop(move || {
-                app_do(|a| a.transfer_done(mv, &result));
-            });
-        });
+        let started = self.run_job(
+            if mv { "Moving..." } else { "Copying..." },
+            move |job| {
+                let args = json!([srcs, dest, mv, word]);
+                kiln_bridge::call_job("fs_transfer", &args, 0, job)
+            },
+            move |app, result| app.transfer_done(mv, result),
+        );
+        if !started {
+            self.screens.busy.set(false);
+        }
     }
 
     /// Say what happened, let go of the items, read the folder again.
@@ -1375,10 +1656,43 @@ impl App {
 
     /// The menu of the folder screen: with rows selected, or without.
     fn folder_menu(&self) {
-        let selecting = self.screens.model.listing.borrow().is_selecting();
+        if self.in_archive() {
+            self.archive_menu();
+            return;
+        }
+        let (selecting, one, one_dir, one_set) = {
+            let listing = self.screens.model.listing.borrow();
+            let only = listing.only_selected();
+            (
+                listing.is_selecting(),
+                only.is_some(),
+                only.is_some_and(|e| e.kind == Kind::Dir),
+                only.is_some_and(|e| e.kind == Kind::Set),
+            )
+        };
         let i = &self.screens.looks.icons;
         let mut lines = vec![line(SheetAction::SelectAll, "Select all", &i.check, false)];
         if selecting {
+            lines.push(line(SheetAction::Properties, "Properties", &i.file, false));
+            if one {
+                lines.push(line(SheetAction::Rename, "Rename", &i.edit, false));
+            }
+            if one_dir {
+                lines.push(line(
+                    SheetAction::IconColor,
+                    "Icon and color...",
+                    &i.folder,
+                    false,
+                ));
+            }
+            if one_set {
+                lines.push(line(
+                    SheetAction::PlainSet,
+                    "Browse as plain folder",
+                    &i.folder,
+                    false,
+                ));
+            }
             lines.push(line(
                 SheetAction::ClearSelection,
                 "Clear selection",
@@ -1423,6 +1737,10 @@ impl App {
             SheetAction::ShowAll => self.toggle_show(false),
             SheetAction::ShowHidden => self.toggle_show(true),
             SheetAction::Refresh => self.refresh_folder(),
+            SheetAction::Properties => self.props_menu(),
+            SheetAction::Rename => self.ask_rename(),
+            SheetAction::IconColor => self.icon_color_menu(),
+            SheetAction::PlainSet => self.browse_set_plain(),
             SheetAction::New(kind) => self.ask_name(kind),
             SheetAction::Paste(policy) => {
                 let waiting = self.screens.transfer.borrow_mut().take();
@@ -1466,6 +1784,243 @@ impl App {
         self.read_dir(dir, scroll, false);
     }
 
+    // ---- archives -------------------------------------------------------------------------------
+
+    /// An archive is open: its inside is what the list shows.
+    fn in_archive(&self) -> bool {
+        self.screens.arc.borrow().is_some()
+    }
+
+    /// The sheet that asks for the password of the set or locked archive `file`.
+    fn ask_password(&self, file: PathBuf) {
+        let title = format!("Unlock {}", base_name(&file));
+        self.open_dialog(
+            (&title, ""),
+            ("Cancel", "Unlock"),
+            false,
+            DialogAction::Unlock(file),
+        );
+        let dialog = self.ui.global::<DialogState>();
+        dialog.set_placeholder("Password".into());
+        dialog.set_password(true);
+        dialog.set_field_text(SharedString::new());
+        dialog.set_field(true);
+    }
+
+    /// Unlock was tapped: with nothing typed the field says so, otherwise the archive is opened.
+    fn unlock_confirmed(&self, file: PathBuf) {
+        let dialog = self.ui.global::<DialogState>();
+        let password = dialog.get_field_text().to_string();
+        if password.is_empty() {
+            dialog.set_error("Enter the password".into());
+            return;
+        }
+        self.close_dialog();
+        self.open_archive(file, password);
+    }
+
+    /// Read the contents of the archive `file` on a worker thread, behind the progress sheet.
+    fn open_archive(&self, file: PathBuf, password: String) {
+        let s = &self.screens;
+        if s.busy.replace(true) {
+            return;
+        }
+        let title = if password.is_empty() {
+            "Opening..."
+        } else {
+            "Unlocking..."
+        };
+        let args = json!([file.to_string_lossy(), password]);
+        let started = self.run_job(
+            title,
+            move |job| kiln_bridge::call_job("open_archive", &args, 0, job),
+            move |app, result| app.archive_opened(file, password, result),
+        );
+        if !started {
+            s.busy.set(false);
+        }
+    }
+
+    /// The contents have been read, or not: show the inside of the archive, ask for the password
+    /// (again), or say why it can't be opened.
+    fn archive_opened(&self, file: PathBuf, password: String, result: &Value) {
+        self.screens.busy.set(false);
+        if result["ok"].as_bool().unwrap_or(false) {
+            self.show_archive(ArcState::from_open(file, password, None, result));
+            return;
+        }
+        if result["cancelled"].as_bool().unwrap_or(false) {
+            self.toast("Cancelled");
+            return;
+        }
+        let wrong = result["bad_password"].as_bool().unwrap_or(false);
+        if wrong || result["need_password"].as_bool().unwrap_or(false) {
+            if wrong {
+                self.toast("Incorrect password");
+            }
+            self.ask_password(file);
+            return;
+        }
+        let why = result["error"]
+            .as_str()
+            .or_else(|| result["message"].as_str())
+            .filter(|text| !text.is_empty())
+            .unwrap_or("Unknown error");
+        self.message(&format!("Couldn't open {}", base_name(&file)), why);
+    }
+
+    /// Show the inside of `arc`. The folder it was opened from stays the last of `levels`, with
+    /// the place it was scrolled to for the way back.
+    fn show_archive(&self, arc: ArcState) {
+        let s = &self.screens;
+        let browse = self.ui.global::<BrowseState>();
+        if let Some(top) = s.levels.borrow_mut().last_mut() {
+            top.scroll = browse.get_scroll_y();
+        }
+        // what a worker thread still sends about the folder that was left is dropped
+        s.generation.set(s.generation.get() + 1);
+        s.pending.borrow_mut().clear();
+        s.loading_hint.stop();
+        s.loaded.set(true);
+        s.failed.set(false);
+        s.carry.borrow_mut().take();
+        *s.arc.borrow_mut() = Some(arc);
+        browse.set_in_archive(true);
+        self.show_arc_level(0.0);
+        self.update_paste_bar();
+    }
+
+    /// Show the folder of the open archive that its `prefix` names, scrolled to `scroll`. The
+    /// selection and the search do not carry over.
+    fn show_arc_level(&self, scroll: f32) {
+        let s = &self.screens;
+        let browse = self.ui.global::<BrowseState>();
+        let (entries, dir, title, subtitle) = {
+            let open = s.arc.borrow();
+            let Some(arc) = open.as_ref() else {
+                return;
+            };
+            let subtitle = if arc.prefix.is_empty() {
+                let mut line = sfmt::plural(arc.ents.len() as u64, "file", "files");
+                if arc.encrypted {
+                    line.push_str(" \u{b7} encrypted");
+                }
+                line
+            } else {
+                format!("/{}", arc.prefix)
+            };
+            let dir = arc.file.join(&arc.prefix);
+            (arc.list_entries(), dir, arc.file_name(), subtitle)
+        };
+        if browse.get_searching() {
+            browse.set_searching(false);
+            self.ui.invoke_focus_keys();
+        }
+        s.query.borrow_mut().clear();
+        *s.model.dir.borrow_mut() = dir;
+        let mut listing = Listing::new(entries, self.order());
+        listing.set_show_hidden(true);
+        listing.set_show_all(true);
+        s.model.replace(listing);
+        browse.set_title(title.into());
+        browse.set_subtitle(subtitle.into());
+        browse.set_empty_text(SharedString::new());
+        self.sync_selection();
+        self.update_empty_text();
+        browse.set_scroll_y(scroll);
+    }
+
+    /// A tap on a row of the open archive: a folder is entered; a file has no sheet yet.
+    fn arc_row(&self, name: &str, kind: Kind) {
+        if kind.is_folder() {
+            self.arc_enter(name);
+        } else {
+            self.soon("Opening a file of an archive");
+        }
+    }
+
+    /// Open the folder `name` of the archive; the one left is remembered where it was scrolled.
+    fn arc_enter(&self, name: &str) {
+        let browse = self.ui.global::<BrowseState>();
+        let (y, searching) = (browse.get_scroll_y(), browse.get_searching());
+        {
+            let mut open = self.screens.arc.borrow_mut();
+            let Some(arc) = open.as_mut() else {
+                return;
+            };
+            if !searching {
+                arc.pos.insert(arc.prefix.clone(), y);
+            }
+            arc.prefix = format!("{}{name}/", arc.prefix);
+        }
+        self.show_arc_level(0.0);
+    }
+
+    /// Back inside an archive: up one folder, to where it was left, and at the top out of the
+    /// archive.
+    fn arc_back(&self) {
+        let up = {
+            let mut open = self.screens.arc.borrow_mut();
+            let Some(arc) = open.as_mut() else {
+                return;
+            };
+            arc.parent_prefix().map(|prefix| {
+                let y = arc.pos.get(&prefix).copied().unwrap_or(0.0);
+                arc.prefix = prefix;
+                y
+            })
+        };
+        match up {
+            Some(y) => self.show_arc_level(y),
+            None => self.close_archive(),
+        }
+    }
+
+    /// Leave the archive for the folder it was opened from, scrolled where it was left.
+    fn close_archive(&self) {
+        let s = &self.screens;
+        s.arc.borrow_mut().take();
+        self.ui.global::<BrowseState>().set_in_archive(false);
+        let back = s.levels.borrow().last().map(|l| (l.dir.clone(), l.scroll));
+        if let Some((dir, scroll)) = back {
+            self.load_dir(dir, scroll);
+        }
+    }
+
+    /// The menu of an open archive: the selection lines only, until the archive tools come.
+    fn archive_menu(&self) {
+        let selecting = self.screens.model.listing.borrow().is_selecting();
+        let i = &self.screens.looks.icons;
+        let mut lines = vec![line(SheetAction::SelectAll, "Select all", &i.check, false)];
+        if selecting {
+            lines.push(line(
+                SheetAction::ClearSelection,
+                "Clear selection",
+                &i.close,
+                false,
+            ));
+        }
+        self.open_sheet("", lines);
+    }
+
+    /// Menu > Browse as plain folder: the files of the selected set as they are on disk.
+    fn browse_set_plain(&self) {
+        let s = &self.screens;
+        let Some(dir) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
+            return;
+        };
+        let set = {
+            let listing = s.model.listing.borrow();
+            listing
+                .only_selected()
+                .filter(|e| e.kind == Kind::Set)
+                .map(|e| dir.join(&e.name))
+        };
+        if let Some(set) = set {
+            self.open_folder(set);
+        }
+    }
+
     // ---- sizes, dates and counts ----------------------------------------------------------------
 
     /// Fetch what the rows in view (and a few more each way) are still missing.
@@ -1480,6 +2035,10 @@ impl App {
     /// thread, and send the results back `batch` rows at a time.
     fn fetch_rows(&self, first: usize, count: usize, batch: usize) {
         let s = &self.screens;
+        if self.in_archive() {
+            // the rows of an archive come with their sizes, dates and counts
+            return;
+        }
         let Some(dir) = s.levels.borrow().last().map(|l| l.dir.clone()) else {
             return;
         };
@@ -1545,5 +2104,83 @@ impl App {
         }
         s.model
             .edit(|l| merge(l.apply_meta(metas), l.apply_counts(counts)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh, empty folder under the system's temp folder, removed again when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let name = format!("kiln-screens-{tag}-{}", std::process::id());
+            let dir = std::env::temp_dir().join(name);
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_file_is_renamed_and_keeps_its_content() {
+        let s = Scratch::new("rename-ok");
+        std::fs::write(s.path("a.txt"), "hello").unwrap();
+        rename_path(&s.path("a.txt"), &s.path("b.txt")).unwrap();
+        assert!(!s.path("a.txt").exists());
+        assert_eq!(std::fs::read_to_string(s.path("b.txt")).unwrap(), "hello");
+    }
+
+    #[test]
+    fn a_folder_is_renamed_with_what_is_inside() {
+        let s = Scratch::new("rename-dir");
+        std::fs::create_dir(s.path("old")).unwrap();
+        std::fs::write(s.path("old").join("f"), "x").unwrap();
+        rename_path(&s.path("old"), &s.path("new")).unwrap();
+        assert!(!s.path("old").exists());
+        assert!(s.path("new").join("f").is_file());
+    }
+
+    #[test]
+    fn a_taken_name_is_refused_and_nothing_is_replaced() {
+        let s = Scratch::new("rename-taken");
+        std::fs::write(s.path("a.txt"), "first").unwrap();
+        std::fs::write(s.path("b.txt"), "second").unwrap();
+        let why = rename_path(&s.path("a.txt"), &s.path("b.txt")).unwrap_err();
+        assert_eq!(why, "That name is taken");
+        assert_eq!(std::fs::read_to_string(s.path("a.txt")).unwrap(), "first");
+        assert_eq!(std::fs::read_to_string(s.path("b.txt")).unwrap(), "second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_counts_as_a_taken_name() {
+        let s = Scratch::new("rename-link");
+        std::fs::write(s.path("a.txt"), "first").unwrap();
+        std::os::unix::fs::symlink("nowhere", s.path("link")).unwrap();
+        let why = rename_path(&s.path("a.txt"), &s.path("link")).unwrap_err();
+        assert_eq!(why, "That name is taken");
+        assert!(s.path("a.txt").exists());
+    }
+
+    #[test]
+    fn a_missing_source_says_why_instead_of_a_taken_name() {
+        let s = Scratch::new("rename-gone");
+        let why = rename_path(&s.path("gone.txt"), &s.path("other.txt")).unwrap_err();
+        assert!(!why.is_empty());
+        assert_ne!(why, "That name is taken");
+        assert!(!why.contains("os error"));
     }
 }

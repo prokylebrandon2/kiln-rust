@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use kiln_state::{Entry as ListEntry, Kind as ListKind};
 use serde_json::{Value, json};
 
 use crate::browser::{Kind, Row, Tint};
@@ -137,6 +138,37 @@ impl ArcState {
             });
         }
         rows
+    }
+
+    /// What is directly inside the folder shown, as the entries of a listing: a file with its size
+    /// and date, a folder with the number of files below it (their sizes and the newest date are
+    /// added up for it, so that a sort by size or date has something to go by).
+    pub fn list_entries(&self) -> Vec<ListEntry> {
+        let mut dirs: HashMap<&str, (u32, u64, i64)> = HashMap::new();
+        let mut out = Vec::new();
+        for e in &self.ents {
+            let Some(rest) = e.p.strip_prefix(self.prefix.as_str()) else {
+                continue;
+            };
+            let size = u64::try_from(e.s).unwrap_or(0);
+            match rest.find('/') {
+                None if rest.is_empty() => {}
+                None => out.push(ListEntry::with_meta(rest, ListKind::File, size, e.m)),
+                Some(0) => {}
+                Some(i) => {
+                    let agg = dirs.entry(&rest[..i]).or_insert((0, 0, 0));
+                    agg.0 = agg.0.saturating_add(1);
+                    agg.1 += size;
+                    agg.2 = agg.2.max(e.m);
+                }
+            }
+        }
+        for (name, (count, size, time)) in dirs {
+            let mut dir = ListEntry::with_meta(name, ListKind::Dir, size, time);
+            dir.children = Some(count);
+            out.push(dir);
+        }
+        out
     }
 
     /// Inside an archive: every file whose name holds all the words (lower case),

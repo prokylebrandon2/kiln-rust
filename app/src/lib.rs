@@ -21,8 +21,11 @@ pub mod engine;
 pub mod fmt;
 pub mod host;
 pub mod icons;
+mod pick_sheet;
 pub mod prefs;
+mod progress;
 pub mod props;
+mod props_sheet;
 mod screens;
 pub mod sniff;
 pub mod thumbs;
@@ -39,7 +42,10 @@ use kiln_ui_next::MainWindow;
 use slint::ComponentHandle;
 
 pub use crate::host::{Event, Host, Incoming, Look, OpenApp, OpenWith, Volume};
+use crate::pick_sheet::Open as PickOpen;
 use crate::prefs::Prefs;
+use crate::progress::Ops;
+use crate::props_sheet::Open as PropsOpen;
 use crate::screens::Screens;
 
 /// Off, Fast, Normal, Relaxed. Settings > Animation speed picks one.
@@ -50,6 +56,12 @@ struct App {
     host: Rc<dyn Host>,
     prefs: Prefs,
     screens: Screens,
+    /// The file operation that is running behind the progress sheet, if any.
+    ops: Ops,
+    /// The Properties sheet that is up, if any.
+    props: RefCell<PropsOpen>,
+    /// The icon and colour picker that is up, if any.
+    pick: RefCell<PickOpen>,
 }
 
 thread_local! {
@@ -89,11 +101,18 @@ pub fn run(host: Rc<dyn Host>) -> Result<(), slint::PlatformError> {
         host: host.clone(),
         prefs,
         screens,
+        ops: Ops::default(),
+        props: RefCell::default(),
+        pick: RefCell::default(),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
     app.apply_look();
     app.wire_screens();
+    app.wire_progress();
+    app.wire_props();
+    app.wire_pick();
+    app.reload_marks();
     app.refresh_permission();
 
     let weak = Rc::downgrade(&app);

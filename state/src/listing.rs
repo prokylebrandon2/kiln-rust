@@ -277,6 +277,16 @@ impl Listing {
             .map(|&id| &self.entries[id as usize])
             .collect()
     }
+
+    /// The entry that is selected when exactly one is, and it is in view. Rename acts on it. A
+    /// selected row that a filter hides does not count, so that Rename never acts on something
+    /// the person can't see (the same rule as for Delete).
+    pub fn only_selected(&self) -> Option<&Entry> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        self.selected_entries().into_iter().next()
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +417,30 @@ mod tests {
             .collect();
         names.sort_unstable();
         assert_eq!(names, ["a10.png", "a2.png"]);
+    }
+
+    #[test]
+    fn only_selected_needs_exactly_one_row() {
+        let mut l = sample();
+        assert!(l.only_selected().is_none());
+        assert!(l.toggle(1)); // a2.png
+        assert_eq!(l.only_selected().unwrap().name, "a2.png");
+        assert!(l.toggle(0)); // Music
+        assert!(l.only_selected().is_none());
+        assert!(!l.toggle(0));
+        assert_eq!(l.only_selected().unwrap().name, "a2.png");
+    }
+
+    #[test]
+    fn only_selected_ignores_a_row_that_a_search_hides() {
+        let mut l = sample();
+        assert!(l.toggle(0)); // Music
+        l.set_query("png");
+        // one row is selected, but it is not in view: nothing to rename
+        assert_eq!(l.selected_count(), 1);
+        assert!(l.only_selected().is_none());
+        l.set_query("");
+        assert_eq!(l.only_selected().unwrap().name, "Music");
     }
 
     #[test]

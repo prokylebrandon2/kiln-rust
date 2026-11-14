@@ -9,17 +9,21 @@ import { Tok } from "tokens.slint";
 import { Pressable } from "controls.slint";
 import { DialogState } from "state.slint";
 
-component DialogButton inherits Rectangle {
+export component DialogButton inherits Rectangle {
     in property <string> text;
     /// Drawn as a filled pill (the confirm button) rather than as plain text (Cancel).
     in property <bool> filled: false;
     in property <color> fill-color: Tok.accent;
+    /// Drawn as a pill with an outline and no fill ("Use default").
+    in property <bool> outlined: false;
     callback clicked();
     height: 44px;
     preferred-width: Math.max(88px, label.preferred-width + 40px);
     min-width: self.preferred-width;
     border-radius: 22px;
     background: root.filled ? root.fill-color : transparent;
+    border-width: root.outlined ? 1px : 0px;
+    border-color: Tok.text-2;
 
     Pressable {
         width: 100%;
@@ -107,7 +111,7 @@ export component DialogOverlay inherits Rectangle {
                 x: 14px;
                 width: parent.width - 28px;
                 height: parent.height;
-                text: "Name";
+                text: DialogState.placeholder;
                 color: Tok.text-2;
                 font-size: Tok.sp(16px);
                 vertical-alignment: center;
@@ -122,11 +126,16 @@ export component DialogOverlay inherits Rectangle {
                 color: Tok.text;
                 font-size: Tok.sp(16px);
                 single-line: true;
+                input-type: DialogState.password ? InputType.password : InputType.text;
                 selection-background-color: Tok.text-2.with-alpha(0.35);
                 selection-foreground-color: Tok.text;
                 init => {
                     self.focus();
-                    self.select-all();
+                    if (DialogState.select-to >= 0) {
+                        self.set-selection-offsets(0, DialogState.select-to);
+                    } else {
+                        self.select-all();
+                    }
                 }
                 edited => {
                     DialogState.error = "";

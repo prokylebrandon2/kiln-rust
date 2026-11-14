@@ -1,0 +1,203 @@
+// The folder icon picker: a card over a scrim with a row of colour swatches (for a folder in a
+// list, not for a bookmark), a grid of folder icons, and "Use default" / "Cancel". `PickState` is
+// the only interface. Everything is placed by arithmetic (11 swatches, 6 to a row; 4 icons to a
+// row), so the card's height is known and a small screen scrolls the middle.
+
+import { Tok } from "tokens.slint";
+import { Icon, Pressable } from "controls.slint";
+import { Icons } from "icons.slint";
+import { DialogButton } from "dialog.slint";
+import { PickState } from "state.slint";
+
+/// One colour: a 42 dp tall cell with a 34 dp circle, 3 dp in the text colour and a white tick
+/// when it is the current one, else 1 dp in the line colour.
+component Swatch inherits Rectangle {
+    in property <color> dot;
+    in property <bool> current: false;
+    callback clicked();
+    height: 42px;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 4px;
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        background: root.dot;
+        border-width: root.current ? 3px : 1px;
+        border-color: root.current ? Tok.text : Tok.line;
+
+        if root.current: Icon {
+            x: (parent.width - self.width) / 2 - 3px;
+            y: (parent.height - self.height) / 2 - 3px;
+            d: Icons.check;
+            size: 20px;
+            tint: #ffffff;
+        }
+    }
+
+    Pressable {
+        width: 100%;
+        height: 100%;
+        radius: 21px;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// One icon over its label. The current one has a chip fill, an outline and a bold label.
+component PickItem inherits Rectangle {
+    in property <string> d;
+    in property <string> label;
+    in property <bool> current: false;
+    in property <color> tint;
+    callback clicked();
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 12px;
+        background: root.current ? Tok.sel : transparent;
+        border-width: root.current ? 1px : 0px;
+        border-color: Tok.accent;
+
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: 8px;
+            d: root.d;
+            size: 40px;
+            tint: root.tint;
+        }
+
+        Text {
+            x: 2px;
+            y: 8px + 40px;
+            width: parent.width - 4px;
+            height: Tok.sp(16px);
+            text: root.label;
+            color: root.current ? Tok.text : Tok.text-2;
+            font-size: Tok.sp(11px);
+            font-weight: root.current ? 700 : 400;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        Pressable {
+            width: 100%;
+            height: 100%;
+            radius: 12px;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
+export component PickOverlay inherits Rectangle {
+    /// A swatch row pair and the gap under it, when the picker has swatches.
+    property <length> swatches-h: PickState.has-colors ? 2 * 42px + 10px : 0px;
+    /// An icon cell: its padding, the 40 dp icon and a one line label.
+    property <length> cell-h: 8px + 40px + Tok.sp(16px) + 8px;
+    property <length> grid-h: Math.ceil(PickState.cells.length / 4) * root.cell-h;
+    background: Tok.scrim;
+
+    // a tap outside the card backs out
+    TouchArea {
+        clicked => {
+            PickState.cancelled();
+        }
+    }
+
+    card := Rectangle {
+        width: Math.min(460px, parent.width - 2 * Tok.sheet-margin);
+        height: Math.min(parent.height - 2 * Tok.sheet-margin, Tok.sheet-pad + Tok.sheet-title-h + root.swatches-h + root.grid-h + 8px + 44px + 12px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tok.surface;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Tok.line;
+        clip: true;
+
+        // taps on the card stay on the card
+        TouchArea { }
+
+        Text {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad;
+            width: parent.width - 2 * Tok.sheet-pad;
+            height: Tok.sheet-title-h;
+            text: PickState.title;
+            color: Tok.text;
+            font-size: Tok.sp(19px);
+            font-weight: 700;
+            vertical-alignment: top;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        Flickable {
+            x: Tok.sheet-pad;
+            y: Tok.sheet-pad + Tok.sheet-title-h;
+            width: parent.width - 2 * Tok.sheet-pad;
+            height: parent.height - Tok.sheet-pad - Tok.sheet-title-h - 8px - 44px - 12px;
+            content-width: self.width;
+            content-height: root.swatches-h + root.grid-h;
+
+            if PickState.has-colors: Rectangle {
+                for i in 11: Swatch {
+                    x: Math.mod(i, 6) * (parent.width / 6);
+                    y: Math.floor(i / 6) * 42px;
+                    width: parent.width / 6;
+                    dot: i == 0 ? Tok.accent : PickState.colors[i - 1];
+                    current: PickState.color-index == i;
+                    clicked => {
+                        PickState.swatch-clicked(i);
+                    }
+                }
+            }
+
+            for c[i] in PickState.cells: PickItem {
+                x: Math.mod(i, 4) * (parent.width / 4);
+                y: root.swatches-h + Math.floor(i / 4) * root.cell-h;
+                width: parent.width / 4;
+                height: root.cell-h;
+                d: c.d;
+                label: c.label;
+                current: c.current;
+                tint: PickState.tint;
+                clicked => {
+                    PickState.icon-clicked(i);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            x: Tok.sheet-pad - 8px;
+            y: parent.height - 12px - 44px;
+            width: parent.width - 2 * Tok.sheet-pad + 16px;
+            height: 44px;
+            alignment: end;
+            spacing: 4px;
+
+            DialogButton {
+                text: "Use default";
+                outlined: true;
+                clicked => {
+                    PickState.default-clicked();
+                }
+            }
+            DialogButton {
+                text: "Cancel";
+                clicked => {
+                    PickState.cancelled();
+                }
+            }
+        }
+    }
+}

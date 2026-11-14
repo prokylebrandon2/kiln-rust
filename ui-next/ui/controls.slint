@@ -82,19 +82,32 @@ export component IconButton inherits Rectangle {
     }
 }
 
-/// A bar that fills to `value` (0..1).
+/// A bar that fills to `value` (0..1), or, while `indeterminate`, shows a short segment that
+/// slides across it again and again.
 export component ProgressBar inherits Rectangle {
     in property <float> value: 0.0;
+    in property <bool> indeterminate: false;
+    /// Where the sliding segment is, 0..1, one trip every 1.4 s.
+    property <float> phase: Math.mod(animation-tick() / 1ms, 1400) / 1400;
     height: Tok.progress-h;
     border-radius: self.height / 2;
     background: Tok.track;
     clip: true;
 
-    Rectangle {
+    if !root.indeterminate: Rectangle {
         x: 0px;
         y: 0px;
         height: parent.height;
         width: parent.width * Math.min(1.0, Math.max(0.0, root.value));
+        border-radius: parent.border-radius;
+        background: Tok.fill;
+    }
+
+    if root.indeterminate: Rectangle {
+        y: 0px;
+        height: parent.height;
+        width: parent.width * 0.35;
+        x: -self.width + (parent.width + self.width) * root.phase;
         border-radius: parent.border-radius;
         background: Tok.fill;
     }

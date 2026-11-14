@@ -391,7 +391,7 @@ export component BrowseScreen inherits Rectangle {
                 y: parent.height - self.height - Tok.sel-bar-gap;
             }
 
-            if !BrowseState.selecting && BrowseState.paste-title == "" && root.new-shown: NewButton {
+            if !BrowseState.selecting && BrowseState.paste-title == "" && !BrowseState.in-archive && root.new-shown: NewButton {
                 x: parent.width - self.width - 16px;
                 y: parent.height - self.height - 16px;
                 clicked => {

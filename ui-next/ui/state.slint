@@ -30,6 +30,24 @@ export struct SheetRow {
     checked: bool,
 }
 
+/// One line of the Properties sheet.
+export struct PropRow {
+    /// The name of the item (`kind` 0), a heading (1), or what the value is about (2).
+    label: string,
+    value: string,
+    /// 0 the item's name, 1 a heading, 2 a label with its value.
+    kind: int,
+}
+
+/// One icon of the folder icon picker.
+export struct PickCell {
+    /// Icon path data.
+    d: string,
+    label: string,
+    /// The icon the folder has now.
+    current: bool,
+}
+
 /// One of the quick-access tiles under the search pill.
 export struct CategoryVm {
     label: string,
@@ -89,6 +107,8 @@ export global BrowseState {
     in-out property <int> selected-count: 0;
     /// The search field is open under the bar.
     in-out property <bool> searching: false;
+    /// The rows are the inside of an archive: nothing can be made or pasted there.
+    in-out property <bool> in-archive: false;
     /// Something is held by Copy or Move and nothing is selected: the paste bar shows. "" for no
     /// paste bar, otherwise its first line ("Copying 3 items").
     in-out property <string> paste-title;
@@ -130,6 +150,65 @@ export global SheetState {
     callback dismissed();
 }
 
+/// The Properties sheet: a card with the facts about the selection, a check box for a folder's
+/// `.nomedia` file, and Copy / OK. Rust fills `rows` (and changes a value when a slow answer
+/// arrives) and opens it. OK, the Back key and a tap outside all report `ok-clicked`.
+export global PropsState {
+    in-out property <bool> open: false;
+    in-out property <[PropRow]> rows;
+    /// Show the "Disable media scanning" box (a single folder).
+    in-out property <bool> has-nomedia: false;
+    in-out property <bool> nomedia: false;
+    callback copy-clicked();
+    callback ok-clicked();
+    /// The box was tapped; the argument is what it should become.
+    callback nomedia-toggled(bool);
+}
+
+/// The folder icon picker: a card with a row of colour swatches (not for a bookmark), a grid of
+/// icons, and "Use default" / "Cancel". Rust fills it and opens it. A swatch keeps the sheet open
+/// (Rust saves the colour and moves the tick); an icon, a button, Back and a tap outside are for
+/// Rust to act on.
+export global PickState {
+    in-out property <bool> open: false;
+    /// "Icon and color for Music" (with swatches) or "Icon for Music".
+    in-out property <string> title;
+    in-out property <bool> has-colors: false;
+    /// The colours after the first swatch; the first ("default") is drawn in the accent colour.
+    in-out property <[color]> colors;
+    /// The swatch with the ring and the tick: 0 is "default", 1.. follow `colors`, -1 none.
+    in-out property <int> color-index: 0;
+    /// What the icons are drawn in: the folder's colour, else the accent.
+    in-out property <color> tint: #808080;
+    in-out property <[PickCell]> cells;
+    callback swatch-clicked(int);
+    callback icon-clicked(int);
+    callback default-clicked();
+    callback cancelled();
+}
+
+/// A file operation that has lasted a moment (Delete, Copy, Move): a card over the whole window
+/// with what is being done, the file in hand, the percent and a bar, and Cancel. Rust fills it
+/// and opens it (after 250 ms, so a quick operation never shows it). Back and a tap outside do
+/// nothing; only Cancel (`cancel-clicked`) ends it early, and Rust then keeps the card up until
+/// the work has stopped.
+export global ProgressState {
+    in-out property <bool> open: false;
+    /// "Deleting...", "Copying...", "Moving...".
+    in-out property <string> title;
+    /// The file being worked on, or "Cancelling...".
+    in-out property <string> line;
+    /// "42%", or "" while the amount is not known.
+    in-out property <string> percent;
+    /// How much of the work is done, 0..1 (read only while `indeterminate` is false).
+    in-out property <float> frac: 0.0;
+    /// The amount is not known: the bar slides instead of filling.
+    in-out property <bool> indeterminate: true;
+    /// False once Cancel was tapped.
+    in-out property <bool> cancel-enabled: true;
+    callback cancel-clicked();
+}
+
 /// A question or a message in the middle of the window: a title, some text, and one or two
 /// buttons. Rust fills it and opens it; the dialog only says which button was tapped. A tap
 /// outside the card counts as Cancel (or as OK when there is no Cancel).
@@ -146,6 +225,12 @@ export global DialogState {
     /// and reads it back on `confirmed`.
     in-out property <bool> field: false;
     in-out property <string> field-text;
+    /// What the empty field says, and whether what is typed is hidden (a password).
+    in-out property <string> placeholder: "Name";
+    in-out property <bool> password: false;
+    /// Where the text of the field starts out selected to, as a byte offset into `field-text`
+    /// (Rename leaves the extension out); -1 selects all of it. Rust sets it before `field`.
+    in-out property <int> select-to: -1;
     /// A red line under the field, or "". Typing in the field clears it.
     in-out property <string> error;
     callback confirmed();

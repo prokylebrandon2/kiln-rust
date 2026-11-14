@@ -14,6 +14,17 @@ pub fn check(raw: &str) -> Result<String, &'static str> {
     Ok(name.to_string())
 }
 
+/// Where the part of a name that a rename selects first ends: at the last dot, so `report.pdf`
+/// starts out with `report` selected and a quick retype keeps the extension (as the Java does).
+/// A name with no dot, or only a leading one (`.nomedia`), is selected whole. The answer is a
+/// byte offset into `name`, which is what a Slint `TextInput` takes.
+pub fn stem_end(name: &str) -> usize {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => dot,
+        _ => name.len(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -30,5 +41,26 @@ mod tests {
         for bad in ["", "   ", "a/b", "/", ".", " .. ", "a\0b"] {
             assert_eq!(check(bad), Err(BAD_NAME), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_stem_ends_at_the_last_dot() {
+        assert_eq!(stem_end("report.pdf"), 6);
+        assert_eq!(stem_end("archive.tar.gz"), 11);
+        assert_eq!(stem_end("notes"), 5);
+        assert_eq!(stem_end(""), 0);
+    }
+
+    #[test]
+    fn a_leading_dot_does_not_end_the_stem() {
+        assert_eq!(stem_end(".nomedia"), 8);
+        assert_eq!(stem_end(".a.b"), 2);
+    }
+
+    #[test]
+    fn the_stem_is_counted_in_bytes() {
+        // "é" is two bytes in UTF-8
+        assert_eq!(stem_end("é.txt"), 2);
+        assert_eq!(&"é.txt"[..stem_end("é.txt")], "é");
     }
 }

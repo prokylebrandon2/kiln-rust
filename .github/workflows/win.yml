@@ -58,6 +58,24 @@ jobs:
       - name: Build
         run: cargo build --release -p kiln-win
 
+      # Right after the build, so the exe is attached even when a later test step fails.
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          foreach ($name in 'kiln-win.exe', 'kiln-gui.exe') {
+            Copy-Item "target/release/$name" "dist/$name"
+            $size = [math]::Round((Get-Item "dist/$name").Length / 1MB, 2)
+            "${name}: $size MiB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-win-x64
+          path: |
+            dist/kiln-win.exe
+            dist/kiln-gui.exe
+          if-no-files-found: error
       - name: Check whether Cargo.lock changed
         id: lock
         shell: bash
@@ -96,23 +114,6 @@ jobs:
         shell: pwsh
         run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe" -Gui "$PWD/target/release/kiln-gui.exe"
 
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          foreach ($name in 'kiln-win.exe', 'kiln-gui.exe') {
-            Copy-Item "target/release/$name" "dist/$name"
-            $size = [math]::Round((Get-Item "dist/$name").Length / 1MB, 2)
-            "${name}: $size MiB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kiln-win-x64
-          path: |
-            dist/kiln-win.exe
-            dist/kiln-gui.exe
-          if-no-files-found: error
 
   # Format and lint are kept apart so a style nit never blocks the exe or a release.
   lint:

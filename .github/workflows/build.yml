@@ -15,8 +15,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
-      # One copy of the Rust + Skia library per ABI is what makes the APK big: build only what is asked for.
       KILN_ABIS: ${{ github.event.inputs.abis || 'arm64-v8a' }}
 
     steps:
@@ -54,38 +54,110 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Validate Android ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
+
+          if [ "${#ABIS[@]}" -eq 0 ]; then
+            echo "No Android ABIs specified."
+            exit 1
+          fi
+
+          for abi in "${ABIS[@]}"; do
+            abi="$(echo "$abi" | xargs)"
+
+            case "$abi" in
+              arm64-v8a|x86_64)
+                ;;
+              *)
+                echo "Unsupported ABI: $abi"
+                exit 1
+                ;;
+            esac
+          done
+
       - name: Build libkiln_android.so with the NDK
         shell: bash
         env:
-          # 16 KB pages for newer phones; --pack-dyn-relocs=android stores the relocation table
-          # (hundreds of thousands of entries in a library this big) in a compact form.
           RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--pack-dyn-relocs=android"
         run: |
+          set -euo pipefail
+
           cargo install cargo-ndk --locked
+
           targets=()
-          for abi in ${KILN_ABIS//,/ }; do targets+=(-t "$abi"); done
-          cargo ndk "${targets[@]}" --platform 30 -o app/src/main/jniLibs build --release -p kiln-platform
-          ls -l app/src/main/jniLibs/*/
+
+          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
+
+          for abi in "${ABIS[@]}"; do
+            abi="$(echo "$abi" | xargs)"
+            targets+=(-t "$abi")
+          done
+
+          cargo ndk "${targets[@]}" --platform 30 \
+            -o app/src/main/jniLibs \
+            build --release -p kiln-platform
+
+          echo "Built native libraries:"
+          find app/src/main/jniLibs -type f -name '*.so' -print
 
       - name: Build APK
-        run: gradle :app:assembleDebug -PkilnAbis="$KILN_ABIS" --stacktrace
+        run: |
+          gradle :app:assembleDebug \
+            -PkilnAbis="$KILN_ABIS" \
+            --stacktrace
 
       - name: Verify APK contents
         shell: bash
         run: |
-          apk="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          set -euo pipefail
+
+          apk="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -n 1)"
+
+          if [ -z "$apk" ]; then
+            echo "APK was not generated."
+            exit 1
+          fi
+
           echo "APK: $apk"
 
-          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/libkiln_android\.so'
+          IFS=',' read -ra ABIS <<< "$KILN_ABIS"
 
-          want="$(echo "${KILN_ABIS//,/ }" | wc -w)"
-          test "$(unzip -l "$apk" | grep -c 'libkiln_android\.so')" -eq "$want"
-          ls -l "$apk"
+          for abi in "${ABIS[@]}"; do
+            abi="$(echo "$abi" | xargs)"
 
-          if unzip -l "$apk" | grep -E 'classes[0-9]*\.dex'; then
-            echo "note: the APK contains Dalvik code"
+            case "$abi" in
+              arm64-v8a|x86_64)
+                ;;
+              *)
+                echo "Unsupported ABI: $abi"
+                exit 1
+                ;;
+            esac
+
+            if ! unzip -l "$apk" | grep -q "lib/$abi/libkiln_android.so"; then
+              echo "Missing native library for ABI: $abi"
+              exit 1
+            fi
+          done
+
+          want="${#ABIS[@]}"
+          actual="$(unzip -l "$apk" | grep -c 'libkiln_android\.so' || true)"
+
+          if [ "$actual" -ne "$want" ]; then
+            echo "Expected $want native libraries, found $actual."
+            exit 1
+          fi
+
+          ls -lh "$apk"
+
+          if unzip -l "$apk" | grep -Eq 'classes[0-9]*\.dex'; then
+            echo "Note: the APK contains Dalvik code."
           else
-            echo "no Java or Kotlin code in the APK"
+            echo "No Java or Kotlin code in the APK."
           fi
 
       - name: Upload APK
@@ -93,9 +165,11 @@ jobs:
         with:
           name: kiln-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
 
       - name: Upload Cargo.lock
         uses: actions/upload-artifact@v4
         with:
           name: cargo-lock
           path: Cargo.lock
+          if-no-files-found: error

@@ -1,0 +1,175 @@
+# Kiln for Windows (win/): builds kiln-win.exe, smoke-tests it against real archives, and ships it.
+#
+#   push / pull request   build, smoke test, lint; the exe is attached to the run as an artifact
+#   tag win-v*            also publishes a GitHub release with kiln-win-<tag>-x64.zip
+#   manual run            optional: a 7-Zip speed comparison
+#   Cargo.lock            if the build had to add crates to it, the lockfile is committed back to the
+#                         branch (push builds only), so the --locked jobs elsewhere keep passing
+name: win
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["win-v*"]
+    paths:
+      - "win/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/win.yml"
+  pull_request:
+    paths:
+      - "win/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/win.yml"
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: "Run the 7-Zip speed comparison"
+        type: boolean
+        default: false
+
+concurrency:
+  group: win-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build and test (x64)
+    runs-on: windows-latest
+    # Write access is only used by the optional "commit Cargo.lock" step.
+    permissions:
+      contents: write
+    env:
+      # Link the C runtime statically: the exe then runs on a clean Windows without the VC++
+      # redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # No --locked yet: kiln-win adds crates (libdeflater, windows-sys, ...) that the committed
+      # Cargo.lock does not have. Cargo keeps every version already locked and only adds the new
+      # ones. Once the lockfile from this run is committed, add --locked back.
+      - name: Build
+        run: cargo build --release -p kiln-win
+
+      - name: Check whether Cargo.lock changed
+        id: lock
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- Cargo.lock
+          fi
+
+      - name: Upload the updated Cargo.lock
+        if: steps.lock.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cargo.lock
+          path: Cargo.lock
+
+      # Pull the new lock in with a follow-up `git pull` on your machine. A push made with the
+      # workflow token does not start other workflows, so push once more (or re-run) afterwards.
+      - name: Commit the updated Cargo.lock
+        if: steps.lock.outputs.changed == 'true' && github.event_name == 'push' && github.ref_type == 'branch'
+        continue-on-error: true
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Update Cargo.lock for kiln-win [skip ci]"
+          git push
+
+      - name: Smoke test
+        shell: pwsh
+        run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/kiln-win.exe dist/kiln-win.exe
+          $size = [math]::Round((Get-Item dist/kiln-win.exe).Length / 1MB, 2)
+          "kiln-win.exe: $size MiB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-win-x64
+          path: dist/kiln-win.exe
+          if-no-files-found: error
+
+  # Format and lint are kept apart so a style nit never blocks the exe or a release.
+  lint:
+    name: fmt and clippy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt -p kiln-win --check
+      - run: cargo clippy --release -p kiln-win --all-targets -- -D warnings
+
+  bench:
+    name: speed vs 7-Zip
+    if: github.event_name == 'workflow_dispatch' && inputs.benchmark
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kiln-win-x64
+          path: dist
+
+      # A real-world source tree: thousands of small text files, the case that matters most.
+      - name: Fetch the data set
+        shell: pwsh
+        run: git clone --depth 1 --quiet https://github.com/rust-lang/cargo "$env:RUNNER_TEMP/dataset"
+
+      - name: Benchmark
+        shell: pwsh
+        run: ./win/ci/bench.ps1 -Exe "$PWD/dist/kiln-win.exe" -Data "$env:RUNNER_TEMP/dataset"
+
+  release:
+    name: release
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'win-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kiln-win-x64
+          path: dist
+
+      - name: Package
+        run: |
+          cd dist
+          zip "kiln-win-${GITHUB_REF_NAME}-x64.zip" kiln-win.exe
+          sha256sum "kiln-win-${GITHUB_REF_NAME}-x64.zip" > SHA256SUMS.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Kiln for Windows ${GITHUB_REF_NAME#win-v}" \
+            --generate-notes

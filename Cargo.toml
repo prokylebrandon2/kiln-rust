@@ -8,7 +8,7 @@ readme = "README.md"
 publish = false
 
 [workspace]
-members = ["bridge", "platform", "ui", "app", "skln", "state", "ui-next"]
+members = ["bridge", "platform", "ui", "app", "skln", "state", "ui-next", "win"]
 # The fuzz crate (cargo-fuzz) is built on its own, with a nightly toolchain.
 exclude = ["fuzz"]
 
@@ -112,6 +112,13 @@ opt-level = 3
 [profile.release.package.i-slint-core]
 opt-level = 3
 [profile.release.package.kiln-ui]
+opt-level = 3
+# Windows tool (win/): ZIP deflate and the command line are on the hot path.
+[profile.release.package.kiln-win]
+opt-level = 3
+[profile.release.package.libdeflater]
+opt-level = 3
+[profile.release.package.libdeflate-sys]
 opt-level = 3
 
 [profile.dev]

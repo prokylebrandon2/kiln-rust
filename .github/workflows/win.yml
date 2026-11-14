@@ -3,7 +3,7 @@
 #
 #   push / pull request   build, smoke test, lint; the exe is attached to the run as an artifact
 #   tag win-v*            also publishes a GitHub release with kiln-win-<tag>-x64.zip
-#   manual run            optional: a 7-Zip speed comparison
+#   every run             also a 7-Zip speed comparison (needs the build job to pass first)
 #   Cargo.lock            if the build had to add crates to it, the lockfile is committed back to the
 #                         branch (push builds only), so the --locked jobs elsewhere keep passing
 name: win
@@ -26,11 +26,6 @@ on:
       - "Cargo.lock"
       - ".github/workflows/win.yml"
   workflow_dispatch:
-    inputs:
-      benchmark:
-        description: "Run the 7-Zip speed comparison"
-        type: boolean
-        default: false
 
 concurrency:
   group: win-${{ github.ref }}
@@ -134,7 +129,6 @@ jobs:
 
   bench:
     name: speed vs 7-Zip
-    if: github.event_name == 'workflow_dispatch' && inputs.benchmark
     needs: build
     runs-on: windows-latest
     steps:

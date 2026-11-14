@@ -223,6 +223,8 @@ fn cmd_extract(args: &[String]) -> Result<(), String> {
         options.overwrite = flags.force;
         options.threads = flags.threads;
         options.members = members.to_vec();
+        // Windows cannot restore symbolic links: skip them instead of failing.
+        options.links = false;
         let stats = kiln::extract_with_progress(&arc, &options, &mut progress)
             .map_err(|e| e.to_string())?;
         eprintln!();

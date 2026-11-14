@@ -154,6 +154,8 @@ fn extract_inner(
         let arc = Archive::open(archive)?;
         let mut options = ExtractOptions::new(dest.to_path_buf());
         options.overwrite = overwrite;
+        // Windows cannot restore symbolic links: skip them instead of failing.
+        options.links = false;
         kiln::extract_with_progress(&arc, &options, progress)?;
     }
     Ok(())

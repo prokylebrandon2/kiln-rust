@@ -470,7 +470,14 @@ impl Trace {
         }
     }
 
-    fn report(&self, files: usize, threads: usize, prepass: Duration, workers: Duration) {
+    fn report(
+        &self,
+        files: usize,
+        threads: usize,
+        run_files: usize,
+        prepass: Duration,
+        workers: Duration,
+    ) {
         let parts: Vec<String> = (0..T_SLOTS)
             .map(|i| {
                 let ms = self.slots[i].load(Ordering::Relaxed) as f64 / 1e6;
@@ -478,7 +485,7 @@ impl Trace {
             })
             .collect();
         eprintln!(
-            "kiln-trace: files={files} threads={threads} prepass_ms={:.1} workers_ms={:.1} {}",
+            "kiln-trace: files={files} threads={threads} run={run_files} prepass_ms={:.1} workers_ms={:.1} {}",
             prepass.as_secs_f64() * 1e3,
             workers.as_secs_f64() * 1e3,
             parts.join(" ")
@@ -824,8 +831,14 @@ impl ZipArchive {
         }
         jobs.sort_by_key(|j| self.entries[j.idx].local_off);
         let nthreads = thread_count(opts.threads, jobs.len());
+        // `KILN_RUN=<n>` (hidden, for A/B runs) replaces `RUN_FILES` as the most files per chunk.
+        let run_cap = std::env::var("KILN_RUN")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(RUN_FILES);
         // At least four chunks per worker, so a small or one-folder archive keeps them all busy.
-        let run_files = (jobs.len() / (nthreads * 4)).clamp(1, RUN_FILES);
+        let run_files = (jobs.len() / (nthreads * 4)).clamp(1, run_cap);
         // Default: a worker claims a run of files from one folder at a time. `KILN_ORDER=archive`
         // and `KILN_ORDER=rr` keep the older one-file-at-a-time orders, to compare against.
         let order = std::env::var("KILN_ORDER").unwrap_or_default();
@@ -910,7 +923,13 @@ impl ZipArchive {
             handles.into_iter().any(|h| h.join().is_err())
         });
         if trace.on {
-            trace.report(jobs.len(), nthreads, prepass, workers_began.elapsed());
+            trace.report(
+                jobs.len(),
+                nthreads,
+                run_files,
+                prepass,
+                workers_began.elapsed(),
+            );
         }
         progress(done.load(Ordering::Relaxed), total);
         if let Some(err) = first_err.into_inner().unwrap_or_else(|e| e.into_inner()) {

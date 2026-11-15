@@ -93,6 +93,13 @@ Extraction, many small files
   parked on E-cores.
 - Detect Dev Drive (ReFS performance mode) and print a one-line tip.
 
+Extraction, big files (written 2026-11-15, not yet measured)
+- Entries over 512 MiB take `extract_stream`: flate2 with the zlib-rs backend (was the default
+  miniz_oxide) and two threads, one reading and inflating, one checking the CRC and writing. Compare
+  an old and a new exe on one zip with a single entry over 512 MiB before keeping or extending it.
+- Open: whether entries of tens to hundreds of MiB (now whole-buffer libdeflate on one worker) are
+  faster through the same path: libdeflate may be quicker per byte, but cannot overlap the write.
+
 Archiving
 - Cheap incompressible skip: magic bytes/extension, then sample the first 64 KiB. Reuse the root
   crate's `classify` module; check what `zip.rs` already does first.

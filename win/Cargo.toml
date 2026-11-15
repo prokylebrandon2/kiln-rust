@@ -26,9 +26,10 @@ kiln = { path = ".." }
 # Per-file deflate: about 3-4x faster per thread than 7-Zip's encoder at the same or better ratio
 # (measured on the Phase 3 benchmark sets). A safe wrapper around the C library libdeflate.
 libdeflater = "1"
-# Streaming deflate and inflate for entries too big to hold in memory (over 512 MiB).
-# Already in Cargo.lock.
-flate2 = "1"
+# Streaming deflate and inflate for entries too big to hold in memory (over 512 MiB). The
+# zlib-rs backend (pure Rust, already in Cargo.lock) replaces the default miniz_oxide, which is
+# slower.
+flate2 = { version = "1", features = ["zlib-rs"] }
 # Anonymous temporary file that holds a big entry's compressed bytes until the output is free.
 tempfile = "3"
 crc32fast = "1"

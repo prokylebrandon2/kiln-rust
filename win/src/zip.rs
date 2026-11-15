@@ -50,6 +50,11 @@ const SMALL_ENTRY: u64 = 256 << 10;
 /// room for the local extra field (ours is 9 bytes, ZIP64 adds 20, 7-Zip's NTFS times add 36).
 const HEADER_SLACK: u64 = 128;
 const CHUNK: usize = 1 << 20;
+/// A streamed entry (see `extract_stream`) moves its data in pieces of this size.
+const PIPE_CHUNK: usize = 4 << 20;
+/// Pieces that circulate per streamed entry: one being inflated, one being written, and the
+/// others waiting in between.
+const PIPE_BUFFERS: usize = 4;
 /// Files from this size on are sampled first and stored when the sample does not shrink.
 const SAMPLE_FROM: usize = 256 << 10;
 const SAMPLE_LEN: usize = 64 << 10;
@@ -499,6 +504,20 @@ impl Read for Section<'_> {
         self.left -= got as u64;
         Ok(got)
     }
+}
+
+/// Reads until `buf` is full or the stream ends; returns the number of bytes read.
+fn fill(reader: &mut dyn Read, buf: &mut [u8]) -> io::Result<usize> {
+    let mut got = 0;
+    while got < buf.len() {
+        match reader.read(&mut buf[got..]) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(got)
 }
 
 fn create_target(target: &Path, overwrite: bool) -> Result<File> {
@@ -1012,7 +1031,10 @@ impl ZipArchive {
         Ok(())
     }
 
-    /// Entries too big for memory: stream through flate2 (or copy, when stored).
+    /// Entries too big for memory: stream through flate2 (or copy, when stored). Two threads share
+    /// the work: this one reads and inflates into pieces, a helper checks the CRC and writes them,
+    /// so the slower of the two sets the pace instead of their sum. The pieces travel in a few
+    /// buffers that go back and forth, so memory stays at a handful of pieces.
     fn extract_stream(
         &self,
         e: &ZipEntry,
@@ -1034,32 +1056,67 @@ impl ZipArchive {
         } else {
             Box::new(flate2::read::DeflateDecoder::new(section))
         };
-        let mut buf = vec![0u8; CHUNK];
-        let mut hasher = crc32fast::Hasher::new();
-        let mut total = 0u64;
-        loop {
-            cancel::check()?;
-            let n = reader
-                .read(&mut buf)
-                .map_err(|err| Error::corrupt(format!("{}: {err}", e.name)))?;
-            if n == 0 {
-                break;
-            }
-            total += n as u64;
-            if total > e.size {
-                return Err(Error::corrupt(format!(
-                    "{}: more data than declared",
-                    e.name
-                )));
-            }
-            hasher.update(&buf[..n]);
-            at(out.write_all(&buf[..n]), target)?;
-            done.fetch_add(n as u64, Ordering::Relaxed);
+        let bad = |what: &str| Error::corrupt(format!("{}: {what}", e.name));
+        // Filled pieces go to the writer; emptied buffers come back to be filled again.
+        let (full_tx, full_rx) = std::sync::mpsc::channel::<(Vec<u8>, usize)>();
+        let (free_tx, free_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        for _ in 0..PIPE_BUFFERS {
+            let _ = free_tx.send(vec![0u8; PIPE_CHUNK]);
         }
+        let (total, crc) = thread::scope(move |s| -> Result<(u64, u32)> {
+            let writer = s.spawn(move || -> Result<u32> {
+                let mut hasher = crc32fast::Hasher::new();
+                while let Ok((buf, n)) = full_rx.recv() {
+                    hasher.update(&buf[..n]);
+                    at(out.write_all(&buf[..n]), target)?;
+                    done.fetch_add(n as u64, Ordering::Relaxed);
+                    let _ = free_tx.send(buf);
+                }
+                Ok(hasher.finalize())
+            });
+            let mut total = 0u64;
+            let mut failure: Option<Error> = None;
+            // Ends when the stream does, on an error, or when the writer is gone (its error is
+            // collected below).
+            while let Ok(mut buf) = free_rx.recv() {
+                if let Err(err) = cancel::check() {
+                    failure = Some(err);
+                    break;
+                }
+                let n = match fill(reader.as_mut(), &mut buf) {
+                    Ok(n) => n,
+                    Err(err) => {
+                        failure = Some(bad(&err.to_string()));
+                        break;
+                    }
+                };
+                if n == 0 {
+                    break;
+                }
+                total += n as u64;
+                if total > e.size {
+                    failure = Some(bad("more data than declared"));
+                    break;
+                }
+                if full_tx.send((buf, n)).is_err() {
+                    break;
+                }
+            }
+            // Closing the channel lets the writer finish what is queued and stop.
+            drop(full_tx);
+            let wrote = writer.join();
+            if let Some(err) = failure {
+                return Err(err);
+            }
+            match wrote {
+                Ok(res) => res.map(|crc| (total, crc)),
+                Err(_) => Err(Error::Internal("the writer thread panicked".into())),
+            }
+        })?;
         if total != e.size {
-            return Err(Error::corrupt(format!("{}: size mismatch", e.name)));
+            return Err(bad("size mismatch"));
         }
-        if hasher.finalize() != e.crc {
+        if crc != e.crc {
             return Err(Error::Checksum(e.name.clone()));
         }
         Ok(())
@@ -1961,6 +2018,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Streams one entry through the two-thread path and returns the bytes written.
+    fn stream_entry(bytes: &[u8]) -> (Result<()>, Vec<u8>, u64) {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("t.zip");
+        fs::write(&archive, bytes).unwrap();
+        let zip = ZipArchive::open(&archive).unwrap();
+        let e = &zip.entries()[0];
+        let off = zip.data_offset(e).unwrap();
+        let target = tmp.path().join("out.bin");
+        let mut out = File::create(&target).unwrap();
+        let done = AtomicU64::new(0);
+        let res = zip.extract_stream(e, off, &mut out, &target, &done);
+        drop(out);
+        (res, fs::read(&target).unwrap(), done.load(Ordering::Relaxed))
+    }
+
+    /// Sizes around the piece size, stored and deflated: the bytes must come out exactly.
+    #[test]
+    fn streamed_entries_come_out_exact() {
+        let piece = PIPE_CHUNK;
+        for len in [1usize, piece - 1, piece, piece + 1, 3 * piece + 12_345] {
+            let body = pattern(len);
+            for deflate in [false, true] {
+                let mut z = ZipBuilder::default();
+                z.add("big.bin", &body, deflate, 0);
+                let (res, got, done) = stream_entry(&z.finish());
+                res.unwrap();
+                assert!(got == body, "{len} {deflate}");
+                assert_eq!(done, len as u64, "{len} {deflate}");
+            }
+        }
+    }
+
+    /// A damaged byte or a wrong declared size in a streamed entry is an error, not a short file.
+    #[test]
+    fn streamed_entry_damage_is_reported() {
+        let body = pattern(2 * PIPE_CHUNK + 7);
+        let mut z = ZipBuilder::default();
+        z.add("big.bin", &body, false, 0);
+        let good = z.finish();
+        // The data starts after the 30-byte local header and the name.
+        let data = 30 + "big.bin".len();
+        let mut flipped = good.clone();
+        flipped[data + PIPE_CHUNK + 3] ^= 0xFF;
+        let (res, _, _) = stream_entry(&flipped);
+        assert!(matches!(res, Err(Error::Checksum(_))));
+        // Central directory: declare one byte fewer than the data holds (size is at offset 24).
+        let cd = good.len() - 22 - (46 + "big.bin".len());
+        let mut short = good.clone();
+        let declared = le32(&short, cd + 24) - 1;
+        short[cd + 24..cd + 28].copy_from_slice(&declared.to_le_bytes());
+        let (res, _, _) = stream_entry(&short);
+        assert!(matches!(res, Err(Error::Corrupt(_))));
     }
 
     /// One worker handles the entries in this order, so its buffers shrink and grow again: the

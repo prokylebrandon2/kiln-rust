@@ -868,7 +868,9 @@ impl ZipArchive {
                                 break;
                             }
                             let k = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(&(lo, hi)) = chunks.get(k) else { break };
+                            let Some(&(lo, hi)) = chunks.get(k) else {
+                                break;
+                            };
                             for job in &jobs[lo..hi] {
                                 if abort.load(Ordering::Relaxed) {
                                     break;

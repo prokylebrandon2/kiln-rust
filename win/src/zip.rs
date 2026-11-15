@@ -10,7 +10,7 @@
 //! Supported: stored and deflate, ZIP64, UTF-8 and legacy (CP437) names, archives with a
 //! stub in front. Not supported yet: encryption, other compression methods, multi-disk archives.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -330,10 +330,100 @@ struct Job {
     target: PathBuf,
 }
 
-struct ReadCtx {
+/// Reorder `jobs` (given in archive order) so that neighbours are in different folders: the first
+/// file of every folder, then the second of every folder, and so on. Workers take jobs in order,
+/// so this keeps the workers that are busy at the same moment out of each other's folder.
+/// An experiment (`KILN_ORDER=rr`); the archive is then no longer read front to back.
+fn interleave_by_dir(jobs: Vec<Job>) -> Vec<Job> {
+    let mut dir_ids: HashMap<PathBuf, usize> = HashMap::new();
+    let mut counts: Vec<usize> = Vec::new();
+    let mut keyed: Vec<((usize, usize), Job)> = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let parent = job.target.parent().unwrap_or(Path::new(""));
+        let next_id = dir_ids.len();
+        let dir = *dir_ids.entry(parent.to_path_buf()).or_insert(next_id);
+        if dir == counts.len() {
+            counts.push(0);
+        }
+        let rank = counts[dir];
+        counts[dir] += 1;
+        keyed.push(((rank, dir), job));
+    }
+    keyed.sort_by_key(|(key, _)| *key);
+    keyed.into_iter().map(|(_, job)| job).collect()
+}
+
+const T_CREATE: usize = 0;
+const T_READ: usize = 1;
+const T_INFLATE: usize = 2;
+const T_CRC: usize = 3;
+const T_WRITE: usize = 4;
+const T_TIMES: usize = 5;
+const T_CLOSE: usize = 6;
+const T_SLOTS: usize = 7;
+
+fn slot_name(slot: usize) -> &'static str {
+    match slot {
+        T_CREATE => "create",
+        T_READ => "read",
+        T_INFLATE => "inflate",
+        T_CRC => "crc",
+        T_WRITE => "write",
+        T_TIMES => "times",
+        _ => "close",
+    }
+}
+
+/// Opt-in timing of an extraction, to find out where the time goes: with `KILN_TRACE=1` set,
+/// each extraction prints one line to stderr with the time the workers spent on each kind of
+/// work, summed over all workers (so it can exceed the wall time). Costs nothing when off.
+struct Trace {
+    on: bool,
+    slots: [AtomicU64; T_SLOTS],
+}
+
+impl Trace {
+    fn new() -> Trace {
+        let var = std::env::var_os("KILN_TRACE");
+        let on = var.is_some_and(|v| !v.is_empty() && v != "0");
+        Trace {
+            on,
+            slots: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+
+    fn start(&self) -> Option<Instant> {
+        self.on.then(Instant::now)
+    }
+
+    fn add(&self, slot: usize, since: Option<Instant>) {
+        if let Some(t) = since {
+            let nanos = t.elapsed().as_nanos() as u64;
+            self.slots[slot].fetch_add(nanos, Ordering::Relaxed);
+        }
+    }
+
+    fn report(&self, files: usize, threads: usize, prepass: Duration, workers: Duration) {
+        let parts: Vec<String> = (0..T_SLOTS)
+            .map(|i| {
+                let ms = self.slots[i].load(Ordering::Relaxed) as f64 / 1e6;
+                format!("{}_ms={ms:.1}", slot_name(i))
+            })
+            .collect();
+        eprintln!(
+            "kiln-trace: files={files} threads={threads} prepass_ms={:.1} workers_ms={:.1} {}",
+            prepass.as_secs_f64() * 1e3,
+            workers.as_secs_f64() * 1e3,
+            parts.join(" ")
+        );
+    }
+}
+
+struct ReadCtx<'a> {
     dec: Decompressor,
     inbuf: Vec<u8>,
     outbuf: Vec<u8>,
+    trace: &'a Trace,
 }
 
 /// A byte range of a file, read with positional reads.
@@ -638,6 +728,7 @@ impl ZipArchive {
         opts: &ExtractOpts,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<ExtractStats> {
+        let began = Instant::now();
         let selected = self.select(&opts.members)?;
         let mut jobs: Vec<Job> = Vec::new();
         let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
@@ -665,6 +756,11 @@ impl ZipArchive {
             at(fs::create_dir_all(d), d)?;
         }
         jobs.sort_by_key(|j| self.entries[j.idx].local_off);
+        if std::env::var("KILN_ORDER").is_ok_and(|v| v == "rr") {
+            jobs = interleave_by_dir(jobs);
+        }
+        let prepass = began.elapsed();
+        let trace = Trace::new();
 
         let nthreads = thread_count(opts.threads, jobs.len());
         let next = AtomicUsize::new(0);
@@ -674,6 +770,7 @@ impl ZipArchive {
         let first_err: Mutex<Option<Error>> = Mutex::new(None);
         let budget = Budget::new(MEMORY_BUDGET);
 
+        let workers_began = Instant::now();
         let panicked = thread::scope(|s| {
             let handles: Vec<_> = (0..nthreads)
                 .map(|_| {
@@ -683,6 +780,7 @@ impl ZipArchive {
                             dec: Decompressor::new(),
                             inbuf: Vec::new(),
                             outbuf: Vec::new(),
+                            trace: &trace,
                         };
                         loop {
                             if abort.load(Ordering::Relaxed) {
@@ -723,6 +821,9 @@ impl ZipArchive {
             }
             handles.into_iter().any(|h| h.join().is_err())
         });
+        if trace.on {
+            trace.report(jobs.len(), nthreads, prepass, workers_began.elapsed());
+        }
         progress(done.load(Ordering::Relaxed), total);
         if let Some(err) = first_err.into_inner().unwrap_or_else(|e| e.into_inner()) {
             return Err(err);
@@ -764,13 +865,20 @@ impl ZipArchive {
                 e.method_name()
             )));
         }
+        let t = ctx.trace.start();
         let mut out = create_target(target, overwrite)?;
+        ctx.trace.add(T_CREATE, t);
         let result = self.extract_into(e, target, &mut out, ctx, budget, abort, done);
         if result.is_err() {
             drop(out);
             let _ = fs::remove_file(target);
         } else {
+            let t = ctx.trace.start();
             finish_file(&out, e);
+            ctx.trace.add(T_TIMES, t);
+            let t = ctx.trace.start();
+            drop(out);
+            ctx.trace.add(T_CLOSE, t);
         }
         result
     }
@@ -795,7 +903,9 @@ impl ZipArchive {
         }
         let held = e.size + e.packed;
         let _hold = (held > SMALL_ENTRY).then(|| budget.acquire(held, abort));
+        let t = ctx.trace.start();
         let start = self.read_packed(e, &mut ctx.inbuf)?;
+        ctx.trace.add(T_READ, t);
         let packed = &ctx.inbuf[start..start + e.packed as usize];
         let data: &[u8] = if e.method == 0 {
             if e.packed != e.size {
@@ -805,19 +915,26 @@ impl ZipArchive {
         } else {
             let size = e.size as usize;
             grow_to(&mut ctx.outbuf, size);
+            let t = ctx.trace.start();
             let n = ctx
                 .dec
                 .deflate_decompress(packed, &mut ctx.outbuf[..size])
                 .map_err(|err| Error::corrupt(format!("{}: {err:?}", e.name)))?;
+            ctx.trace.add(T_INFLATE, t);
             if n as u64 != e.size {
                 return Err(Error::corrupt(format!("{}: size mismatch", e.name)));
             }
             &ctx.outbuf[..size]
         };
-        if crc32fast::hash(data) != e.crc {
+        let t = ctx.trace.start();
+        let crc = crc32fast::hash(data);
+        ctx.trace.add(T_CRC, t);
+        if crc != e.crc {
             return Err(Error::Checksum(e.name.clone()));
         }
+        let t = ctx.trace.start();
         at(out.write_all(data), target)?;
+        ctx.trace.add(T_WRITE, t);
         done.fetch_add(e.size, Ordering::Relaxed);
         Ok(())
     }
@@ -1741,6 +1858,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Neighbours end up in different folders: first file of each folder, then the second, ...
+    #[test]
+    fn interleave_by_dir_round_robins_folders() {
+        let paths = ["a/1", "a/2", "b/1", "a/3", "b/2"];
+        let mut jobs = Vec::new();
+        for (idx, path) in paths.iter().enumerate() {
+            jobs.push(Job {
+                idx,
+                target: PathBuf::from(path),
+            });
+        }
+        let jobs = interleave_by_dir(jobs);
+        let order: Vec<usize> = jobs.iter().map(|j| j.idx).collect();
+        assert_eq!(order, [0, 2, 1, 4, 3]);
     }
 
     /// One worker handles the entries in this order, so its buffers shrink and grow again: the

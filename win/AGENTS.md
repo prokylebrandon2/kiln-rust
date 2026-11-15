@@ -174,7 +174,8 @@ Worked
 - libdeflate per file on 16 workers: `something.zip` (1088 files, 2.1 GiB) takes 2-3.5 s in the fast
   runs against 15-22 s for 7-Zip (Defender on).
 - Memory budget 4 GiB instead of 1 GiB: wait time 8-19% of worker time down to 0, fast runs about
-  3.0 s down to about 2.4 s; in a 5-run set the median was 2.5 s against 3.2 s.
+  3.0 s down to about 2.4 s; in a 5-run set the median was 2.5 s against 3.2 s. Confirmed on the CI
+  build with the RAM-based default: wait 0 ms in 30 of 30 runs.
 - Small files with Defender off: 0.43 s against 1.56 s for 7-Zip. Packing the small set: 0.17 s
   against 1.05 s (not measured with Defender on a big folder).
 - Sampling the first 64 KiB and storing when it does not shrink: random data no longer extracts
@@ -188,17 +189,18 @@ Did not work (no gain, or worse)
 - A 2 GiB budget: median 4.35 s against 2.54 s for 4 GiB (a stall costs more with less room).
 - Waiting 15 s between runs: slow runs still happened (3 of 15), so they are not left over from
   the previous run.
+- Giving big output files their final size before writing (`KILN_PREALLOC_MIB`, 64 MiB and up, or
+  1 MiB and up; 10 runs each): medians 3.43 s and 3.27 s against 3.28 s, runs over 6 s 1 and 2
+  against 1. No gain; the switch is removed.
 - Everything listed under the Defender section (thread count, order, pre-sizing, share flags, ...).
 
 Still open
 - Random slow runs (9-14 s instead of 2-3.5 s; `write` 30-60 s summed over workers) are not kiln:
   `robocopy /MT:16` copying the same extracted files, 8 runs on the same disk, took 2.7-10.8 s
   (three runs 2.7-2.9 s, five runs 5.3-10.8 s). Windows or the disk, so no code change is planned.
-  Not tested: more free space on C: (93.6 GB free on the 512 GB NVMe), another drive, a Dev Drive,
-  giving each output file its final size before writing.
-- Temporary switch for that last test: `KILN_PREALLOC_MIB=<n>` gives entries of n MiB or more
-  their final size before the first write (counted in `create_ms`). Off when unset. Remove it
-  once measured.
+  Not tested: more free space on C: (93.6 GB free on the 512 GB NVMe), another drive, a Dev Drive.
+- Same extract, same files, 30 runs: 5 took 1.7-1.9 s, 4 took 7-11 s, the other 21 took 2.6-4.7 s.
+  Cause unknown.
 - Workers are busy about 50-60% with the 4 GiB budget (it was 25-36%). The rest is not explained.
 
 ## Baselines (measured earlier on Linux, for context only; not Windows)

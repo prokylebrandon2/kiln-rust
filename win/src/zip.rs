@@ -4,7 +4,10 @@
 //! deflates it with libdeflate (or stores it when a sample shows it will not shrink) and appends
 //! it to the output under a short lock; the central directory is written last, in the original
 //! order. Extracting: workers read the compressed bytes with positional reads, inflate with
-//! libdeflate, check the CRC-32 and write the file. Entries over 512 MiB go through streaming
+//! libdeflate, check the CRC-32 and write the file. Workers claim chunks of up to 32 files from
+//! one folder, and the chunks are taken round-robin across folders, so workers that run at the
+//! same time are not queued on one folder in the file system. Entries over 512 MiB go through
+//! streaming
 //! flate2 instead, and a memory budget keeps the in-flight buffers bounded.
 //!
 //! Supported: stored and deflate, ZIP64, UTF-8 and legacy (CP437) names, archives with a
@@ -330,29 +333,6 @@ struct Job {
     target: PathBuf,
 }
 
-/// Reorder `jobs` (given in archive order) so that neighbours are in different folders: the first
-/// file of every folder, then the second of every folder, and so on. Workers take jobs in order,
-/// so this keeps the workers that are busy at the same moment out of each other's folder.
-/// An experiment (`KILN_ORDER=rr`); the archive is then no longer read front to back.
-fn interleave_by_dir(jobs: Vec<Job>) -> Vec<Job> {
-    let mut dir_ids: HashMap<PathBuf, usize> = HashMap::new();
-    let mut counts: Vec<usize> = Vec::new();
-    let mut keyed: Vec<((usize, usize), Job)> = Vec::with_capacity(jobs.len());
-    for job in jobs {
-        let parent = job.target.parent().unwrap_or(Path::new(""));
-        let next_id = dir_ids.len();
-        let dir = *dir_ids.entry(parent.to_path_buf()).or_insert(next_id);
-        if dir == counts.len() {
-            counts.push(0);
-        }
-        let rank = counts[dir];
-        counts[dir] += 1;
-        keyed.push(((rank, dir), job));
-    }
-    keyed.sort_by_key(|(key, _)| *key);
-    keyed.into_iter().map(|(_, job)| job).collect()
-}
-
 /// A worker takes at most this many files from one folder before it claims another chunk.
 const RUN_FILES: usize = 32;
 /// ... or stops after this many bytes of file data, so folders of big files split up.
@@ -413,11 +393,6 @@ fn chunk_by_dir(
         }
     }
     (out, ranges)
-}
-
-/// One chunk per job: workers claim files one at a time, in the order of `jobs`.
-fn one_by_one(count: usize) -> Vec<(usize, usize)> {
-    (0..count).map(|i| (i, i + 1)).collect()
 }
 
 const T_CREATE: usize = 0;
@@ -831,29 +806,9 @@ impl ZipArchive {
         }
         jobs.sort_by_key(|j| self.entries[j.idx].local_off);
         let nthreads = thread_count(opts.threads, jobs.len());
-        // `KILN_RUN=<n>` (hidden, for A/B runs) replaces `RUN_FILES` as the most files per chunk.
-        let run_cap = std::env::var("KILN_RUN")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(RUN_FILES);
         // At least four chunks per worker, so a small or one-folder archive keeps them all busy.
-        let run_files = (jobs.len() / (nthreads * 4)).clamp(1, run_cap);
-        // Default: a worker claims a run of files from one folder at a time. `KILN_ORDER=archive`
-        // and `KILN_ORDER=rr` keep the older one-file-at-a-time orders, to compare against.
-        let order = std::env::var("KILN_ORDER").unwrap_or_default();
-        let (jobs, chunks) = match order.as_str() {
-            "archive" => {
-                let n = jobs.len();
-                (jobs, one_by_one(n))
-            }
-            "rr" => {
-                let jobs = interleave_by_dir(jobs);
-                let n = jobs.len();
-                (jobs, one_by_one(n))
-            }
-            _ => chunk_by_dir(jobs, run_files, RUN_BYTES, |j| self.entries[j.idx].size),
-        };
+        let run_files = (jobs.len() / (nthreads * 4)).clamp(1, RUN_FILES);
+        let (jobs, chunks) = chunk_by_dir(jobs, run_files, RUN_BYTES, |j| self.entries[j.idx].size);
         let prepass = began.elapsed();
         let trace = Trace::new();
 
@@ -1995,22 +1950,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// Neighbours end up in different folders: first file of each folder, then the second, ...
-    #[test]
-    fn interleave_by_dir_round_robins_folders() {
-        let paths = ["a/1", "a/2", "b/1", "a/3", "b/2"];
-        let mut jobs = Vec::new();
-        for (idx, path) in paths.iter().enumerate() {
-            jobs.push(Job {
-                idx,
-                target: PathBuf::from(path),
-            });
-        }
-        let jobs = interleave_by_dir(jobs);
-        let order: Vec<usize> = jobs.iter().map(|j| j.idx).collect();
-        assert_eq!(order, [0, 2, 1, 4, 3]);
     }
 
     /// One worker handles the entries in this order, so its buffers shrink and grow again: the

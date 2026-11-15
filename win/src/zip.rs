@@ -238,6 +238,16 @@ fn memory_budget() -> u64 {
     env_mib("KILN_BUDGET_MIB", budget_for(physical_ram()))
 }
 
+/// Entries of at least this many bytes get their final size before the first write. Hidden switch
+/// `KILN_PREALLOC_MIB` (in MiB), only to measure whether it avoids the slow writes; off when unset.
+fn prealloc_from() -> Option<u64> {
+    static FROM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *FROM.get_or_init(|| {
+        let set = std::env::var_os("KILN_PREALLOC_MIB").is_some();
+        set.then(|| env_mib("KILN_PREALLOC_MIB", u64::MAX))
+    })
+}
+
 fn thread_count(requested: usize, jobs: usize) -> usize {
     let t = if requested == 0 {
         thread::available_parallelism().map_or(4, |n| n.get())
@@ -1031,6 +1041,9 @@ impl ZipArchive {
         }
         let t = ctx.trace.start();
         let mut out = create_target(target, overwrite)?;
+        if prealloc_from().is_some_and(|from| e.size > 0 && e.size >= from) {
+            let _ = out.set_len(e.size);
+        }
         ctx.trace.add(T_CREATE, t);
         let result = self.extract_into(e, target, &mut out, ctx, budget, abort, done);
         if result.is_err() {

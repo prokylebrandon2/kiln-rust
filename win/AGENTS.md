@@ -196,6 +196,9 @@ Still open
   (three runs 2.7-2.9 s, five runs 5.3-10.8 s). Windows or the disk, so no code change is planned.
   Not tested: more free space on C: (93.6 GB free on the 512 GB NVMe), another drive, a Dev Drive,
   giving each output file its final size before writing.
+- Temporary switch for that last test: `KILN_PREALLOC_MIB=<n>` gives entries of n MiB or more
+  their final size before the first write (counted in `create_ms`). Off when unset. Remove it
+  once measured.
 - Workers are busy about 50-60% with the 4 GiB budget (it was 25-36%). The rest is not explained.
 
 ## Baselines (measured earlier on Linux, for context only; not Windows)

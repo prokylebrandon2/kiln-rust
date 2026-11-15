@@ -228,7 +228,9 @@ fn physical_ram() -> Option<u64> {
 /// A quarter of `ram`, at least `MEMORY_BUDGET` and at most `MEMORY_BUDGET_MAX`; `MEMORY_BUDGET`
 /// when the RAM is unknown. Measured: 1 GiB made workers wait for memory, 4 GiB did not.
 fn budget_for(ram: Option<u64>) -> u64 {
-    ram.map_or(MEMORY_BUDGET, |r| (r / 4).clamp(MEMORY_BUDGET, MEMORY_BUDGET_MAX))
+    ram.map_or(MEMORY_BUDGET, |r| {
+        (r / 4).clamp(MEMORY_BUDGET, MEMORY_BUDGET_MAX)
+    })
 }
 
 /// The memory budget of a run. `KILN_BUDGET_MIB` (in MiB) overrides it, to try a value.

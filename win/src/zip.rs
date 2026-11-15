@@ -338,8 +338,6 @@ struct Job {
 const RUN_FILES: usize = 32;
 /// ... or stops after this many bytes of file data, so folders of big files split up.
 const RUN_BYTES: u64 = 4 << 20;
-/// A chunk of at least this many bytes starts before all the others (see `heavy_first`).
-const HEAVY_BYTES: u64 = 16 << 20;
 
 /// Cut `jobs` (in archive order) into chunks that each stay inside one folder, and order the chunks
 /// so that chunk 0 of every folder comes first, then chunk 1 of every folder, and so on. Returns
@@ -396,16 +394,6 @@ fn chunk_by_dir(
         }
     }
     (out, ranges)
-}
-
-/// Moves the chunks of at least `min` bytes to the front, biggest first, and keeps the others in
-/// their order. A big file takes the longest, so it starts first instead of running alone after
-/// everything else is done.
-fn heavy_first(chunks: &mut [(usize, usize)], weight: impl Fn(&(usize, usize)) -> u64, min: u64) {
-    chunks.sort_by_cached_key(|c| {
-        let w = weight(c);
-        std::cmp::Reverse(if w >= min { w } else { 0 })
-    });
 }
 
 const T_CREATE: usize = 0;
@@ -832,13 +820,7 @@ impl ZipArchive {
         let nthreads = thread_count(opts.threads, jobs.len());
         // At least four chunks per worker, so a small or one-folder archive keeps them all busy.
         let run_files = (jobs.len() / (nthreads * 4)).clamp(1, RUN_FILES);
-        let (jobs, mut chunks) =
-            chunk_by_dir(jobs, run_files, RUN_BYTES, |j| self.entries[j.idx].size);
-        heavy_first(
-            &mut chunks,
-            |&(lo, hi)| jobs[lo..hi].iter().map(|j| self.entries[j.idx].size).sum(),
-            HEAVY_BYTES,
-        );
+        let (jobs, chunks) = chunk_by_dir(jobs, run_files, RUN_BYTES, |j| self.entries[j.idx].size);
         let prepass = began.elapsed();
 
         let next = AtomicUsize::new(0);
@@ -1852,15 +1834,6 @@ mod tests {
         let (jobs, chunks) = chunk_by_dir(jobs_for(&paths), 100, 10, |_| 6);
         assert_eq!(jobs.len(), 5);
         assert_eq!(chunks, [(0, 2), (2, 4), (4, 5)]);
-    }
-
-    /// Chunks of at least the limit go first, biggest first; the others keep their order.
-    #[test]
-    fn heavy_first_moves_big_chunks_to_the_front_and_keeps_the_rest_in_order() {
-        let sizes = [1u64, 50, 2, 90, 3, 50];
-        let mut chunks: Vec<(usize, usize)> = (0..6).map(|i| (i, i + 1)).collect();
-        heavy_first(&mut chunks, |&(lo, _)| sizes[lo], 10);
-        assert_eq!(chunks, [(3, 4), (1, 2), (5, 6), (0, 1), (2, 3), (4, 5)]);
     }
 
     /// Builds a ZIP in memory, entry by entry, in the order given.

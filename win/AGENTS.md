@@ -99,11 +99,10 @@ Extraction, big files (written 2026-11-15, not yet measured)
   an old and a new exe on one zip with a single entry over 512 MiB before keeping or extending it.
 - Open: whether entries of tens to hundreds of MiB (now whole-buffer libdeflate on one worker) are
   faster through the same path: libdeflate may be quicker per byte, but cannot overlap the write.
-- Suspect: the 1 GiB memory budget. An entry holds its unpacked plus packed size, so two 250 MiB
-  entries can fill it and make every other worker wait. The trace now has a `wait_ms` slot for it,
-  and the streamed path reports inflate, crc and write too.
-- Switches for measuring, to remove once the values are decided: `KILN_STREAM_MIB` (stream entries
-  larger than this; default and maximum 512) and `KILN_BUDGET_MIB` (memory budget; default 1024).
+- Answer (measured 2026-11-15): the 1 GiB memory budget made workers wait 8-19% of their time on
+  `something.zip` (trace slot `wait_ms`). Streaming mid-size entries was not faster, so that switch is
+  gone. The budget is now a quarter of the RAM, kept between 1 and 4 GiB (`memory_budget`);
+  `KILN_BUDGET_MIB` still overrides it, to try a value without a new build.
 
 Archiving
 - Cheap incompressible skip: magic bytes/extension, then sample the first 64 KiB. Reuse the root
@@ -163,6 +162,38 @@ synthetic set from `bench-local.ps1`, warm cache, zip made by 7-Zip or kiln-win.
   whether one stuck write holds the other workers up (memory budget, big file on one worker).
 - Why Defender skips 7-Zip's scans (above), and whether any program-side step can earn it.
 - Not measured on another machine: all numbers come from one laptop.
+
+## What worked and what did not (extraction speed)
+One laptop (i7-13620H, 16 logical cores, Windows 11), 2026-11-15, by hand. Sets of 2-5 runs per
+setting: good enough to rule ideas out, not to promise a number. Read `KILN_TRACE=1` before trusting
+an idea.
+
+Worked
+- Chunks of up to 32 files (`RUN_FILES`) or 4 MiB (`RUN_BYTES`) from one folder, taken round-robin
+  across folders: 12-17% faster than archive order on 6000 small files (Defender off).
+- libdeflate per file on 16 workers: `something.zip` (1088 files, 2.1 GiB) takes 2-3.5 s in the fast
+  runs against 15-22 s for 7-Zip (Defender on).
+- Memory budget 4 GiB instead of 1 GiB: wait time 8-19% of worker time down to 0, fast runs about
+  3.0 s down to about 2.4 s; in a 5-run set the median was 2.5 s against 3.2 s.
+- Small files with Defender off: 0.43 s against 1.56 s for 7-Zip. Packing the small set: 0.17 s
+  against 1.05 s (not measured with Defender on a big folder).
+- Sampling the first 64 KiB and storing when it does not shrink: random data no longer extracts
+  slower than 7-Zip (1.61 s down to 0.15 s).
+
+Did not work (no gain, or worse)
+- 8 or 16 files per chunk instead of 32: within the 0.02 s run-to-run noise.
+- Starting the biggest chunks first (`heavy_first`): same wall time and busy share; reverted.
+- Streaming mid-size entries through zlib-rs (`KILN_STREAM_MIB` 16 or 64): not faster, and stream16
+  had two of the three slowest runs. Switch removed.
+- A 2 GiB budget: median 4.35 s against 2.54 s for 4 GiB (a stall costs more with less room).
+- Waiting 15 s between runs: slow runs still happened (3 of 15), so they are not left over from
+  the previous run.
+- Everything listed under the Defender section (thread count, order, pre-sizing, share flags, ...).
+
+Still open
+- About 1 run in 5 spends 30-60 s (summed over workers) in `write` instead of 4-11 s, with any budget
+  and with Defender off. Untested: giving each output file its final size before writing.
+- Workers are busy about 50-60% with the 4 GiB budget (it was 25-36%). The rest is not explained.
 
 ## Baselines (measured earlier on Linux, for context only; not Windows)
 - libdeflate, single thread: level 6 compresses at ~100-113 MB/s vs 7-Zip's zip `-mx5` at 10-15 MB/s;

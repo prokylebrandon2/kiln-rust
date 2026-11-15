@@ -40,8 +40,11 @@ const MAX32: u64 = 0xFFFF_FFFF;
 const MAX16: u64 = 0xFFFF;
 /// Largest entry (compressed or not) handled in memory; bigger ones are streamed.
 const IN_MEMORY_MAX: u64 = 512 << 20;
-/// Most bytes of file data held in memory by all workers together (a single file may exceed it).
+/// Least bytes of file data held in memory by all workers together (a single file may exceed it),
+/// and what is used when the RAM size is unknown. See `memory_budget`.
 const MEMORY_BUDGET: u64 = 1 << 30;
+/// Most that `memory_budget` picks by itself, however much RAM the machine has.
+const MEMORY_BUDGET_MAX: u64 = 4 << 30;
 /// Entries whose buffers (packed + unpacked) total at most this many bytes skip the memory budget
 /// when extracting: the budget is one mutex that every worker would otherwise lock twice per file,
 /// and the most these entries can hold at once is `64 workers * SMALL_ENTRY`.
@@ -178,11 +181,59 @@ fn env_mib(name: &str, default: u64) -> u64 {
         .map_or(default, |mib| mib.saturating_mul(1 << 20))
 }
 
-/// Entries with more than this many bytes (unpacked or packed) are streamed, not held in memory.
-/// `KILN_STREAM_MIB` lowers it; it never goes above `IN_MEMORY_MAX`.
-fn stream_from() -> u64 {
-    static FROM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *FROM.get_or_init(|| env_mib("KILN_STREAM_MIB", IN_MEMORY_MAX).min(IN_MEMORY_MAX))
+/// Bytes of RAM in the machine as Windows reports them; `None` if the call fails.
+#[cfg(windows)]
+fn physical_ram() -> Option<u64> {
+    // Layout of `MEMORYSTATUSEX`; only `total_phys` is read.
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct MemoryStatus {
+        length: u32,
+        load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page: u64,
+        avail_page: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended: u64,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatus) -> i32;
+    }
+
+    let mut status = MemoryStatus {
+        length: std::mem::size_of::<MemoryStatus>() as u32,
+        load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page: 0,
+        avail_page: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended: 0,
+    };
+    // SAFETY: `status` is a valid `MEMORYSTATUSEX` with its length set, as the call requires.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0).then_some(status.total_phys)
+}
+
+#[cfg(not(windows))]
+fn physical_ram() -> Option<u64> {
+    None
+}
+
+/// A quarter of `ram`, at least `MEMORY_BUDGET` and at most `MEMORY_BUDGET_MAX`; `MEMORY_BUDGET`
+/// when the RAM is unknown. Measured: 1 GiB made workers wait for memory, 4 GiB did not.
+fn budget_for(ram: Option<u64>) -> u64 {
+    ram.map_or(MEMORY_BUDGET, |r| (r / 4).clamp(MEMORY_BUDGET, MEMORY_BUDGET_MAX))
+}
+
+/// The memory budget of a run. `KILN_BUDGET_MIB` (in MiB) overrides it, to try a value.
+fn memory_budget() -> u64 {
+    env_mib("KILN_BUDGET_MIB", budget_for(physical_ram()))
 }
 
 fn thread_count(requested: usize, jobs: usize) -> usize {
@@ -866,7 +917,7 @@ impl ZipArchive {
         let abort = AtomicBool::new(false);
         let finished = AtomicUsize::new(0);
         let first_err: Mutex<Option<Error>> = Mutex::new(None);
-        let budget = Budget::new(env_mib("KILN_BUDGET_MIB", MEMORY_BUDGET));
+        let budget = Budget::new(memory_budget());
 
         let workers_began = Instant::now();
         let panicked = thread::scope(|s| {
@@ -1008,8 +1059,7 @@ impl ZipArchive {
         if e.size == 0 {
             return Ok(());
         }
-        let from = stream_from();
-        if e.size > from || e.packed > from {
+        if e.size > IN_MEMORY_MAX || e.packed > IN_MEMORY_MAX {
             let data_off = self.data_offset(e)?;
             return self.extract_stream(e, data_off, out, target, done, ctx.trace);
         }
@@ -1921,6 +1971,17 @@ mod tests {
         let (jobs, chunks) = chunk_by_dir(jobs_for(&paths), 100, 10, |_| 6);
         assert_eq!(jobs.len(), 5);
         assert_eq!(chunks, [(0, 2), (2, 4), (4, 5)]);
+    }
+
+    /// The budget is a quarter of the RAM, kept between 1 and 4 GiB.
+    #[test]
+    fn budget_is_a_quarter_of_the_ram_within_limits() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(budget_for(None), GIB);
+        assert_eq!(budget_for(Some(2 * GIB)), GIB);
+        assert_eq!(budget_for(Some(8 * GIB)), 2 * GIB);
+        assert_eq!(budget_for(Some(16 * GIB)), 4 * GIB);
+        assert_eq!(budget_for(Some(64 * GIB)), 4 * GIB);
     }
 
     /// Builds a ZIP in memory, entry by entry, in the order given.

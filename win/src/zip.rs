@@ -300,6 +300,7 @@ pub struct ZipArchive {
     file: File,
     len: u64,
     entries: Vec<ZipEntry>,
+    open_took: Duration,
 }
 
 /// Settings for [`ZipArchive::extract`].
@@ -402,7 +403,9 @@ const T_CRC: usize = 3;
 const T_WRITE: usize = 4;
 const T_TIMES: usize = 5;
 const T_CLOSE: usize = 6;
-const T_SLOTS: usize = 7;
+const T_OPEN: usize = 7;
+const T_DIRS: usize = 8;
+const T_SLOTS: usize = 9;
 
 fn slot_name(slot: usize) -> &'static str {
     match slot {
@@ -412,13 +415,16 @@ fn slot_name(slot: usize) -> &'static str {
         T_CRC => "crc",
         T_WRITE => "write",
         T_TIMES => "times",
-        _ => "close",
+        T_CLOSE => "close",
+        T_OPEN => "open",
+        _ => "dirs",
     }
 }
 
 /// Opt-in timing of an extraction, to find out where the time goes: with `KILN_TRACE=1` set,
 /// each extraction prints one line to stderr with the time the workers spent on each kind of
-/// work, summed over all workers (so it can exceed the wall time). Costs nothing when off.
+/// work, summed over all workers (so it can exceed the wall time); `open` and `dirs` are the
+/// one-off cost of opening the archive and creating the folders. Costs nothing when off.
 struct Trace {
     on: bool,
     slots: [AtomicU64; T_SLOTS],
@@ -625,6 +631,7 @@ fn parse_central(cd: &[u8], count: u64, shift: u64) -> Result<Vec<ZipEntry>> {
 impl ZipArchive {
     /// Open `path` and read its central directory.
     pub fn open(path: &Path) -> Result<Self> {
+        let began = Instant::now();
         // Workers take entries in archive order, so the reads sweep the file front to back.
         let file = at(open_sequential(path), path)?;
         let len = at(file.metadata(), path)?.len();
@@ -685,6 +692,7 @@ impl ZipArchive {
             file,
             len,
             entries,
+            open_took: began.elapsed(),
         })
     }
 
@@ -778,6 +786,8 @@ impl ZipArchive {
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<ExtractStats> {
         let began = Instant::now();
+        let trace = Trace::new();
+        trace.slots[T_OPEN].store(self.open_took.as_nanos() as u64, Ordering::Relaxed);
         let selected = self.select(&opts.members)?;
         let mut jobs: Vec<Job> = Vec::new();
         let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
@@ -801,16 +811,17 @@ impl ZipArchive {
             }
         }
         at(fs::create_dir_all(&opts.dest), &opts.dest)?;
+        let t = trace.start();
         for d in &dirs {
             at(fs::create_dir_all(d), d)?;
         }
+        trace.add(T_DIRS, t);
         jobs.sort_by_key(|j| self.entries[j.idx].local_off);
         let nthreads = thread_count(opts.threads, jobs.len());
         // At least four chunks per worker, so a small or one-folder archive keeps them all busy.
         let run_files = (jobs.len() / (nthreads * 4)).clamp(1, RUN_FILES);
         let (jobs, chunks) = chunk_by_dir(jobs, run_files, RUN_BYTES, |j| self.entries[j.idx].size);
         let prepass = began.elapsed();
-        let trace = Trace::new();
 
         let next = AtomicUsize::new(0);
         let done = AtomicU64::new(0);

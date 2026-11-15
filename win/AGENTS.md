@@ -191,8 +191,11 @@ Did not work (no gain, or worse)
 - Everything listed under the Defender section (thread count, order, pre-sizing, share flags, ...).
 
 Still open
-- About 1 run in 5 spends 30-60 s (summed over workers) in `write` instead of 4-11 s, with any budget
-  and with Defender off. Untested: giving each output file its final size before writing.
+- Random slow runs (9-14 s instead of 2-3.5 s; `write` 30-60 s summed over workers) are not kiln:
+  `robocopy /MT:16` copying the same extracted files, 8 runs on the same disk, took 2.7-10.8 s
+  (three runs 2.7-2.9 s, five runs 5.3-10.8 s). Windows or the disk, so no code change is planned.
+  Not tested: more free space on C: (93.6 GB free on the 512 GB NVMe), another drive, a Dev Drive,
+  giving each output file its final size before writing.
 - Workers are busy about 50-60% with the 4 GiB budget (it was 25-36%). The rest is not explained.
 
 ## Baselines (measured earlier on Linux, for context only; not Windows)

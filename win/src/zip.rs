@@ -2033,7 +2033,11 @@ mod tests {
         let done = AtomicU64::new(0);
         let res = zip.extract_stream(e, off, &mut out, &target, &done);
         drop(out);
-        (res, fs::read(&target).unwrap(), done.load(Ordering::Relaxed))
+        (
+            res,
+            fs::read(&target).unwrap(),
+            done.load(Ordering::Relaxed),
+        )
     }
 
     /// Sizes around the piece size, stored and deflated: the bytes must come out exactly.

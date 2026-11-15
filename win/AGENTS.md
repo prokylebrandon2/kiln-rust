@@ -99,6 +99,11 @@ Extraction, big files (written 2026-11-15, not yet measured)
   an old and a new exe on one zip with a single entry over 512 MiB before keeping or extending it.
 - Open: whether entries of tens to hundreds of MiB (now whole-buffer libdeflate on one worker) are
   faster through the same path: libdeflate may be quicker per byte, but cannot overlap the write.
+- Suspect: the 1 GiB memory budget. An entry holds its unpacked plus packed size, so two 250 MiB
+  entries can fill it and make every other worker wait. The trace now has a `wait_ms` slot for it,
+  and the streamed path reports inflate, crc and write too.
+- Switches for measuring, to remove once the values are decided: `KILN_STREAM_MIB` (stream entries
+  larger than this; default and maximum 512) and `KILN_BUDGET_MIB` (memory budget; default 1024).
 
 Archiving
 - Cheap incompressible skip: magic bytes/extension, then sample the first 64 KiB. Reuse the root

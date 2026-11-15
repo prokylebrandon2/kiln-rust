@@ -169,6 +169,22 @@ fn unix_secs(t: std::time::SystemTime) -> i64 {
     }
 }
 
+/// Reads a size in MiB from the environment variable `name` (to measure a setting without a new
+/// build); `default` bytes when it is unset or not a number.
+fn env_mib(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(default, |mib| mib.saturating_mul(1 << 20))
+}
+
+/// Entries with more than this many bytes (unpacked or packed) are streamed, not held in memory.
+/// `KILN_STREAM_MIB` lowers it; it never goes above `IN_MEMORY_MAX`.
+fn stream_from() -> u64 {
+    static FROM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *FROM.get_or_init(|| env_mib("KILN_STREAM_MIB", IN_MEMORY_MAX).min(IN_MEMORY_MAX))
+}
+
 fn thread_count(requested: usize, jobs: usize) -> usize {
     let t = if requested == 0 {
         thread::available_parallelism().map_or(4, |n| n.get())
@@ -410,7 +426,8 @@ const T_TIMES: usize = 5;
 const T_CLOSE: usize = 6;
 const T_OPEN: usize = 7;
 const T_DIRS: usize = 8;
-const T_SLOTS: usize = 9;
+const T_WAIT: usize = 9;
+const T_SLOTS: usize = 10;
 
 fn slot_name(slot: usize) -> &'static str {
     match slot {
@@ -422,14 +439,16 @@ fn slot_name(slot: usize) -> &'static str {
         T_TIMES => "times",
         T_CLOSE => "close",
         T_OPEN => "open",
-        _ => "dirs",
+        T_DIRS => "dirs",
+        _ => "wait",
     }
 }
 
 /// Opt-in timing of an extraction, to find out where the time goes: with `KILN_TRACE=1` set,
 /// each extraction prints one line to stderr with the time the workers spent on each kind of
 /// work, summed over all workers (so it can exceed the wall time); `open` and `dirs` are the
-/// one-off cost of opening the archive and creating the folders. Costs nothing when off.
+/// one-off cost of opening the archive and creating the folders, and `wait` is the time spent
+/// waiting for the memory budget. Costs nothing when off.
 struct Trace {
     on: bool,
     slots: [AtomicU64; T_SLOTS],
@@ -847,7 +866,7 @@ impl ZipArchive {
         let abort = AtomicBool::new(false);
         let finished = AtomicUsize::new(0);
         let first_err: Mutex<Option<Error>> = Mutex::new(None);
-        let budget = Budget::new(MEMORY_BUDGET);
+        let budget = Budget::new(env_mib("KILN_BUDGET_MIB", MEMORY_BUDGET));
 
         let workers_began = Instant::now();
         let panicked = thread::scope(|s| {
@@ -989,12 +1008,15 @@ impl ZipArchive {
         if e.size == 0 {
             return Ok(());
         }
-        if e.size > IN_MEMORY_MAX || e.packed > IN_MEMORY_MAX {
+        let from = stream_from();
+        if e.size > from || e.packed > from {
             let data_off = self.data_offset(e)?;
-            return self.extract_stream(e, data_off, out, target, done);
+            return self.extract_stream(e, data_off, out, target, done, ctx.trace);
         }
         let held = e.size + e.packed;
+        let t = ctx.trace.start();
         let _hold = (held > SMALL_ENTRY).then(|| budget.acquire(held, abort));
+        ctx.trace.add(T_WAIT, t);
         let t = ctx.trace.start();
         let start = self.read_packed(e, &mut ctx.inbuf)?;
         ctx.trace.add(T_READ, t);
@@ -1042,6 +1064,7 @@ impl ZipArchive {
         out: &mut File,
         target: &Path,
         done: &AtomicU64,
+        trace: &Trace,
     ) -> Result<()> {
         let section = BufReader::with_capacity(
             CHUNK,
@@ -1067,8 +1090,12 @@ impl ZipArchive {
             let writer = s.spawn(move || -> Result<u32> {
                 let mut hasher = crc32fast::Hasher::new();
                 while let Ok((buf, n)) = full_rx.recv() {
+                    let t = trace.start();
                     hasher.update(&buf[..n]);
+                    trace.add(T_CRC, t);
+                    let t = trace.start();
                     at(out.write_all(&buf[..n]), target)?;
+                    trace.add(T_WRITE, t);
                     done.fetch_add(n as u64, Ordering::Relaxed);
                     let _ = free_tx.send(buf);
                 }
@@ -1083,7 +1110,10 @@ impl ZipArchive {
                     failure = Some(err);
                     break;
                 }
-                let n = match fill(reader.as_mut(), &mut buf) {
+                let t = trace.start();
+                let filled = fill(reader.as_mut(), &mut buf);
+                trace.add(T_INFLATE, t);
+                let n = match filled {
                     Ok(n) => n,
                     Err(err) => {
                         failure = Some(bad(&err.to_string()));
@@ -2031,7 +2061,7 @@ mod tests {
         let target = tmp.path().join("out.bin");
         let mut out = File::create(&target).unwrap();
         let done = AtomicU64::new(0);
-        let res = zip.extract_stream(e, off, &mut out, &target, &done);
+        let res = zip.extract_stream(e, off, &mut out, &target, &done, &Trace::new());
         drop(out);
         (
             res,

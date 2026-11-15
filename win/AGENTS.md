@@ -79,11 +79,12 @@ entry, and a small helper with a progress window (7-Zip's `7zG.exe` is our `kiln
   file association for `.kiln`, icons (`assets/kiln-icon.svg`), the manifest above.
 
 ## Speed ideas (untested; profile first, with `samply`, before any of them)
-Assumption to confirm: on Windows the cost is per-file overhead (NTFS, Defender), not the codec.
+Measured (see "Defender and many small files" below): with Defender on, the cost is Defender's
+per-file scan, not the codec and not our file calls.
 
 Extraction, many small files
-- Create each file once: no reopen to set timestamps (use the handle), pre-size with
-  `SetEndOfFile`/`FileAllocationInfo`.
+- Create each file once: no reopen to set timestamps (done: times are set on the handle).
+  Pre-sizing with `SetEndOfFile` was tried in a Defender-on test and made no difference.
 - Parent-directory-relative opens (`NtCreateFile` with a directory handle) to skip repeated path
   walks and ACL checks.
 - Directory affinity: create all directories first, give each worker whole directories (NTFS
@@ -113,6 +114,43 @@ Rust level
 
 Moonshots: IoRing batched reads, direct MFT enumeration (admin only), a resident process with a warm
 thread pool for shell use.
+
+## Defender and many small files (measured 2026-11-15, by hand, not CI)
+Machine: i7-13620H (16 logical cores), Windows 11 build 10.0.26300, 6015 files / 120.5 MiB
+synthetic set from `bench-local.ps1`, warm cache, zip made by 7-Zip or kiln-win.
+
+| Extract time | Defender off | Defender on |
+|---|---|---|
+| kiln-win | 0.43 s | 5.5-9 s |
+| 7-Zip | 1.56 s | 1.8-2.6 s |
+
+- Off: kiln-win is about 3.6x faster. On: about 3x slower. Run-to-run drift on this machine is large
+  (the same test varied 2x within one session), so compare tools only inside one session.
+- Cause, from a Defender performance recording (`New-MpPerformanceRecording`): both tools get
+  6015 on-close scans. All of 7-Zip's (`C:\Program Files\7-Zip\7z.exe`) are skipped with reason
+  "Optimization" (0.14 ms each); none of kiln-win's are (median 10 ms, total 180 s summed over workers).
+  Microsoft's analyzer reference does not define "Optimization".
+- Tested and ruled out as the cause: thread count (1 thread = 16 threads when Defender is on),
+  extraction order, `heavy_first` (reverted), pre-sizing, setting times on the handle,
+  `FILE_FLAG_OPEN_REPARSE_POINT` (Rust adds it for `create_new`), share flags, Authenticode signing
+  (7-Zip is unsigned too), the download mark, Defender exclusions (none set), folder (kiln-win in
+  `Program Files` and in the 7-Zip folder is still slow), 7-Zip's file hash (a copy of 7z.exe in
+  Downloads is slow). A plain C program and plain .NET writing the same files were as slow as kiln-win.
+  Signed `tar.exe` (1.2 s) and `robocopy` (0.9-1.5 s) are fast.
+- Not tested: whether an installer, code signing or accumulated reputation earns the skip.
+- Where kiln-win wins with Defender on: few large files (`something.zip`, 1088 files, 2.3 GB:
+  3.4-4.0 s in the fast runs against 15-22 s for 7-Zip).
+- Consequence: do not claim "faster than 7-Zip" without saying which workload and whether
+  Defender was on. Quote the benchmark report's Defender line (`bench-local.ps1` prints it).
+
+## Open questions (unexplained; check these before trusting a result)
+- Big zip, write stalls: some runs spend 30-70 s (summed over workers) in `write`. They persist with
+  Defender off, so they look like the disk or Windows write-back, not Defender. Cause unconfirmed.
+- Big zip, idle workers: busy share (sum of trace slots / 16 x `workers_ms`) is only 25-36%. Starting
+  big files first did not change it. Idea: add a "longest single write" figure to the trace to see
+  whether one stuck write holds the other workers up (memory budget, big file on one worker).
+- Why Defender skips 7-Zip's scans (above), and whether any program-side step can earn it.
+- Not measured on another machine: all numbers come from one laptop.
 
 ## Baselines (measured earlier on Linux, for context only; not Windows)
 - libdeflate, single thread: level 6 compresses at ~100-113 MB/s vs 7-Zip's zip `-mx5` at 10-15 MB/s;

@@ -390,9 +390,14 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
         class.native += best_nat;
     }
 
-    println!("Inflate benchmark: {} (best of {runs} runs per entry)", archive.display());
+    println!(
+        "Inflate benchmark: {} (best of {runs} runs per entry)",
+        archive.display()
+    );
     println!();
-    println!("| Entries | Files | Packed | Unpacked | libdeflate | native | native vs libdeflate |");
+    println!(
+        "| Entries | Files | Packed | Unpacked | libdeflate | native | native vs libdeflate |"
+    );
     println!("|---|---:|---:|---:|---:|---:|---:|");
     let all = Tally {
         files: tally.iter().map(|t| t.files).sum(),
@@ -410,11 +415,12 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
         if t.files == 0 {
             continue;
         }
-        let (speed_ref, speed_nat) = (
-            mib_per_s(t.raw, t.libdeflate),
-            mib_per_s(t.raw, t.native),
-        );
-        let ratio = if speed_ref > 0.0 { speed_nat / speed_ref } else { 0.0 };
+        let (speed_ref, speed_nat) = (mib_per_s(t.raw, t.libdeflate), mib_per_s(t.raw, t.native));
+        let ratio = if speed_ref > 0.0 {
+            speed_nat / speed_ref
+        } else {
+            0.0
+        };
         println!(
             "| {label} | {} | {} | {} | {speed_ref:.0} MiB/s | {speed_nat:.0} MiB/s | {ratio:.2}x |",
             t.files,

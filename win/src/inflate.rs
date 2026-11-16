@@ -695,13 +695,7 @@ impl Decoder {
             return Err(InflateError::BadHeader);
         }
         build_table(&lens[..hlit], &mut self.lit[..], LIT_ROOT, lit_entry, true)?;
-        build_table(
-            &lens[hlit..total],
-            &mut self.dist[..],
-            DIST_ROOT,
-            dist_entry,
-            true,
-        )
+        build_table(&lens[hlit..total], &mut self.dist[..], DIST_ROOT, dist_entry, true)
     }
 }
 
@@ -814,18 +808,12 @@ mod tests {
         let mut dec = Decoder::new();
         let mut out = [0u8; 16];
         // Block type 3.
-        assert_eq!(
-            dec.inflate(&[0x07, 0x00], &mut out),
-            Err(InflateError::BadHeader)
-        );
+        assert_eq!(dec.inflate(&[0x07, 0x00], &mut out), Err(InflateError::BadHeader));
         // Stored block whose NLEN is not the complement of LEN.
         let stored = [0x01, 0x05, 0x00, 0x00, 0x00];
         assert_eq!(dec.inflate(&stored, &mut out), Err(InflateError::BadStored));
         // A fixed block that starts with a match.
-        assert_eq!(
-            dec.inflate(&[0x03, 0x02, 0x00], &mut out),
-            Err(InflateError::BadDistance)
-        );
+        assert_eq!(dec.inflate(&[0x03, 0x02, 0x00], &mut out), Err(InflateError::BadDistance));
         assert_eq!(dec.inflate(&[], &mut out), Err(InflateError::Truncated));
     }
 
@@ -877,11 +865,7 @@ mod tests {
             for n in 0..=700 {
                 let data = sample(kind, n, &mut rng);
                 check(&mut dec, &data, &libdeflate(&data, 6));
-                check(
-                    &mut dec,
-                    &data,
-                    &zlib(&data, Compression::fast(), usize::MAX),
-                );
+                check(&mut dec, &data, &zlib(&data, Compression::fast(), usize::MAX));
             }
         }
     }
@@ -901,11 +885,7 @@ mod tests {
                 for cut in (0..packed.len()).step_by(97).chain([packed.len() - 1]) {
                     let mut out = vec![0u8; data.len()];
                     let res = dec.inflate(&packed[..cut], &mut out);
-                    assert!(
-                        res.is_err(),
-                        "kind {kind}, cut at {cut} of {}",
-                        packed.len()
-                    );
+                    assert!(res.is_err(), "kind {kind}, cut at {cut} of {}", packed.len());
                 }
             }
         }
@@ -917,18 +897,11 @@ mod tests {
         let mut dec = Decoder::new();
         for kind in 0..6 {
             let data = sample(kind, 20_000, &mut rng);
-            for packed in [
-                libdeflate(&data, 6),
-                zlib(&data, Compression::none(), usize::MAX),
-            ] {
+            for packed in [libdeflate(&data, 6), zlib(&data, Compression::none(), usize::MAX)] {
                 for short in [0, 1, data.len() / 2, data.len() - 1] {
                     let mut out = vec![0u8; data.len()];
                     let res = dec.inflate(&packed, &mut out[..short]);
-                    assert_eq!(
-                        res,
-                        Err(InflateError::OutputFull),
-                        "kind {kind}, short {short}"
-                    );
+                    assert_eq!(res, Err(InflateError::OutputFull), "kind {kind}, short {short}");
                 }
             }
         }
@@ -964,11 +937,7 @@ mod tests {
         let mut accepted = 0;
         for kind in [1, 2, 3, 4] {
             let data = sample(kind, 6_000, &mut rng);
-            for good in [
-                libdeflate(&data, 6),
-                libdeflate(&data, 1),
-                libdeflate(&data, 12),
-            ] {
+            for good in [libdeflate(&data, 6), libdeflate(&data, 1), libdeflate(&data, 12)] {
                 for _ in 0..500 {
                     let mut bad = good.clone();
                     let at = rng.below(bad.len() as u64) as usize;
@@ -980,10 +949,7 @@ mod tests {
                     accepted += 1;
                     let mut got = vec![0u8; data.len()];
                     assert_eq!(dec.inflate(&bad, &mut got), Ok(n), "kind {kind}, byte {at}");
-                    assert!(
-                        got[..n] == want[..n],
-                        "kind {kind}, byte {at}: bytes differ"
-                    );
+                    assert!(got[..n] == want[..n], "kind {kind}, byte {at}: bytes differ");
                 }
             }
         }

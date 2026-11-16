@@ -647,6 +647,11 @@ def test_known(rep):
         (bytes([0x01, 0x05, 0x00, 0x00, 0x00]), "BadStored"),
         (bytes([0x03, 0x02, 0x00]), "BadDistance"),
         (b"", "Truncated"),
+        # the forbidden symbols: length 286 and 287 (libdeflate accepts these, zlib does not) and
+        # distance 30; the same streams as the Rust test invalid_symbols_are_rejected
+        (bytes([0x4B, 0x1C, 0x03, 0x00]), "BadSymbol"),
+        (bytes([0x4B, 0x1C, 0x07, 0x00]), "BadSymbol"),
+        (bytes([0x4B, 0x04, 0x3E, 0x00, 0x00, 0x00]), "BadSymbol"),
     ]
     for packed, kind in errors:
         rep.checks += 1

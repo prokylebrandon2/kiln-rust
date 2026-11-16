@@ -91,6 +91,11 @@ environment has `KILN_INFLATE=native`. Switch the default only after the benchma
   would (bounds, overflow, shifts). `python3 inflate_model.py [--quick]` checks it against zlib;
   `python3 inflate_mutants.py` breaks it in 24 places and every break must fail the tests. Change
   the model and the Rust together. Neither was run in CI; there was no Rust toolchain when written.
+- Strictness: the decoder rejects what the RFC and zlib reject. libdeflate is more lenient with
+  corrupt streams (length symbols 286/287 decode as 258; an unused codeword of a one-codeword or
+  empty distance code gets a meaning), so on damaged input native can reject what libdeflate
+  accepts. Found by the first CI run (`agrees_with_libdeflate_on_damaged_streams`); the test now
+  allows `BadSymbol` there when zlib rejects the stream too. Do not copy the leniency.
 - First thing to do: read the first CI run (compile errors, fmt, clippy), then the
   "Native inflate tests (overflow checks on)" step.
 

@@ -20,6 +20,11 @@
 //! Input past the end of the data reads as zero bits. The bits actually consumed are checked, so a
 //! truncated stream is an error, never a panic or an out-of-bounds read. There is no `unsafe`.
 //!
+//! What the RFC and zlib reject, this decoder rejects. libdeflate is more lenient with corrupt
+//! streams: it decodes the length symbols 286 and 287 as 258, and it gives a meaning to an unused
+//! codeword of a one-codeword (or empty) distance code. On damaged input this decoder can
+//! therefore reject a stream that libdeflate accepts.
+//!
 //! Used by the ZIP extractor only when `KILN_INFLATE=native` is set (see [`enabled`]); libdeflate
 //! stays the default until the benchmark (`kiln-win bench-inflate`) says otherwise.
 //! `win/tools/inflate_model.py` is a line-for-line model of the algorithm that was checked against
@@ -695,13 +700,7 @@ impl Decoder {
             return Err(InflateError::BadHeader);
         }
         build_table(&lens[..hlit], &mut self.lit[..], LIT_ROOT, lit_entry, true)?;
-        build_table(
-            &lens[hlit..total],
-            &mut self.dist[..],
-            DIST_ROOT,
-            dist_entry,
-            true,
-        )
+        build_table(&lens[hlit..total], &mut self.dist[..], DIST_ROOT, dist_entry, true)
     }
 }
 
@@ -787,6 +786,15 @@ mod tests {
         e.finish().unwrap()
     }
 
+    /// True when zlib (through flate2) accepts the stream: the reference for what the RFC allows.
+    fn zlib_accepts(packed: &[u8]) -> bool {
+        use std::io::Read;
+        let mut out = Vec::new();
+        flate2::read::DeflateDecoder::new(packed)
+            .read_to_end(&mut out)
+            .is_ok()
+    }
+
     fn check(dec: &mut Decoder, data: &[u8], packed: &[u8]) {
         for spare in [0usize, 1, 40] {
             let mut out = vec![0xAAu8; data.len() + spare];
@@ -814,18 +822,12 @@ mod tests {
         let mut dec = Decoder::new();
         let mut out = [0u8; 16];
         // Block type 3.
-        assert_eq!(
-            dec.inflate(&[0x07, 0x00], &mut out),
-            Err(InflateError::BadHeader)
-        );
+        assert_eq!(dec.inflate(&[0x07, 0x00], &mut out), Err(InflateError::BadHeader));
         // Stored block whose NLEN is not the complement of LEN.
         let stored = [0x01, 0x05, 0x00, 0x00, 0x00];
         assert_eq!(dec.inflate(&stored, &mut out), Err(InflateError::BadStored));
         // A fixed block that starts with a match.
-        assert_eq!(
-            dec.inflate(&[0x03, 0x02, 0x00], &mut out),
-            Err(InflateError::BadDistance)
-        );
+        assert_eq!(dec.inflate(&[0x03, 0x02, 0x00], &mut out), Err(InflateError::BadDistance));
         assert_eq!(dec.inflate(&[], &mut out), Err(InflateError::Truncated));
     }
 
@@ -877,11 +879,7 @@ mod tests {
             for n in 0..=700 {
                 let data = sample(kind, n, &mut rng);
                 check(&mut dec, &data, &libdeflate(&data, 6));
-                check(
-                    &mut dec,
-                    &data,
-                    &zlib(&data, Compression::fast(), usize::MAX),
-                );
+                check(&mut dec, &data, &zlib(&data, Compression::fast(), usize::MAX));
             }
         }
     }
@@ -901,11 +899,7 @@ mod tests {
                 for cut in (0..packed.len()).step_by(97).chain([packed.len() - 1]) {
                     let mut out = vec![0u8; data.len()];
                     let res = dec.inflate(&packed[..cut], &mut out);
-                    assert!(
-                        res.is_err(),
-                        "kind {kind}, cut at {cut} of {}",
-                        packed.len()
-                    );
+                    assert!(res.is_err(), "kind {kind}, cut at {cut} of {}", packed.len());
                 }
             }
         }
@@ -917,18 +911,11 @@ mod tests {
         let mut dec = Decoder::new();
         for kind in 0..6 {
             let data = sample(kind, 20_000, &mut rng);
-            for packed in [
-                libdeflate(&data, 6),
-                zlib(&data, Compression::none(), usize::MAX),
-            ] {
+            for packed in [libdeflate(&data, 6), zlib(&data, Compression::none(), usize::MAX)] {
                 for short in [0, 1, data.len() / 2, data.len() - 1] {
                     let mut out = vec![0u8; data.len()];
                     let res = dec.inflate(&packed, &mut out[..short]);
-                    assert_eq!(
-                        res,
-                        Err(InflateError::OutputFull),
-                        "kind {kind}, short {short}"
-                    );
+                    assert_eq!(res, Err(InflateError::OutputFull), "kind {kind}, short {short}");
                 }
             }
         }
@@ -954,21 +941,20 @@ mod tests {
         }
     }
 
-    /// libdeflate is the reference: wherever it accepts a damaged stream, so must this decoder,
-    /// with the same bytes. (Where libdeflate rejects it, anything but a panic is fine.)
+    /// Wherever libdeflate accepts a damaged stream, this decoder must accept it too, with the
+    /// same bytes, unless it is `BadSymbol` and zlib rejects the stream as well: libdeflate is
+    /// more lenient than the RFC there (see the module docs). Where libdeflate rejects the stream,
+    /// anything but a panic is fine.
     #[test]
     fn agrees_with_libdeflate_on_damaged_streams() {
         let mut rng = Rng(2024);
         let mut dec = Decoder::new();
         let mut reference = Decompressor::new();
         let mut accepted = 0;
+        let mut lenient = 0;
         for kind in [1, 2, 3, 4] {
             let data = sample(kind, 6_000, &mut rng);
-            for good in [
-                libdeflate(&data, 6),
-                libdeflate(&data, 1),
-                libdeflate(&data, 12),
-            ] {
+            for good in [libdeflate(&data, 6), libdeflate(&data, 1), libdeflate(&data, 12)] {
                 for _ in 0..500 {
                     let mut bad = good.clone();
                     let at = rng.below(bad.len() as u64) as usize;
@@ -979,16 +965,39 @@ mod tests {
                     };
                     accepted += 1;
                     let mut got = vec![0u8; data.len()];
-                    assert_eq!(dec.inflate(&bad, &mut got), Ok(n), "kind {kind}, byte {at}");
-                    assert!(
-                        got[..n] == want[..n],
-                        "kind {kind}, byte {at}: bytes differ"
-                    );
+                    let result = dec.inflate(&bad, &mut got);
+                    if result == Err(InflateError::BadSymbol) && !zlib_accepts(&bad) {
+                        lenient += 1;
+                        continue;
+                    }
+                    assert_eq!(result, Ok(n), "kind {kind}, byte {at}");
+                    assert!(got[..n] == want[..n], "kind {kind}, byte {at}: bytes differ");
                 }
             }
         }
         // Most flips are rejected by both; a few leave a valid stream, and those were compared.
         assert!(accepted < 6000);
+        // The leniency of libdeflate shows up in a small share of the accepted streams only.
+        assert!(lenient * 20 <= accepted, "{lenient} of {accepted} streams");
+    }
+
+    /// Symbols the RFC forbids are errors. libdeflate decodes the length symbols 286 and 287 as
+    /// 258 and accepts these two streams; zlib and this decoder do not.
+    #[test]
+    fn invalid_symbols_are_rejected() {
+        let mut dec = Decoder::new();
+        let mut out = [0u8; 300];
+        // A fixed block: the literal 'a', a length symbol, distance 1, end of block.
+        let length_symbols: [[u8; 4]; 2] = [[0x4B, 0x1C, 0x03, 0x00], [0x4B, 0x1C, 0x07, 0x00]];
+        for stream in length_symbols {
+            assert_eq!(dec.inflate(&stream, &mut out), Err(InflateError::BadSymbol));
+        }
+        // 'a', length 3, the distance symbol 30 (which libdeflate rejects too), end of block.
+        let distance_symbol: [u8; 6] = [0x4B, 0x04, 0x3E, 0x00, 0x00, 0x00];
+        assert_eq!(
+            dec.inflate(&distance_symbol, &mut out),
+            Err(InflateError::BadSymbol)
+        );
     }
 
     #[test]

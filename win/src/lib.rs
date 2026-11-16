@@ -2,5 +2,6 @@
 //! (`kiln-gui`).
 
 pub mod dostime;
+pub mod inflate;
 pub mod ops;
 pub mod zip;

@@ -8,8 +8,12 @@
 //!
 //! `.kiln` archives go through the Kiln engine (level 0 = store, 1-3 fastest, 4-6 adaptive,
 //! 7-9 maximum); everything else is a ZIP.
+//!
+//! Hidden (not in the usage text): `kiln-win bench-inflate <archive.zip> [-n RUNS]` times the
+//! native DEFLATE decoder against libdeflate on the archive's own entries.
 
 use std::fs::File;
+use std::hint::black_box;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,6 +22,7 @@ use std::time::Instant;
 use kiln::{Archive, ExtractOptions, PackOptions, Profile};
 
 use kiln_win::dostime;
+use kiln_win::inflate::Decoder;
 use kiln_win::zip::{self, CreateOpts, ExtractOpts, ZipArchive};
 
 const USAGE: &str = "usage:
@@ -46,6 +51,7 @@ fn run() -> Result<(), String> {
         "a" => cmd_add(&args[1..]),
         "x" => cmd_extract(&args[1..]),
         "l" => cmd_list(&args[1..]),
+        "bench-inflate" => cmd_bench_inflate(&args[1..]),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             Ok(())
@@ -286,6 +292,148 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
             arc.entries().len(),
             fmt_bytes(arc.total_raw())
         );
+    }
+    Ok(())
+}
+
+/// Entries below this many unpacked bytes are tallied apart from the rest: for them the cost of
+/// one call (and of building the Huffman tables) matters more than the speed per byte.
+const SMALL_ENTRY: usize = 64 << 10;
+
+/// Entries above this size go through the streaming path when extracting, so they are not timed.
+const BENCH_MAX: u64 = 512 << 20;
+
+/// What one decoder spent on one class of entries.
+#[derive(Default)]
+struct Tally {
+    files: u64,
+    packed: u64,
+    raw: u64,
+    libdeflate: f64,
+    native: f64,
+}
+
+fn mib_per_s(bytes: u64, seconds: f64) -> f64 {
+    if seconds > 0.0 {
+        bytes as f64 / seconds / f64::from(1 << 20)
+    } else {
+        0.0
+    }
+}
+
+/// `kiln-win bench-inflate <archive.zip> [-n RUNS]`: inflates every deflate entry with libdeflate
+/// and with the native decoder (`kiln_win::inflate`), checks that both outputs equal each other
+/// and match the entry's CRC-32, and prints the best of RUNS times per entry, summed per class of
+/// entry size, as a Markdown table. Nothing is written to disk. A mismatch fails the command.
+fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
+    let mut runs = 5usize;
+    let mut archive = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "-n" {
+            let v = it.next().ok_or("-n needs a value")?;
+            runs = v.parse().map_err(|_| format!("bad value for -n: {v}"))?;
+        } else {
+            archive = Some(PathBuf::from(arg));
+        }
+    }
+    let runs = runs.max(1);
+    let archive = archive.ok_or_else(|| "bench-inflate <archive.zip> [-n RUNS]".to_string())?;
+    let zip = ZipArchive::open(&archive).map_err(|e| e.to_string())?;
+
+    let mut reference = libdeflater::Decompressor::new();
+    let mut native = Decoder::new();
+    let (mut inbuf, mut out_ref, mut out_nat) = (Vec::new(), Vec::new(), Vec::new());
+    let mut tally: [Tally; 2] = Default::default();
+    let mut bad = 0u64;
+
+    for e in zip.entries() {
+        let skip = e.is_dir || e.method != 8 || e.encrypted || e.size == 0;
+        if skip || e.size > BENCH_MAX || e.packed > BENCH_MAX {
+            continue;
+        }
+        let size = e.size as usize;
+        let packed = zip
+            .packed_bytes(e, &mut inbuf)
+            .map_err(|err| err.to_string())?;
+        out_ref.resize(size, 0u8);
+        out_nat.resize(size, 0u8);
+
+        let (mut best_ref, mut best_nat) = (f64::MAX, f64::MAX);
+        let (mut got_ref, mut got_nat) = (None, None);
+        // The two decoders alternate, so a change in clock speed or load hits both alike.
+        for _ in 0..runs {
+            let t = Instant::now();
+            got_ref = reference
+                .deflate_decompress(black_box(packed), &mut out_ref[..])
+                .ok();
+            best_ref = best_ref.min(t.elapsed().as_secs_f64());
+            let t = Instant::now();
+            got_nat = native.inflate(black_box(packed), &mut out_nat[..]).ok();
+            best_nat = best_nat.min(t.elapsed().as_secs_f64());
+        }
+
+        let same = got_ref == Some(size) && got_nat == Some(size) && out_ref == out_nat;
+        if !same || crc32fast::hash(&out_nat) != e.crc {
+            bad += 1;
+            eprintln!(
+                "MISMATCH {}: libdeflate {got_ref:?}, native {got_nat:?}, expected {size} bytes",
+                e.name
+            );
+            continue;
+        }
+        let class = &mut tally[usize::from(size >= SMALL_ENTRY)];
+        class.files += 1;
+        class.packed += e.packed;
+        class.raw += e.size;
+        class.libdeflate += best_ref;
+        class.native += best_nat;
+    }
+
+    println!(
+        "Inflate benchmark: {} (best of {runs} runs per entry)",
+        archive.display()
+    );
+    println!();
+    println!(
+        "| Entries | Files | Packed | Unpacked | libdeflate | native | native vs libdeflate |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|");
+    let all = Tally {
+        files: tally.iter().map(|t| t.files).sum(),
+        packed: tally.iter().map(|t| t.packed).sum(),
+        raw: tally.iter().map(|t| t.raw).sum(),
+        libdeflate: tally.iter().map(|t| t.libdeflate).sum(),
+        native: tally.iter().map(|t| t.native).sum(),
+    };
+    let rows = [
+        ("under 64 KiB", &tally[0]),
+        ("64 KiB and up", &tally[1]),
+        ("all", &all),
+    ];
+    for (label, t) in rows {
+        if t.files == 0 {
+            continue;
+        }
+        let (speed_ref, speed_nat) = (mib_per_s(t.raw, t.libdeflate), mib_per_s(t.raw, t.native));
+        let ratio = if speed_ref > 0.0 {
+            speed_nat / speed_ref
+        } else {
+            0.0
+        };
+        println!(
+            "| {label} | {} | {} | {} | {speed_ref:.0} MiB/s | {speed_nat:.0} MiB/s | {ratio:.2}x |",
+            t.files,
+            fmt_bytes(t.packed),
+            fmt_bytes(t.raw),
+        );
+    }
+    if all.files == 0 {
+        println!();
+        println!("No deflate entries to time.");
+    }
+    if bad > 0 {
+        return Err(format!("{bad} entries decoded differently or failed"));
     }
     Ok(())
 }

@@ -4,7 +4,8 @@
 //! deflates it with libdeflate (or stores it when a sample shows it will not shrink) and appends
 //! it to the output under a short lock; the central directory is written last, in the original
 //! order. Extracting: workers read the compressed bytes with positional reads, inflate with
-//! libdeflate, check the CRC-32 and write the file. Workers claim chunks of up to 32 files from
+//! libdeflate (or with the native decoder in `inflate.rs` when `KILN_INFLATE=native` is set),
+//! check the CRC-32 and write the file. Workers claim chunks of up to 32 files from
 //! one folder, and the chunks are taken round-robin across folders, so workers that run at the
 //! same time are not queued on one folder in the file system. Entries over 512 MiB go through
 //! streaming
@@ -30,6 +31,7 @@ use libdeflater::{CompressionLvl, Compressor, Decompressor};
 use walkdir::WalkDir;
 
 use crate::dostime;
+use crate::inflate;
 
 const SIG_LOCAL: u32 = 0x0403_4b50;
 const SIG_CENTRAL: u32 = 0x0201_4b50;
@@ -553,6 +555,9 @@ impl Trace {
 
 struct ReadCtx<'a> {
     dec: Decompressor,
+    /// The native decoder, present only when `KILN_INFLATE=native` asks for it; libdeflate
+    /// (`dec`) does the work otherwise.
+    native: Option<inflate::Decoder>,
     inbuf: Vec<u8>,
     outbuf: Vec<u8>,
     trace: &'a Trace,
@@ -792,6 +797,13 @@ impl ZipArchive {
         &self.entries
     }
 
+    /// The packed bytes of one entry, read into `buf` (for `kiln-win bench-inflate`). The local
+    /// header is checked as when extracting.
+    pub fn packed_bytes<'b>(&self, e: &ZipEntry, buf: &'b mut Vec<u8>) -> Result<&'b [u8]> {
+        let start = self.read_packed(e, buf)?;
+        Ok(&buf[start..start + e.packed as usize])
+    }
+
     /// Offset of an entry's data, after checking its local header.
     fn data_offset(&self, e: &ZipEntry) -> Result<u64> {
         let mut h = [0u8; 30];
@@ -929,6 +941,7 @@ impl ZipArchive {
                         let _guard = Finish(&finished);
                         let mut ctx = ReadCtx {
                             dec: Decompressor::new(),
+                            native: inflate::enabled().then(inflate::Decoder::new),
                             inbuf: Vec::new(),
                             outbuf: Vec::new(),
                             trace: &trace,
@@ -1082,10 +1095,15 @@ impl ZipArchive {
             let size = e.size as usize;
             grow_to(&mut ctx.outbuf, size);
             let t = ctx.trace.start();
-            let n = ctx
-                .dec
-                .deflate_decompress(packed, &mut ctx.outbuf[..size])
-                .map_err(|err| Error::corrupt(format!("{}: {err:?}", e.name)))?;
+            let n = if let Some(native) = ctx.native.as_mut() {
+                native
+                    .inflate(packed, &mut ctx.outbuf[..size])
+                    .map_err(|err| Error::corrupt(format!("{}: {err}", e.name)))?
+            } else {
+                ctx.dec
+                    .deflate_decompress(packed, &mut ctx.outbuf[..size])
+                    .map_err(|err| Error::corrupt(format!("{}: {err:?}", e.name)))?
+            };
             ctx.trace.add(T_INFLATE, t);
             if n as u64 != e.size {
                 return Err(Error::corrupt(format!("{}: size mismatch", e.name)));

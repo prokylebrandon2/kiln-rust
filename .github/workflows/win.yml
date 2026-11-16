@@ -3,7 +3,8 @@
 #
 #   push / pull request   build, smoke test, lint; the exe is attached to the run as an artifact
 #   tag win-v*            also publishes a GitHub release with kiln-win-<tag>-x64.zip
-#   every run             also a 7-Zip speed comparison (needs the build job to pass first)
+#   every run             also a 7-Zip speed comparison and a native-inflate vs libdeflate check
+#                         (needs the build job to pass first)
 #   Cargo.lock            if the build had to add crates to it, the lockfile is committed back to the
 #                         branch (push builds only), so the --locked jobs elsewhere keep passing
 name: win
@@ -110,8 +111,22 @@ jobs:
       - name: Unit tests
         run: cargo test --release -p kiln-win
 
+      # The native decoder in the dev profile: arithmetic overflow and debug_assert! are checked
+      # there (the release build skips them). Optimised, so the large test inputs stay quick.
+      - name: Native inflate tests (overflow checks on)
+        env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: "2"
+        run: cargo test -p kiln-win --lib inflate::
+
       - name: Smoke test
         shell: pwsh
+        run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe" -Gui "$PWD/target/release/kiln-gui.exe"
+
+      # The same round trips and interop checks with the native decoder doing the inflating.
+      - name: Smoke test, native inflate
+        shell: pwsh
+        env:
+          KILN_INFLATE: native
         run: ./win/ci/smoke.ps1 -Exe "$PWD/target/release/kiln-win.exe" -Gui "$PWD/target/release/kiln-gui.exe"
 
 
@@ -148,6 +163,10 @@ jobs:
       - name: Benchmark
         shell: pwsh
         run: ./win/ci/bench.ps1 -Exe "$PWD/dist/kiln-win.exe" -Data "$env:RUNNER_TEMP/dataset"
+
+      - name: Inflate benchmark (native decoder vs libdeflate)
+        shell: pwsh
+        run: ./win/ci/inflate-bench.ps1 -Exe "$PWD/dist/kiln-win.exe" -Data "$env:RUNNER_TEMP/dataset" -Binaries "$PWD/dist/kiln-win.exe", "$PWD/dist/kiln-gui.exe"
 
   release:
     name: release

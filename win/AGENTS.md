@@ -78,6 +78,22 @@ entry, and a small helper with a progress window (7-Zip's `7zG.exe` is our `kiln
 - Later: the File Manager window (address bar, file list, toolbar Add / Extract / Test, open-with),
   file association for `.kiln`, icons (`assets/kiln-icon.svg`), the manifest above.
 
+## Native DEFLATE decoder (`win/src/inflate.rs`, written 2026-11-16, never compiled or measured)
+Safe Rust, no `unsafe`, whole-buffer: 64-bit bit buffer with one 8-byte refill, two-level lookup
+tables, a fast loop without room checks while enough input and output is left, a checked slow loop
+for the ends, matches copied in 8/16-byte pieces. Off by default: libdeflate extracts unless the
+environment has `KILN_INFLATE=native`. Switch the default only after the benchmark says so.
+- `kiln-win bench-inflate <zip> [-n RUNS]` (hidden) times both decoders per entry, checks both
+  outputs and the CRC-32, fails on any difference. CI runs it on 7-Zip-made zips
+  (`ci/inflate-bench.ps1`, job summary) and runs the smoke test a second time with
+  `KILN_INFLATE=native`. Quote only numbers those runs print.
+- `tools/inflate_model.py` is a line-for-line Python model of `inflate.rs` that panics where Rust
+  would (bounds, overflow, shifts). `python3 inflate_model.py [--quick]` checks it against zlib;
+  `python3 inflate_mutants.py` breaks it in 24 places and every break must fail the tests. Change
+  the model and the Rust together. Neither was run in CI; there was no Rust toolchain when written.
+- First thing to do: read the first CI run (compile errors, fmt, clippy), then the
+  "Native inflate tests (overflow checks on)" step.
+
 ## Speed ideas (untested; profile first, with `samply`, before any of them)
 Measured (see "Defender and many small files" below): with Defender on, the cost is Defender's
 per-file scan, not the codec and not our file calls.

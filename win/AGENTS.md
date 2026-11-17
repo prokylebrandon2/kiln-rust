@@ -78,8 +78,8 @@ entry, and a small helper with a progress window (7-Zip's `7zG.exe` is our `kiln
 - Later: the File Manager window (address bar, file list, toolbar Add / Extract / Test, open-with),
   file association for `.kiln`, icons (`assets/kiln-icon.svg`), the manifest above.
 
-## Native DEFLATE decoder (`win/src/inflate.rs`, written 2026-11-16, never compiled or measured)
-Safe Rust, no `unsafe`, whole-buffer: 64-bit bit buffer with one 8-byte refill, two-level lookup
+## Native DEFLATE decoder (`win/src/inflate.rs`, written 2026-11-16)
+Whole-buffer, safe except for three small `unsafe` spots in the fast loop (see below): 64-bit bit buffer with one 8-byte refill, two-level lookup
 tables, a fast loop without room checks while enough input and output is left, a checked slow loop
 for the ends, matches copied in 8/16-byte pieces. Off by default: libdeflate extracts unless the
 environment has `KILN_INFLATE=native`. Switch the default only after the benchmark says so.
@@ -91,6 +91,13 @@ environment has `KILN_INFLATE=native`. Switch the default only after the benchma
   would (bounds, overflow, shifts). `python3 inflate_model.py [--quick]` checks it against zlib;
   `python3 inflate_mutants.py` breaks it in 24 places and every break must fail the tests. Change
   the model and the Rust together. Neither was run in CI; there was no Rust toolchain when written.
+- `unsafe` (added 2026-11-17): only `Bits::refill_fast` (unaligned 8-byte read), the three literal
+  stores in the fast loop of `decode_block`, and `copy_fast` (raw-pointer match copies). Each safe
+  wrapper asserts its precondition once, so it is sound on its own, and a SAFETY comment gives the
+  argument. The slow loop, `copy_exact`, `stored_block` and the table builder stay safe. The Python
+  model still models the bounds-checked version; the unsafe code removes checks only, so it stays
+  valid. Before this change the first benchmark (one 1.5 GB zip, `bench-inflate -n 3`, one machine)
+  read 0.77x of libdeflate overall (423 vs 546 MiB/s). Quote a new number only from a new run.
 - Strictness: the decoder rejects what the RFC and zlib reject. libdeflate is more lenient with
   corrupt streams (length symbols 286/287 decode as 258; an unused codeword of a one-codeword or
   empty distance code gets a meaning), so on damaged input native can reject what libdeflate

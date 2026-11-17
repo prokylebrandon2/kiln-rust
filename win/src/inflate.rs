@@ -18,7 +18,11 @@
 //! - a **slow loop** that checks everything and finishes the last bytes of both buffers.
 //!
 //! Input past the end of the data reads as zero bits. The bits actually consumed are checked, so a
-//! truncated stream is an error, never a panic or an out-of-bounds read. There is no `unsafe`.
+//! truncated stream is an error, never a panic or an out-of-bounds read. The only `unsafe` is in
+//! the fast loop (`refill_fast`, `copy_fast` and the literal stores in `decode_block`): it drops
+//! bounds checks that the loop's own guard has already made redundant, and each use is justified
+//! where it stands. The slow loop, the table builder and everything that handles damaged input are
+//! safe code.
 //!
 //! What the RFC and zlib reject, this decoder rejects. libdeflate is more lenient with corrupt
 //! streams: it decodes the length symbols 286 and 287 as 258, and it gives a meaning to an unused
@@ -309,10 +313,17 @@ impl Bits<'_> {
         }
     }
 
-    /// `refill` for a caller that has checked `pos + 8 <= input.len()`.
+    /// `refill` for a caller that has checked `pos + 8 <= input.len()`. The assert repeats that
+    /// check, so this is sound on its own; in the fast loop it is the loop's own condition, which
+    /// the compiler already knows.
     #[inline(always)]
     fn refill_fast(&mut self) {
-        let word = u64::from_le_bytes(self.input[self.pos..self.pos + 8].try_into().unwrap());
+        assert!(self.pos + 8 <= self.input.len());
+        // SAFETY: the assert puts the 8 bytes `pos..pos + 8` inside `input`, and `read_unaligned`
+        // has no alignment requirement.
+        let word = u64::from_le(unsafe {
+            std::ptr::read_unaligned(self.input.as_ptr().add(self.pos).cast::<u64>())
+        });
         self.buf |= word << self.cnt;
         self.pos += ((63 - self.cnt) >> 3) as usize;
         self.cnt |= 56;
@@ -384,26 +395,47 @@ fn stored_block(bits: &mut Bits<'_>, out: &mut [u8], op: usize) -> Result<usize,
 /// which guarantees that at least 16 bytes are free after the match. Whole 16-byte pieces (8-byte
 /// ones for distances 8 to 15) are copied, so up to 15 bytes past the match are written too.
 /// Every piece reads only bytes that are already final: the distance is at least the piece size.
+///
+/// The single assert is what makes the pointer code below sound: `1 <= distance <= op` and 16 free
+/// bytes after the match. The fast loop guarantees both (it has checked `distance <= op`, and
+/// `op + FAST_OUT <= out.len()` with a length of at most 258), so the assert never fires.
 #[inline(always)]
 fn copy_fast(out: &mut [u8], op: usize, distance: usize, length: usize) {
-    let src = op - distance;
-    if distance >= 16 {
-        let mut i = 0;
-        while i < length {
-            out.copy_within(src + i..src + i + 16, op + i);
-            i += 16;
+    assert!(
+        (1..=op).contains(&distance) && op.saturating_add(length).saturating_add(16) <= out.len()
+    );
+    let base = out.as_mut_ptr();
+    // SAFETY: every access below has `i < length`. A read of `n` bytes at `src + i` ends at
+    // `op - distance + i + n`, which is at most `op + i` when `distance >= n` (and the byte reads
+    // for distances 2 to 7 are `n = 1` below `op + i`), so it is inside `out`. A write of `n <= 16`
+    // bytes at `dst + i` ends at `op + i + n <= op + length + 15`, inside `out` by the assert. For
+    // `copy_nonoverlapping`, `dst + i` is `distance >= n` bytes after `src + i`, so the two ranges
+    // of `n` bytes are disjoint. A piece may read bytes an earlier piece wrote: the calls run in
+    // order.
+    unsafe {
+        let src = base.add(op - distance);
+        let dst = base.add(op);
+        if distance >= 16 {
+            let mut i = 0;
+            while i < length {
+                std::ptr::copy_nonoverlapping(src.add(i), dst.add(i), 16);
+                i += 16;
+            }
+        } else if distance >= 8 {
+            let mut i = 0;
+            while i < length {
+                std::ptr::copy_nonoverlapping(src.add(i), dst.add(i), 8);
+                i += 8;
+            }
+        } else if distance == 1 {
+            std::ptr::write_bytes(dst, *src, length);
+        } else {
+            // 2 to 7: the pattern repeats with a period shorter than a word. One byte at a time,
+            // in order, so every byte read is one that was already written.
+            for i in 0..length {
+                *dst.add(i) = *src.add(i);
+            }
         }
-    } else if distance >= 8 {
-        let mut i = 0;
-        while i < length {
-            out.copy_within(src + i..src + i + 8, op + i);
-            i += 8;
-        }
-    } else if distance == 1 {
-        let byte = out[src];
-        out[op..op + length].fill(byte);
-    } else {
-        copy_overlapping(out, op, distance, length);
     }
 }
 
@@ -451,6 +483,9 @@ fn decode_block(
     // Work on a copy so that the compiler keeps the reader in registers.
     let mut b = *bits;
     let out_len = out.len();
+    // With this, `op + FAST_OUT` cannot wrap (a slice is at most `isize::MAX` bytes long), so the
+    // fast loop's guard below really means that `FAST_OUT` bytes are free.
+    assert!(op <= out_len);
     let in_len = b.input.len();
 
     // The fast loop. After the refill there are at least 56 bits: three literal codewords are at
@@ -463,7 +498,9 @@ fn decode_block(
         }
         if e & F_LIT != 0 {
             b.skip(e & 0xFF);
-            out[op] = (e >> 16) as u8;
+            // SAFETY (the three stores): the loop guard gives `op + FAST_OUT <= out_len`, and
+            // `FAST_OUT` is far more than 3, so `op`, `op + 1` and `op + 2` are inside `out`.
+            unsafe { *out.get_unchecked_mut(op) = (e >> 16) as u8 };
             // More literals while they are at hand; anything else is looked up again after the
             // next refill.
             let e2 = lit[(b.buf as usize) & LIT_MASK];
@@ -472,14 +509,14 @@ fn decode_block(
                 continue;
             }
             b.skip(e2 & 0xFF);
-            out[op + 1] = (e2 >> 16) as u8;
+            unsafe { *out.get_unchecked_mut(op + 1) = (e2 >> 16) as u8 };
             let e3 = lit[(b.buf as usize) & LIT_MASK];
             if e3 & F_LIT == 0 {
                 op += 2;
                 continue;
             }
             b.skip(e3 & 0xFF);
-            out[op + 2] = (e3 >> 16) as u8;
+            unsafe { *out.get_unchecked_mut(op + 2) = (e3 >> 16) as u8 };
             op += 3;
             continue;
         }

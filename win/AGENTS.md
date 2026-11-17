@@ -98,6 +98,17 @@ environment has `KILN_INFLATE=native`. Switch the default only after the benchma
   model still models the bounds-checked version; the unsafe code removes checks only, so it stays
   valid. Before this change the first benchmark (one 1.5 GB zip, `bench-inflate -n 3`, one machine)
   read 0.77x of libdeflate overall (423 vs 546 MiB/s). Quote a new number only from a new run.
+- BMI2 (added 2026-11-17): `decode_block` is built twice from `decode_block_body` (`inline(always)`),
+  once with `#[target_feature(enable = "bmi2")]`, and `Decoder::bmi2` picks it by runtime CPU
+  detection (`set_bmi2(false)` forces the plain loop). Why: `libdeflate-sys` builds libdeflate with
+  the `cc` crate, which is MSVC on the Windows runner, and libdeflate's own source (`lib/x86/
+  decompress_impl.h`) says that with MSVC there is no target attribute, so only the explicit `bzhi`
+  intrinsics get used and variable shifts stay `shr r, cl`. `bench-inflate` therefore prints a
+  "native, no BMI2" column: native vs that column is what BMI2 buys. Whether it matters depends on
+  the CPU (on Zen `shr r, cl` is already one micro-op); read the numbers, do not assume.
+- Next ideas if native is still short of libdeflate: multi-literal table entries (two literals per
+  lookup when both codes fit the root bits, as ISA-L does), entry preloading to overlap the table
+  load with the store, a 12-bit literal root. Add each as a model change plus a Rust change.
 - Strictness: the decoder rejects what the RFC and zlib reject. libdeflate is more lenient with
   corrupt streams (length symbols 286/287 decode as 258; an unused codeword of a one-codeword or
   empty distance code gets a meaning), so on damaged input native can reject what libdeflate

@@ -24,6 +24,10 @@
 //! where it stands. The slow loop, the table builder and everything that handles damaged input are
 //! safe code.
 //!
+//! The decode loop is built twice from the same source: once as it is, and once with the compiler
+//! told that BMI2 exists (`shrx`, `shlx`, `bzhi`: one micro-op where `shr r, cl` is several on
+//! many Intel cores). A `Decoder` picks the second one when the CPU has BMI2.
+//!
 //! What the RFC and zlib reject, this decoder rejects. libdeflate is more lenient with corrupt
 //! streams: it decodes the length symbols 286 and 287 as 258, and it gives a meaning to an unused
 //! codeword of a one-codeword (or empty) distance code. On damaged input this decoder can
@@ -471,9 +475,59 @@ fn copy_overlapping(out: &mut [u8], op: usize, distance: usize, length: usize) {
     }
 }
 
+/// Whether this CPU has BMI2.
+#[cfg(target_arch = "x86_64")]
+fn cpu_has_bmi2() -> bool {
+    std::arch::is_x86_feature_detected!("bmi2")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_has_bmi2() -> bool {
+    false
+}
+
+/// `decode_block_body` compiled with BMI2 enabled. Everything it calls is `inline(always)`, so the
+/// whole hot loop is built with the feature.
+///
+/// # Safety
+/// The CPU must support BMI2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2")]
+unsafe fn decode_block_bmi2(
+    bits: &mut Bits<'_>,
+    out: &mut [u8],
+    op: usize,
+    lit: &[u32; LIT_SIZE],
+    dist: &[u32; DIST_SIZE],
+) -> Result<usize, InflateError> {
+    decode_block_body(bits, out, op, lit, dist)
+}
+
+/// Decodes one Huffman block with the BMI2 build of the loop when `bmi2` is set. `bmi2` is only
+/// ever true when `cpu_has_bmi2()` said so (see `Decoder::set_bmi2`).
+#[cfg_attr(not(target_arch = "x86_64"), allow(unused_variables))]
+fn decode_block(
+    bits: &mut Bits<'_>,
+    out: &mut [u8],
+    op: usize,
+    lit: &[u32; LIT_SIZE],
+    dist: &[u32; DIST_SIZE],
+    bmi2: bool,
+) -> Result<usize, InflateError> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if bmi2 {
+            // SAFETY: `bmi2` is true only on a CPU that has BMI2.
+            return unsafe { decode_block_bmi2(bits, out, op, lit, dist) };
+        }
+    }
+    decode_block_body(bits, out, op, lit, dist)
+}
+
 /// Decodes the symbols of one Huffman block up to its end-of-block code; returns the new output
 /// position.
-fn decode_block(
+#[inline(always)]
+fn decode_block_body(
     bits: &mut Bits<'_>,
     out: &mut [u8],
     mut op: usize,
@@ -607,6 +661,7 @@ pub struct Decoder {
     dist: Box<[u32; DIST_SIZE]>,
     fixed_lit: Box<[u32; LIT_SIZE]>,
     fixed_dist: Box<[u32; DIST_SIZE]>,
+    bmi2: bool,
 }
 
 fn boxed_table<const N: usize>() -> Box<[u32; N]> {
@@ -630,6 +685,7 @@ impl Decoder {
             dist: boxed_table(),
             fixed_lit: boxed_table(),
             fixed_dist: boxed_table(),
+            bmi2: cpu_has_bmi2(),
         };
         let mut lens = [8u8; MAX_LIT_SYMS];
         lens[144..256].fill(9);
@@ -644,6 +700,17 @@ impl Decoder {
         );
         debug_assert!(lit_built.is_ok() && dist_built.is_ok());
         d
+    }
+
+    /// Chooses the BMI2 build of the decode loop (`true`, the default where the CPU has BMI2) or
+    /// the plain one. Asking for BMI2 on a CPU without it leaves it off. For benchmarks and tests.
+    pub fn set_bmi2(&mut self, on: bool) {
+        self.bmi2 = on && cpu_has_bmi2();
+    }
+
+    /// Whether the BMI2 build of the decode loop is in use.
+    pub fn bmi2(&self) -> bool {
+        self.bmi2
     }
 
     /// Decodes the raw DEFLATE stream `input` into `out` and returns the number of bytes
@@ -667,10 +734,17 @@ impl Decoder {
             }
             op = match kind {
                 0 => stored_block(&mut bits, out, op)?,
-                1 => decode_block(&mut bits, out, op, &self.fixed_lit, &self.fixed_dist)?,
+                1 => decode_block(
+                    &mut bits,
+                    out,
+                    op,
+                    &self.fixed_lit,
+                    &self.fixed_dist,
+                    self.bmi2,
+                )?,
                 2 => {
                     self.read_dynamic(&mut bits)?;
-                    decode_block(&mut bits, out, op, &self.lit, &self.dist)?
+                    decode_block(&mut bits, out, op, &self.lit, &self.dist, self.bmi2)?
                 }
                 _ => return Err(InflateError::BadHeader),
             };
@@ -878,6 +952,25 @@ mod tests {
             Err(InflateError::BadDistance)
         );
         assert_eq!(dec.inflate(&[], &mut out), Err(InflateError::Truncated));
+    }
+
+    #[test]
+    fn bmi2_and_plain_loops_agree() {
+        // Both builds of the decode loop give the same bytes (on a CPU without BMI2 both are the
+        // plain one).
+        let mut rng = Rng(0xB312_B312_B312_B312);
+        let mut fast = Decoder::new();
+        let mut plain = Decoder::new();
+        plain.set_bmi2(false);
+        assert!(!plain.bmi2());
+        for kind in 0..6 {
+            for n in SIZES {
+                let data = sample(kind, n, &mut rng);
+                let packed = libdeflate(&data, 6);
+                check(&mut fast, &data, &packed);
+                check(&mut plain, &data, &packed);
+            }
+        }
     }
 
     #[test]

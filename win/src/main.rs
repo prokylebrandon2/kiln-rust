@@ -311,6 +311,7 @@ struct Tally {
     raw: u64,
     libdeflate: f64,
     native: f64,
+    plain: f64,
 }
 
 fn mib_per_s(bytes: u64, seconds: f64) -> f64 {
@@ -343,7 +344,11 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
 
     let mut reference = libdeflater::Decompressor::new();
     let mut native = Decoder::new();
+    // The same decoder with the plain (non-BMI2) build of the loop, to show what BMI2 buys.
+    let mut plain = Decoder::new();
+    plain.set_bmi2(false);
     let (mut inbuf, mut out_ref, mut out_nat) = (Vec::new(), Vec::new(), Vec::new());
+    let mut out_plain = Vec::new();
     let mut tally: [Tally; 2] = Default::default();
     let mut bad = 0u64;
 
@@ -358,10 +363,11 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
             .map_err(|err| err.to_string())?;
         out_ref.resize(size, 0u8);
         out_nat.resize(size, 0u8);
+        out_plain.resize(size, 0u8);
 
-        let (mut best_ref, mut best_nat) = (f64::MAX, f64::MAX);
-        let (mut got_ref, mut got_nat) = (None, None);
-        // The two decoders alternate, so a change in clock speed or load hits both alike.
+        let (mut best_ref, mut best_nat, mut best_plain) = (f64::MAX, f64::MAX, f64::MAX);
+        let (mut got_ref, mut got_nat, mut got_plain) = (None, None, None);
+        // The decoders alternate, so a change in clock speed or load hits both alike.
         for _ in 0..runs {
             let t = Instant::now();
             got_ref = reference
@@ -371,13 +377,20 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
             let t = Instant::now();
             got_nat = native.inflate(black_box(packed), &mut out_nat[..]).ok();
             best_nat = best_nat.min(t.elapsed().as_secs_f64());
+            let t = Instant::now();
+            got_plain = plain.inflate(black_box(packed), &mut out_plain[..]).ok();
+            best_plain = best_plain.min(t.elapsed().as_secs_f64());
         }
 
-        let same = got_ref == Some(size) && got_nat == Some(size) && out_ref == out_nat;
+        let same = got_ref == Some(size)
+            && got_nat == Some(size)
+            && got_plain == Some(size)
+            && out_ref == out_nat
+            && out_plain == out_nat;
         if !same || crc32fast::hash(&out_nat) != e.crc {
             bad += 1;
             eprintln!(
-                "MISMATCH {}: libdeflate {got_ref:?}, native {got_nat:?}, expected {size} bytes",
+                "MISMATCH {}: libdeflate {got_ref:?}, native {got_nat:?}, plain {got_plain:?}, expected {size} bytes",
                 e.name
             );
             continue;
@@ -388,23 +401,29 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
         class.raw += e.size;
         class.libdeflate += best_ref;
         class.native += best_nat;
+        class.plain += best_plain;
     }
 
     println!(
         "Inflate benchmark: {} (best of {runs} runs per entry)",
         archive.display()
     );
+    println!(
+        "BMI2 on this CPU: {}",
+        if native.bmi2() { "yes" } else { "no" }
+    );
     println!();
     println!(
-        "| Entries | Files | Packed | Unpacked | libdeflate | native | native vs libdeflate |"
+        "| Entries | Files | Packed | Unpacked | libdeflate | native | native, no BMI2 | native vs libdeflate |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
     let all = Tally {
         files: tally.iter().map(|t| t.files).sum(),
         packed: tally.iter().map(|t| t.packed).sum(),
         raw: tally.iter().map(|t| t.raw).sum(),
         libdeflate: tally.iter().map(|t| t.libdeflate).sum(),
         native: tally.iter().map(|t| t.native).sum(),
+        plain: tally.iter().map(|t| t.plain).sum(),
     };
     let rows = [
         ("under 64 KiB", &tally[0]),
@@ -415,14 +434,18 @@ fn cmd_bench_inflate(args: &[String]) -> Result<(), String> {
         if t.files == 0 {
             continue;
         }
-        let (speed_ref, speed_nat) = (mib_per_s(t.raw, t.libdeflate), mib_per_s(t.raw, t.native));
+        let (speed_ref, speed_nat, speed_plain) = (
+            mib_per_s(t.raw, t.libdeflate),
+            mib_per_s(t.raw, t.native),
+            mib_per_s(t.raw, t.plain),
+        );
         let ratio = if speed_ref > 0.0 {
             speed_nat / speed_ref
         } else {
             0.0
         };
         println!(
-            "| {label} | {} | {} | {} | {speed_ref:.0} MiB/s | {speed_nat:.0} MiB/s | {ratio:.2}x |",
+            "| {label} | {} | {} | {} | {speed_ref:.0} MiB/s | {speed_nat:.0} MiB/s | {speed_plain:.0} MiB/s | {ratio:.2}x |",
             t.files,
             fmt_bytes(t.packed),
             fmt_bytes(t.raw),
